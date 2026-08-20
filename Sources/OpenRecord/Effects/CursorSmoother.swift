@@ -2,7 +2,7 @@ import Foundation
 
 /// Precomputed spring-smoothed cursor path in UV space (origin top-left).
 ///
-/// Pipeline: raw points → UV → jitter (shake) filter → densify gaps → analytical spring.
+/// Pipeline: raw points → UV → jitter (shake) filter → short EMA → densify gaps → analytical spring.
 /// Sample at any time with `interpolate(at:)` (binary search + one spring step).
 public struct CursorSmoother: Sendable {
     public struct Sample: Sendable, Hashable {
@@ -30,8 +30,9 @@ public struct CursorSmoother: Sendable {
             .sorted { $0.t < $1.t }
             .map { Move(time: $0.t, uv: CursorSmoother.uv(x: $0.x, y: $0.y, displayBounds: displayBounds)) }
 
-        let filtered = Self.filterShake(moves)
-        let dense = Self.densify(filtered)
+        let filtered = Self.filterShake(moves, displayBounds: displayBounds)
+        let smoothed = Self.smoothEMA(filtered)
+        let dense = Self.densify(smoothed)
         self.samples = Self.simulate(moves: dense, clicks: self.clicks)
     }
 
@@ -103,15 +104,16 @@ public struct CursorSmoother: Sendable {
         var uv: Point2D
     }
 
-    private static let shakeThresholdUV = 0.015
+    private static let shakeThresholdPoints = 4.0
     private static let shakeWindow: TimeInterval = 0.1
+    private static let emaTimeConstant: TimeInterval = 0.03
     private static let frameDt: TimeInterval = 1.0 / 60.0
     private static let gapThreshold: TimeInterval = frameDt * 4
     private static let minTravelForInterp = 0.02
     private static let maxInterpSteps = 120
     private static let clickReactionWindow: TimeInterval = 0.160
 
-    private static func filterShake(_ moves: [Move]) -> [Move] {
+    private static func filterShake(_ moves: [Move], displayBounds: Rect2D) -> [Move] {
         guard moves.count >= 3 else { return moves }
 
         var filtered: [Move] = [moves[0]]
@@ -133,8 +135,10 @@ public struct CursorSmoother: Sendable {
             let dyToNext = next.uv.y - curr.uv.y
             let reversal = dxToCurr * dxToNext + dyToCurr * dyToNext < 0
             let small =
-                hypot(dxToCurr, dyToCurr) < shakeThresholdUV
-                && hypot(dxToNext, dyToNext) < shakeThresholdUV
+                pointDistance(from: prev.uv, to: curr.uv, displayBounds: displayBounds)
+                    < shakeThresholdPoints
+                && pointDistance(from: curr.uv, to: next.uv, displayBounds: displayBounds)
+                    < shakeThresholdPoints
 
             if reversal && small {
                 i += 1
@@ -149,6 +153,35 @@ public struct CursorSmoother: Sendable {
             filtered.append(moves[moves.count - 1])
         }
         return filtered
+    }
+
+    /// First-order low-pass on UV (short EMA) so same-direction jitter does not drive the spring.
+    private static func smoothEMA(_ moves: [Move]) -> [Move] {
+        guard moves.count >= 2 else { return moves }
+        var out: [Move] = [moves[0]]
+        var prev = moves[0]
+        for i in 1..<moves.count {
+            let move = moves[i]
+            let dt = max(move.time - prev.time, 1e-6)
+            let alpha = 1 - exp(-dt / emaTimeConstant)
+            let smoothed = Move(
+                time: move.time,
+                uv: Point2D(
+                    x: clamp01(prev.uv.x + (move.uv.x - prev.uv.x) * alpha),
+                    y: clamp01(prev.uv.y + (move.uv.y - prev.uv.y) * alpha)
+                )
+            )
+            out.append(smoothed)
+            prev = smoothed
+        }
+        return out
+    }
+
+    private static func pointDistance(from a: Point2D, to b: Point2D, displayBounds: Rect2D) -> Double {
+        hypot(
+            (b.x - a.x) * displayBounds.width,
+            (b.y - a.y) * displayBounds.height
+        )
     }
 
     private static func shouldFill(from: Move, to: Move) -> Bool {

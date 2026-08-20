@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LibrarySidebar: View {
     @Bindable var model: AppModel
+    @State private var pendingDelete: LibraryItem?
 
     var body: some View {
         List(selection: $model.selectedProjectURL) {
@@ -26,6 +27,15 @@ struct LibrarySidebar: View {
                         Button("Reveal in Finder") {
                             model.reveal(item.url)
                         }
+                        Divider()
+                        Button("Delete…", role: .destructive) {
+                            pendingDelete = item
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button("Delete", role: .destructive) {
+                            pendingDelete = item
+                        }
                     }
                 }
             }
@@ -34,6 +44,28 @@ struct LibrarySidebar: View {
         .navigationTitle("Library")
         .onChange(of: model.selectedProjectURL) { _, url in
             model.selectProject(url)
+        }
+        .onDeleteCommand {
+            if let url = model.selectedProjectURL,
+               let item = model.projects.first(where: { $0.url == url })
+            {
+                pendingDelete = item
+            }
+        }
+        .confirmationDialog(
+            "Delete Recording?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDelete
+        ) { item in
+            Button("Delete", role: .destructive) {
+                model.deleteProject(item.url)
+            }
+        } message: { item in
+            Text("“\(item.name)” will be moved to the Trash.")
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {

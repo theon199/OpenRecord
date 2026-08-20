@@ -51,6 +51,7 @@ final class EditorSession {
     private var isSeeking = false
     private var saveTask: Task<Void, Never>?
     private var engineTask: Task<Void, Never>?
+    private var exportTask: Task<Void, Never>?
 
     static func load(opened: OpenedProject, library: ProjectLibrary) async -> EditorSession {
         let telemetry: (mouse: [CursorSample], clicks: [ClickSample])
@@ -129,6 +130,7 @@ final class EditorSession {
     }
 
     func shutdown() {
+        exportTask?.cancel()
         saveTask?.cancel()
         engineTask?.cancel()
         saveNow()
@@ -149,6 +151,15 @@ final class EditorSession {
         attachCursorSpriteIfMissing()
         rebuildEngine()
         try library.save(document: document, to: projectURL)
+    }
+
+    func regenerateAutoZooms() {
+        do {
+            selectedZoomID = nil
+            try applyAutoZoomsAndSave()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     func togglePlay() {
@@ -258,7 +269,13 @@ final class EditorSession {
         panel.prompt = "Export"
         panel.message = "Renders the current trim, zooms, and canvas into an MP4."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await export(to: url) }
+        exportTask?.cancel()
+        exportTask = Task { await export(to: url) }
+    }
+
+    func cancelExport() {
+        exportTask?.cancel()
+        exportProgress = nil
     }
 
     func export(to url: URL) async {
@@ -269,17 +286,37 @@ final class EditorSession {
         do {
             try await exporter.export(project: document, url: url) { [weak self] progress in
                 Task { @MainActor in
-                    self?.exportProgress = progress
+                    guard let self, self.exportProgress != nil else { return }
+                    self.exportProgress = progress
                 }
             }
+            if Task.isCancelled { return }
             if copyExportToLibrary {
                 try library.copyExport(from: url, to: library.rootURL)
             }
             exportProgress = nil
+        } catch is CancellationError {
+            exportProgress = nil
         } catch {
             exportProgress = nil
-            lastError = error.localizedDescription
+            if !Task.isCancelled {
+                lastError = error.localizedDescription
+            }
         }
+    }
+
+    /// Inclusive gap this zoom may occupy without overlapping neighbors.
+    func zoomNeighborBounds(
+        excluding id: UUID,
+        referenceStart: TimeInterval? = nil
+    ) -> (lower: TimeInterval, upper: TimeInterval) {
+        let others = document.zoomRanges.filter { $0.id != id }
+        let pivot = referenceStart
+            ?? document.zoomRanges.first(where: { $0.id == id })?.start
+            ?? 0
+        let previous = others.filter { $0.start < pivot }.max { $0.start < $1.start }
+        let next = others.filter { $0.start > pivot }.min { $0.start < $1.start }
+        return (previous?.end ?? 0, next?.start ?? timelineDuration)
     }
 
     private func attachPlayer() {
@@ -366,11 +403,38 @@ final class EditorSession {
     }
 
     private func clampZoom(_ zoom: inout ZoomRange) {
-        zoom.start = min(max(zoom.start, 0), timelineDuration)
-        zoom.end = min(max(zoom.end, zoom.start + 0.12), timelineDuration)
+        let minDuration = 0.12
+        let (lower, upper) = zoomNeighborBounds(excluding: zoom.id)
+        let lo = max(0, lower)
+        let hi = min(timelineDuration, upper)
+
         zoom.amount = min(max(zoom.amount, 1), 5)
         zoom.anchor.x = min(max(zoom.anchor.x, 0), 1)
         zoom.anchor.y = min(max(zoom.anchor.y, 0), 1)
+
+        let original = document.zoomRanges.first(where: { $0.id == zoom.id })
+        let originalSpan = original.map { $0.end - $0.start }
+        let preserveSpan = originalSpan.map { abs($0 - (zoom.end - zoom.start)) < 0.0005 } ?? false
+
+        if preserveSpan, let span = originalSpan, span <= hi - lo, span >= minDuration {
+            let start = min(max(zoom.start, lo), hi - span)
+            zoom.start = start
+            zoom.end = start + span
+            return
+        }
+
+        zoom.start = min(max(zoom.start, lo), hi)
+        zoom.end = min(max(zoom.end, zoom.start), hi)
+        if zoom.end - zoom.start < minDuration, hi - lo >= minDuration {
+            if zoom.start + minDuration <= hi {
+                zoom.end = zoom.start + minDuration
+            } else {
+                zoom.end = hi
+                zoom.start = hi - minDuration
+            }
+            zoom.start = min(max(zoom.start, lo), hi)
+            zoom.end = min(max(zoom.end, zoom.start), hi)
+        }
     }
 
     private func loadCursorSprite() {

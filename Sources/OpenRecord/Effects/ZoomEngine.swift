@@ -4,8 +4,9 @@ import Foundation
 /// Viewport crop and cursor interpolation for a project.
 ///
 /// `crop(at:)` returns a UV rect (origin top-left, 0...1). With no zoom ranges it is the unit rect.
-/// Amount eases with an analytical spring; with cursor samples the viewport pans using a safe zone
-/// and 1s lookahead (jitter cancellation).
+/// Amount eases with an analytical spring (zoom-in faster than zoom-out); with cursor samples the
+/// viewport pans using a safe zone and 1s lookahead (jitter cancellation). Short gaps hold zoom
+/// and pan between ranges instead of returning to 1×.
 ///
 /// After capture stop, generate ranges then build an engine:
 /// ```
@@ -18,8 +19,14 @@ import Foundation
 /// ```
 /// Preview and export sample `crop(at:)` and `interpolateCursor(at:)` at each frame timestamp.
 public struct ZoomEngine: Sendable {
-    /// Seconds for a full zoom-in or zoom-out spring.
-    public static let zoomDuration: TimeInterval = 1.0
+    /// Seconds for a full zoom-in spring.
+    public static let zoomInDuration: TimeInterval = 0.85
+    /// Seconds for a full zoom-out spring (slower settle).
+    public static let zoomOutDuration: TimeInterval = 1.35
+    /// If the next range starts within this gap, stay zoomed and pan instead of easing to 1×.
+    public static let holdThroughGap: TimeInterval = 2.0
+    /// Compatibility alias for `zoomInDuration`.
+    public static let zoomDuration: TimeInterval = zoomInDuration
 
     public var document: ProjectDocument
     public let smoother: CursorSmoother
@@ -38,7 +45,7 @@ public struct ZoomEngine: Sendable {
         samples: [CursorSample],
         clicks: [ClickSample] = [],
         displayBounds: Rect2D = .unit,
-        viewportSpring: SpringConfig = .viewportFocused
+        viewportSpring: SpringConfig = .viewportSmooth
     ) {
         self.document = document
         self.displayBounds = displayBounds
@@ -102,7 +109,7 @@ public struct ZoomEngine: Sendable {
         smoother.isClicking(at: time)
     }
 
-    /// Detect idle stretches (cursor still ≥ ~0.5s; clicks count as activity).
+    /// Detect idle stretches (cursor still ≥ ~1.6s; clicks count as activity).
     public static func detectSilenceZones(
         samples: [CursorSample],
         clicks: [ClickSample] = [],
@@ -140,7 +147,7 @@ public struct ZoomEngine: Sendable {
     ) -> TimeInterval {
         var end = max(document.trimOut ?? 0, telemetryHorizon)
         if let last = document.zoomRanges.map(\.end).max() {
-            end = max(end, last + zoomDuration)
+            end = max(end, last + zoomOutDuration)
         }
         return max(end, 0)
     }
@@ -189,6 +196,7 @@ private struct ZoomEvaluator {
         var time: TimeInterval
         var segment: ZoomRange?
         var prevSegment: ZoomRange?
+        var nextSegment: ZoomRange?
     }
 
     struct PlaybackState {
@@ -196,21 +204,33 @@ private struct ZoomEvaluator {
         var lockedSegStart: TimeInterval?
         var spring: SpringState2D
         var lastTime: TimeInterval?
+        var lastRetargetTime: TimeInterval?
     }
 
     var ranges: [ZoomRange]
     var smoother: CursorSmoother
     var viewportSpring: SpringConfig
 
-    private static let viewportEdgeThresh = 0.15
+    private static let viewportEdgeThresh = 0.19
     private static let recenterLookahead: TimeInterval = 1
     private static let recenterLookaheadSamples = 10
     private static let recenterAvgWindow: TimeInterval = 0.5
+    private static let recenterEpsilon = 0.01
+    private static let recenterCooldown: TimeInterval = 0.25
 
     func evaluateLive(at time: TimeInterval) -> CGRect {
         let sorted = ranges.sorted { $0.start < $1.start }
         let cursor = segmentCursor(at: time, ranges: sorted)
-        let center = (cursor.segment ?? cursor.prevSegment)?.anchor
+        let center: Point2D?
+        if cursor.segment == nil,
+           let prev = cursor.prevSegment,
+           let next = cursor.nextSegment,
+           next.start - prev.end <= ZoomEngine.holdThroughGap
+        {
+            center = nil
+        } else {
+            center = (cursor.segment ?? cursor.prevSegment)?.anchor
+        }
         let zoom = interpolatedZoom(cursor: cursor, cursorCenter: center, ranges: sorted)
         if !smoother.isEmpty {
             let live = smoother.interpolate(at: time)
@@ -225,6 +245,7 @@ private struct ZoomEvaluator {
             state.lockedCenter = nil
             state.lockedSegStart = nil
             state.lastTime = nil
+            state.lastRetargetTime = nil
             return .uvUnit
         }
 
@@ -233,6 +254,7 @@ private struct ZoomEvaluator {
             state.lockedCenter = nil
             state.lockedSegStart = nil
             state.lastTime = nil
+            state.lastRetargetTime = nil
             return .uvUnit
         }
 
@@ -255,15 +277,17 @@ private struct ZoomEvaluator {
         if isAuto {
             let curSegStart = cursor.segment?.start
             if let curSegStart, curSegStart != state.lockedSegStart {
-                let lock = cursor.segment?.anchor ?? liveCursor
+                let lock = liveCursor ?? cursor.segment?.anchor
                 state.lockedCenter = lock
                 state.lockedSegStart = curSegStart
+                state.lastRetargetTime = time
                 if let lock {
                     state.spring = SpringState2D.rest(at: lock)
                 }
             } else if state.lockedCenter == nil {
-                let lock = cursor.segment?.anchor ?? liveCursor
+                let lock = liveCursor ?? cursor.segment?.anchor
                 state.lockedCenter = lock
+                state.lastRetargetTime = time
                 if let lock {
                     state.spring = SpringState2D.rest(at: lock)
                 }
@@ -326,9 +350,20 @@ private struct ZoomEvaluator {
                         sumV += fc.y
                     }
                     let target = Point2D(x: sumU / Double(n + 1), y: sumV / Double(n + 1))
-                    state.lockedCenter = target
-                    state.spring.targetU = target.x
-                    state.spring.targetV = target.y
+                    var tooSoon = false
+                    if let last = state.lastRetargetTime, time - last < Self.recenterCooldown {
+                        tooSoon = true
+                    }
+                    var close = false
+                    if let current = state.lockedCenter {
+                        close = hypot(target.x - current.x, target.y - current.y) < Self.recenterEpsilon
+                    }
+                    if !tooSoon && !close {
+                        state.lockedCenter = target
+                        state.spring.targetU = target.x
+                        state.spring.targetV = target.y
+                        state.lastRetargetTime = time
+                    }
                 }
             }
         }
@@ -354,19 +389,25 @@ private struct ZoomEvaluator {
     }
 
     func segmentCursor(at time: TimeInterval, ranges: [ZoomRange]) -> SegmentCursor {
-        if let index = ranges.firstIndex(where: { time > $0.start && time <= $0.end }) {
+        if let index = ranges.firstIndex(where: { time >= $0.start && time < $0.end }) {
             return SegmentCursor(
                 time: time,
                 segment: ranges[index],
-                prevSegment: index > 0 ? ranges[index - 1] : nil
+                prevSegment: index > 0 ? ranges[index - 1] : nil,
+                nextSegment: index + 1 < ranges.count ? ranges[index + 1] : nil
             )
         }
         var prev: ZoomRange?
-        for range in ranges.reversed() where range.end <= time {
-            prev = range
-            break
+        var next: ZoomRange?
+        for range in ranges {
+            if range.end <= time {
+                prev = range
+            } else if range.start > time {
+                next = range
+                break
+            }
         }
-        return SegmentCursor(time: time, segment: nil, prevSegment: prev)
+        return SegmentCursor(time: time, segment: nil, prevSegment: prev, nextSegment: next)
     }
 
     func interpolatedZoom(
@@ -386,7 +427,7 @@ private struct ZoomEvaluator {
     func computeInterpolatedZoom(
         cursor: SegmentCursor,
         cursorCenter: Point2D?,
-        ranges: [ZoomRange],
+        ranges _: [ZoomRange],
         easeIn: (Double) -> Double,
         easeOut: (Double) -> Double
     ) -> InterpolatedZoom {
@@ -400,14 +441,23 @@ private struct ZoomEvaluator {
         }
 
         if let prev, seg == nil {
-            let zoomT = easeOut(clamp01((time - prev.end) / ZoomEngine.zoomDuration))
+            if let next = cursor.nextSegment, next.start - prev.end <= ZoomEngine.holdThroughGap {
+                let gap = max(next.start - prev.end, 1e-12)
+                let u = clamp01((time - prev.end) / gap)
+                let pFocus = zoomFocus(prev, cursorCenter: cursorCenter)
+                let nFocus = zoomFocus(next, cursorCenter: cursorCenter)
+                let prevBounds = segmentBounds(amount: prev.amount, cx: pFocus.x, cy: pFocus.y)
+                let nextBounds = segmentBounds(amount: next.amount, cx: nFocus.x, cy: nFocus.y)
+                return InterpolatedZoom(t: 1, bounds: lerpBounds(prevBounds, nextBounds, u))
+            }
+            let zoomT = easeOut(clamp01((time - prev.end) / ZoomEngine.zoomOutDuration))
             let focus = zoomFocus(prev, cursorCenter: cursorCenter)
             let prevBounds = segmentBounds(amount: prev.amount, cx: focus.x, cy: focus.y)
             return InterpolatedZoom(t: 1 - zoomT, bounds: lerpBounds(prevBounds, def, zoomT))
         }
 
         if prev == nil, let seg {
-            let t = easeIn(clamp01((time - seg.start) / ZoomEngine.zoomDuration))
+            let t = easeIn(clamp01((time - seg.start) / ZoomEngine.zoomInDuration))
             let focus = zoomFocus(seg, cursorCenter: cursorCenter)
             let segBounds = segmentBounds(amount: seg.amount, cx: focus.x, cy: focus.y)
             return InterpolatedZoom(t: t, bounds: lerpBounds(def, segBounds, t))
@@ -421,25 +471,14 @@ private struct ZoomEvaluator {
         let sFocus = zoomFocus(seg, cursorCenter: cursorCenter)
         let prevBounds = segmentBounds(amount: prev.amount, cx: pFocus.x, cy: pFocus.y)
         let segBounds = segmentBounds(amount: seg.amount, cx: sFocus.x, cy: sFocus.y)
-        let zoomT = easeIn(clamp01((time - seg.start) / ZoomEngine.zoomDuration))
+        let zoomT = easeIn(clamp01((time - seg.start) / ZoomEngine.zoomInDuration))
 
         if seg.start == prev.end {
             return InterpolatedZoom(t: 1, bounds: lerpBounds(prevBounds, segBounds, zoomT))
         }
 
-        if seg.start - prev.end < ZoomEngine.zoomDuration {
-            let minCursor = segmentCursor(at: seg.start, ranges: ranges)
-            let min = computeInterpolatedZoom(
-                cursor: minCursor,
-                cursorCenter: cursorCenter,
-                ranges: ranges,
-                easeIn: easeIn,
-                easeOut: easeOut
-            )
-            return InterpolatedZoom(
-                t: min.t * (1 - zoomT) + zoomT,
-                bounds: lerpBounds(min.bounds, segBounds, zoomT)
-            )
+        if seg.start - prev.end <= ZoomEngine.holdThroughGap {
+            return InterpolatedZoom(t: 1, bounds: segBounds)
         }
 
         return InterpolatedZoom(t: zoomT, bounds: lerpBounds(def, segBounds, zoomT))
@@ -513,43 +552,15 @@ private struct ZoomEvaluator {
         newVpLeft = min(1 - viewportSize, max(0, newVpLeft))
         newVpTop = min(1 - viewportSize, max(0, newVpTop))
 
-        if cursorX >= newVpLeft, cursorX <= newVpLeft + viewportSize,
-           cursorY >= newVpTop, cursorY <= newVpTop + viewportSize
-        {
-            let newTlX = -newVpLeft * currentZoom
-            let newTlY = -newVpTop * currentZoom
-            return InterpolatedZoom(
-                t: zoom.t,
-                bounds: SegmentBounds(
-                    tlX: newTlX,
-                    tlY: newTlY,
-                    brX: newTlX + currentZoom,
-                    brY: newTlY + currentZoom
-                )
-            )
-        }
-
-        let requiredMargin = 0.05
-        let distFromLeft = max(0, cursorX - requiredMargin)
-        let distFromRight = max(0, 1 - cursorX - requiredMargin)
-        let distFromTop = max(0, cursorY - requiredMargin)
-        let distFromBottom = max(0, 1 - cursorY - requiredMargin)
-        let effectiveDistX = max(0.001, min(distFromLeft, distFromRight))
-        let effectiveDistY = max(0.001, min(distFromTop, distFromBottom))
-        let maxZoom = max(1, min(0.5 / effectiveDistX, 0.5 / effectiveDistY))
-        let newZoom = min(currentZoom, maxZoom)
-        let newVpSize = 1 / newZoom
-        let finalLeft = min(1 - newVpSize, max(0, cursorX - newVpSize / 2))
-        let finalTop = min(1 - newVpSize, max(0, cursorY - newVpSize / 2))
-        let newTlX = -finalLeft * newZoom
-        let newTlY = -finalTop * newZoom
+        let newTlX = -newVpLeft * currentZoom
+        let newTlY = -newVpTop * currentZoom
         return InterpolatedZoom(
             t: zoom.t,
             bounds: SegmentBounds(
                 tlX: newTlX,
                 tlY: newTlY,
-                brX: newTlX + newZoom,
-                brY: newTlY + newZoom
+                brX: newTlX + currentZoom,
+                brY: newTlY + currentZoom
             )
         )
     }
@@ -626,7 +637,8 @@ private final class BakeCache: @unchecked Sendable {
             lockedCenter: nil,
             lockedSegStart: nil,
             spring: SpringState2D.rest(at: Point2D(x: 0.5, y: 0.5)),
-            lastTime: nil
+            lastTime: nil,
+            lastRetargetTime: nil
         )
 
         var t: TimeInterval = 0

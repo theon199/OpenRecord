@@ -9,29 +9,9 @@ struct OpenRecordApp: App {
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
-        // #region agent log
-        AgentDebugLog.write(
-            hypothesisId: "H1",
-            location: "OpenRecordApp.swift:init",
-            message: "App.init after setActivationPolicy",
-            data: [
-                "windowCount": NSApp.windows.count,
-                "windows": AgentDebugLog.windowDump(),
-                "activationPolicy": NSApp.activationPolicy().rawValue,
-            ]
-        )
-        // #endregion
     }
 
     var body: some Scene {
-        // #region agent log
-        let _ = AgentDebugLog.write(
-            hypothesisId: "H2",
-            location: "OpenRecordApp.swift:body",
-            message: "App.body evaluated",
-            data: ["windowCount": NSApp.windows.count]
-        )
-        // #endregion
         WindowGroup("OpenRecord") {
             ContentView()
                 .environment(model)
@@ -93,33 +73,9 @@ struct OpenRecordApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        // #region agent log
-        AgentDebugLog.write(
-            hypothesisId: "H1",
-            location: "OpenRecordApp.swift:applicationDidFinishLaunching",
-            message: "didFinishLaunching before orderFront",
-            data: [
-                "windowCount": NSApp.windows.count,
-                "windows": AgentDebugLog.windowDump(),
-            ]
-        )
-        // #endregion
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
             Self.orderFrontMainWindows()
-            // #region agent log
-            AgentDebugLog.write(
-                hypothesisId: "H4",
-                location: "OpenRecordApp.swift:applicationDidFinishLaunching.async",
-                message: "after orderFrontMainWindows",
-                data: [
-                    "windowCount": NSApp.windows.count,
-                    "windows": AgentDebugLog.windowDump(),
-                    "keyTitle": NSApp.keyWindow?.title ?? "nil",
-                    "mainTitle": NSApp.mainWindow?.title ?? "nil",
-                ]
-            )
-            // #endregion
         }
     }
 
@@ -135,20 +91,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if className.contains("StatusBar") || className.contains("NSStatus") {
                 continue
             }
-            // #region agent log
-            AgentDebugLog.write(
-                hypothesisId: "H4",
-                location: "OpenRecordApp.swift:orderFrontMainWindows",
-                message: "ordering window front",
-                data: [
-                    "class": className,
-                    "title": window.title,
-                    "frame": NSStringFromRect(window.frame),
-                    "contentSize": NSStringFromSize(window.contentView?.bounds.size ?? .zero),
-                    "subviews": window.contentView?.subviews.map { String(describing: type(of: $0)) }.joined(separator: ",") ?? "",
-                ]
-            )
-            // #endregion
             if window.isMiniaturized {
                 window.deminiaturize(nil)
             }

@@ -210,6 +210,40 @@ public struct ProjectLibrary: Sendable {
         }
     }
 
+    /// Move a top-level `.openrecord` bundle to the Trash (falls back to deleting it).
+    public func delete(_ url: URL) throws {
+        let url = url.standardizedFileURL
+        try withAccess(to: url) {
+            let fm = FileManager.default
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue
+            else {
+                throw OpenRecordError.io("Project does not exist: \(url.path)")
+            }
+            guard url.pathExtension == ProjectLayout.bundleExtension else {
+                throw OpenRecordError.io(
+                    "Expected a .\(ProjectLayout.bundleExtension) bundle: \(url.path)"
+                )
+            }
+            let parent = url.deletingLastPathComponent().standardizedFileURL
+            guard parent == rootURL.standardizedFileURL else {
+                throw OpenRecordError.io("Project is not in this library: \(url.path)")
+            }
+            do {
+                try fm.trashItem(at: url, resultingItemURL: nil)
+            } catch {
+                do {
+                    try fm.removeItem(at: url)
+                } catch {
+                    throw OpenRecordError.io(
+                        "Could not delete \(url.lastPathComponent): \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+    }
+
     /// Copy an exported MP4 (or any file / bundle) to `destinationURL`.
     /// If `destinationURL` is an existing directory, the source’s filename is appended.
     public func copyExport(from sourceURL: URL, to destinationURL: URL) throws {

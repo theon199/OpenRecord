@@ -7,20 +7,6 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var model = model
-        let screen = !model.allPermissionsGranted ? "permissions" : "library"
-        // #region agent log
-        let _ = AgentDebugLog.write(
-            hypothesisId: "H2",
-            location: "ContentView.swift:body",
-            message: "ContentView.body",
-            data: [
-                "screen": screen,
-                "permissionScreen": model.permissionGranted.map { "\($0.key.rawValue)=\($0.value)" }.sorted().joined(separator: ","),
-                "projectCount": model.projects.count,
-                "hasEditor": model.editor != nil,
-            ]
-        )
-        // #endregion
         Group {
             if !model.allPermissionsGranted {
                 PermissionsView(model: model)
@@ -39,37 +25,7 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
-        .background {
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear {
-                        // #region agent log
-                        AgentDebugLog.write(
-                            hypothesisId: "H5",
-                            location: "ContentView.swift:geometry.onAppear",
-                            message: "ContentView layout size",
-                            data: [
-                                "width": Double(geo.size.width),
-                                "height": Double(geo.size.height),
-                                "windows": AgentDebugLog.windowDump(),
-                            ]
-                        )
-                        // #endregion
-                    }
-            }
-        }
         .onAppear {
-            // #region agent log
-            AgentDebugLog.write(
-                hypothesisId: "H2",
-                location: "ContentView.swift:onAppear",
-                message: "ContentView.onAppear",
-                data: [
-                    "allPermissionsGranted": model.allPermissionsGranted,
-                    "windows": AgentDebugLog.windowDump(),
-                ]
-            )
-            // #endregion
             model.start()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

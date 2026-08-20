@@ -50,18 +50,6 @@ final class AppModel {
     init() {
         library = .resolved()
         refreshPermissions()
-        // #region agent log
-        AgentDebugLog.write(
-            hypothesisId: "H3",
-            location: "AppModel.swift:init",
-            message: "AppModel.init finished",
-            data: [
-                "root": library.rootURL.path,
-                "permissions": permissionGranted.map { "\($0.key.rawValue)=\($0.value)" }.sorted().joined(separator: ","),
-                "allGranted": allPermissionsGranted,
-            ]
-        )
-        // #endregion
     }
 
     func start() {
@@ -70,18 +58,6 @@ final class AppModel {
         refreshPermissions()
         refreshProjects()
         installRecordShortcut()
-        // #region agent log
-        AgentDebugLog.write(
-            hypothesisId: "H3",
-            location: "AppModel.swift:start",
-            message: "AppModel.start finished",
-            data: [
-                "projectCount": projects.count,
-                "allGranted": allPermissionsGranted,
-                "error": errorMessage ?? "",
-            ]
-        )
-        // #endregion
     }
 
     func refreshPermissions() {
@@ -114,6 +90,22 @@ final class AppModel {
             try library.reveal(url)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteProject(_ url: URL) {
+        let url = url.standardizedFileURL
+        do {
+            let isOpen = editor?.projectURL.standardizedFileURL == url
+                || selectedProjectURL?.standardizedFileURL == url
+            if isOpen {
+                closeEditor()
+            }
+            try library.delete(url)
+            refreshProjects()
+        } catch {
+            errorMessage = error.localizedDescription
+            refreshProjects()
         }
     }
 

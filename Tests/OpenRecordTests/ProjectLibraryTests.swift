@@ -76,6 +76,7 @@ enum ProjectLibraryBundleRoundTrip {
         try assertNameSanitization(library: library, meta: meta)
         try assertListIsNotRecursive(library: library, root: root, created: created)
         try assertCopyExport(library: library, root: root)
+        try assertDelete(library: library, meta: meta)
         try assertLibraryFolderPersistence(root: root)
         try assertOpenRejectsJunk(root: root)
     }
@@ -176,6 +177,43 @@ enum ProjectLibraryBundleRoundTrip {
         try library.copyExport(from: source, to: explicit)
         guard try Data(contentsOf: explicit) == Data("replacement".utf8) else {
             throw OpenRecordError.io("copyExport did not replace an existing file")
+        }
+    }
+
+    private static func assertDelete(library: ProjectLibrary, meta: ProjectMeta) throws {
+        let fm = FileManager.default
+        let created = try library.create(name: "Delete Me", meta: meta)
+        guard fm.fileExists(atPath: created.path) else {
+            throw OpenRecordError.io("delete test bundle was not created")
+        }
+
+        try library.delete(created)
+        guard !fm.fileExists(atPath: created.path) else {
+            throw OpenRecordError.io("delete() left the bundle on disk")
+        }
+        let listed = try library.list()
+        guard !listed.map(\.standardizedFileURL).contains(created.standardizedFileURL) else {
+            throw OpenRecordError.io("list() still includes a deleted bundle")
+        }
+
+        do {
+            try library.delete(created)
+            throw OpenRecordError.io("delete() succeeded on a missing bundle")
+        } catch let error as OpenRecordError {
+            if case .io(let message) = error, message.contains("succeeded on a missing") {
+                throw error
+            }
+        }
+
+        let junk = library.rootURL.appendingPathComponent("not-a-bundle", isDirectory: true)
+        try fm.createDirectory(at: junk, withIntermediateDirectories: true)
+        do {
+            try library.delete(junk)
+            throw OpenRecordError.io("delete() accepted a folder without .openrecord")
+        } catch let error as OpenRecordError {
+            if case .io(let message) = error, message.contains("accepted a folder") {
+                throw error
+            }
         }
     }
 

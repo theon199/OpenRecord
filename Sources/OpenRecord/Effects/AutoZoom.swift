@@ -15,7 +15,7 @@ public struct SilenceZone: Sendable, Hashable {
 
 /// Knobs for silence detection and auto-zoom segment generation.
 public struct AutoZoomConfig: Sendable, Hashable {
-    /// Minimum idle stretch to count as a pause (default 0.5s).
+    /// Minimum idle stretch to count as a pause (default 1.6s).
     public var minSilence: TimeInterval
     /// Drop active islands shorter than this.
     public var minActiveDuration: TimeInterval
@@ -29,15 +29,18 @@ public struct AutoZoomConfig: Sendable, Hashable {
     public var clickPaddingAfter: TimeInterval
     /// Merge active islands separated by less than this gap.
     public var mergeGap: TimeInterval
+    /// After merge, stretch each island to at least this duration, then re-merge overlaps.
+    public var minZoomHold: TimeInterval
 
     public init(
-        minSilence: TimeInterval = 0.5,
-        minActiveDuration: TimeInterval = 0.2,
+        minSilence: TimeInterval = 1.6,
+        minActiveDuration: TimeInterval = 0.35,
         zoomAmount: Double = 1.5,
-        stillDisplacementPoints: Double = 2,
-        clickPaddingBefore: TimeInterval = 0.25,
-        clickPaddingAfter: TimeInterval = 0.45,
-        mergeGap: TimeInterval = 0.25
+        stillDisplacementPoints: Double = 5,
+        clickPaddingBefore: TimeInterval = 0.35,
+        clickPaddingAfter: TimeInterval = 1.2,
+        mergeGap: TimeInterval = 1.4,
+        minZoomHold: TimeInterval = 2.0
     ) {
         self.minSilence = minSilence
         self.minActiveDuration = minActiveDuration
@@ -46,6 +49,7 @@ public struct AutoZoomConfig: Sendable, Hashable {
         self.clickPaddingBefore = clickPaddingBefore
         self.clickPaddingAfter = clickPaddingAfter
         self.mergeGap = mergeGap
+        self.minZoomHold = minZoomHold
     }
 
     public static let `default` = AutoZoomConfig()
@@ -67,7 +71,7 @@ public enum AutoZoom: Sendable {
 
     /// Zoom segments covering non-silent (moving / clicking) regions.
     ///
-    /// Anchors are UV centroids of cursor samples in each island, weighted toward click times.
+    /// Anchors are the first click in the island, or cursor UV at island start if there is no click.
     public static func generateRanges(
         samples: [CursorSample],
         clicks: [ClickSample] = [],
@@ -76,8 +80,12 @@ public enum AutoZoom: Sendable {
         config: AutoZoomConfig = .default
     ) -> [ZoomRange] {
         let end = max(0, duration)
-        let active = activityIntervals(samples: samples, clicks: clicks, duration: end, config: config)
-            .filter { $0.end - $0.start >= config.minActiveDuration }
+        let active = expandToMinHold(
+            activityIntervals(samples: samples, clicks: clicks, duration: end, config: config)
+                .filter { $0.end - $0.start >= config.minActiveDuration },
+            minHold: config.minZoomHold,
+            duration: end
+        )
 
         let sortedSamples = samples.sorted { $0.t < $1.t }
         let downs = clicks.filter(\.down).sorted { $0.t < $1.t }
@@ -158,6 +166,30 @@ public enum AutoZoom: Sendable {
         )
     }
 
+    /// Stretch short islands to `minHold` (extend end, then start), then merge overlaps.
+    static func expandToMinHold(
+        _ intervals: [Interval],
+        minHold: TimeInterval,
+        duration: TimeInterval
+    ) -> [Interval] {
+        guard minHold > 0 else { return intervals }
+        let expanded = intervals.map { interval -> Interval in
+            let span = interval.end - interval.start
+            if span >= minHold { return interval }
+            var start = interval.start
+            var end = interval.end
+            let needed = minHold - span
+            let extendAfter = min(needed, max(0, duration - end))
+            end += extendAfter
+            let stillNeeded = minHold - (end - start)
+            if stillNeeded > 0 {
+                start = max(0, start - stillNeeded)
+            }
+            return Interval(start: start, end: end)
+        }
+        return merge(expanded, gap: 0)
+    }
+
     static func merge(_ intervals: [Interval], gap: TimeInterval) -> [Interval] {
         let sorted = intervals.sorted { $0.start < $1.start }
         guard var current = sorted.first else { return [] }
@@ -208,29 +240,12 @@ public enum AutoZoom: Sendable {
         clicks: [ClickSample],
         displayBounds: Rect2D
     ) -> Point2D {
-        var sumX = 0.0
-        var sumY = 0.0
-        var weight = 0.0
-
-        for sample in samples where sample.t >= start && sample.t <= end {
-            let uv = CursorSmoother.uv(sample, displayBounds: displayBounds)
-            sumX += uv.x
-            sumY += uv.y
-            weight += 1
+        if let click = clicks.first(where: { $0.t >= start && $0.t <= end }) {
+            return nearestUV(at: click.t, samples: samples, displayBounds: displayBounds)
+                ?? Point2D(x: 0.5, y: 0.5)
         }
-
-        for click in clicks where click.t >= start && click.t <= end {
-            if let uv = nearestUV(at: click.t, samples: samples, displayBounds: displayBounds) {
-                sumX += uv.x * 4
-                sumY += uv.y * 4
-                weight += 4
-            }
-        }
-
-        guard weight > 0 else {
-            return Point2D(x: 0.5, y: 0.5)
-        }
-        return Point2D(x: sumX / weight, y: sumY / weight)
+        return nearestUV(at: start, samples: samples, displayBounds: displayBounds)
+            ?? Point2D(x: 0.5, y: 0.5)
     }
 
     static func nearestUV(

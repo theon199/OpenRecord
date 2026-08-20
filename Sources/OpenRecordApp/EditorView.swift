@@ -53,6 +53,10 @@ struct EditorView: View {
                             .frame(width: 220)
                         Text("Exporting…")
                             .font(.headline)
+                        Button("Cancel") {
+                            session.cancelExport()
+                        }
+                        .keyboardShortcut(.cancelAction)
                     }
                     .padding(24)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

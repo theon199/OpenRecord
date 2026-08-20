@@ -3,6 +3,7 @@ import SwiftUI
 
 struct InspectorPanel: View {
     @Bindable var session: EditorSession
+    @State private var confirmRegenerateZooms = false
 
     var body: some View {
         Form {
@@ -19,6 +20,7 @@ struct InspectorPanel: View {
                     Button("Delete Zoom", role: .destructive) {
                         session.deleteSelectedZoom()
                     }
+                    regenerateZoomsButton
                 }
             } else {
                 Section("Zoom") {
@@ -28,6 +30,7 @@ struct InspectorPanel: View {
                     Button("Add Zoom at Playhead") {
                         session.addZoomAtPlayhead()
                     }
+                    regenerateZoomsButton
                 }
             }
 
@@ -59,6 +62,28 @@ struct InspectorPanel: View {
         }
         .formStyle(.grouped)
         .controlSize(.small)
+        .confirmationDialog(
+            "Replace Existing Zooms?",
+            isPresented: $confirmRegenerateZooms,
+            titleVisibility: .visible
+        ) {
+            Button("Regenerate", role: .destructive) {
+                session.regenerateAutoZooms()
+            }
+        } message: {
+            Text("Auto-zooms from cursor activity will replace the current zoom ranges.")
+        }
+    }
+
+    private var regenerateZoomsButton: some View {
+        Button("Regenerate from Cursor Activity") {
+            if session.document.zoomRanges.isEmpty {
+                session.regenerateAutoZooms()
+            } else {
+                confirmRegenerateZooms = true
+            }
+        }
+        .disabled(session.exportProgress != nil)
     }
 
     private var zoomAmount: Binding<Double> {

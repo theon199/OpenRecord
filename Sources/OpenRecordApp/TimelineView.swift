@@ -192,15 +192,21 @@ struct TimelineView: View {
             session.seek(to: session.effectiveTrimOut)
         case .zoomStart(let id):
             guard var range = session.document.zoomRanges.first(where: { $0.id == id }) else { return }
-            range.start = min(time, range.end - 0.12)
+            let (lower, _) = session.zoomNeighborBounds(excluding: id)
+            range.start = min(max(time, lower), range.end - 0.12)
             session.replaceZoom(range)
         case .zoomEnd(let id):
             guard var range = session.document.zoomRanges.first(where: { $0.id == id }) else { return }
-            range.end = max(time, range.start + 0.12)
+            let (_, upper) = session.zoomNeighborBounds(excluding: id)
+            range.end = max(min(time, upper), range.start + 0.12)
             session.replaceZoom(range)
         case .zoomBody(let id, let originalStart, let originalEnd, let grab):
             let span = originalEnd - originalStart
-            let start = min(max(time - grab, 0), session.timelineDuration - span)
+            let (lower, upper) = session.zoomNeighborBounds(excluding: id, referenceStart: originalStart)
+            let lo = max(0, lower)
+            let hi = min(session.timelineDuration, upper)
+            let maxStart = max(lo, hi - span)
+            let start = min(max(time - grab, lo), maxStart)
             guard var range = session.document.zoomRanges.first(where: { $0.id == id }) else { return }
             range.start = start
             range.end = start + span

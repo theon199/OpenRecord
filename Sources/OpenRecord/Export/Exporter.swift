@@ -33,14 +33,19 @@ public struct Exporter: Sendable {
         progress: ExportProgressHandler?
     ) async throws {
         let bundleURL = projectBundleURL
-        try await Task.detached(priority: .userInitiated) {
+        let work = Task.detached(priority: .userInitiated) {
             try await ExportSession.run(
                 bundleURL: bundleURL,
                 project: project,
                 outputURL: url,
                 progress: progress
             )
-        }.value
+        }
+        try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
     }
 }
 
