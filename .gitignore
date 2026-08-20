@@ -1,0 +1,26 @@
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Packaged app (scripts/package-app.sh)
+dist/
+
+# Xcode leftovers (this project is CLT / SPM only)
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# OS / editor
+.cursor/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+
+# Local signing leftovers from cert creation
+*.p12
+*.pem
+*.key
