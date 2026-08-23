@@ -10,27 +10,55 @@ public struct CursorSmoother: Sendable {
         public var position: Point2D
         public var velocity: Point2D
         public var target: Point2D
+        /// `false` marks a telemetry sample captured while the pointer was outside
+        /// the selected target. Legacy samples are treated as visible.
+        public var visible: Bool
     }
 
     public let displayBounds: Rect2D
     public let samples: [Sample]
     public let clicks: [ClickSample]
+    public let targetGeometry: [TargetGeometrySample]
+    private let rawSamples: [CursorSample]
 
     public var isEmpty: Bool { samples.isEmpty }
 
     public init(
         samples raw: [CursorSample],
         clicks: [ClickSample] = [],
-        displayBounds: Rect2D
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample] = []
     ) {
         self.displayBounds = displayBounds
-        self.clicks = clicks.sorted { $0.t < $1.t }
+        let sortedGeometry = targetGeometry.sorted { $0.t < $1.t }
+        let sortedRaw = raw.sorted { $0.t < $1.t }
+        self.clicks = Self.filterClicks(
+            clicks.sorted { $0.t < $1.t },
+            samples: sortedRaw,
+            geometry: sortedGeometry,
+            fallback: displayBounds
+        )
+        self.targetGeometry = sortedGeometry
+        self.rawSamples = sortedRaw
 
-        let moves = raw
-            .sorted { $0.t < $1.t }
-            .map { Move(time: $0.t, uv: CursorSmoother.uv(x: $0.x, y: $0.y, displayBounds: displayBounds)) }
+        // Normalize against the target bounds at each sample rather than the
+        // display bounds. This is what keeps a captured window stable while it
+        // moves around the desktop. A missing target sidecar preserves v1's
+        // display-bounds behavior.
+        let moves = sortedRaw.map { sample in
+            let bounds = Self.geometry(at: sample.t, samples: sortedGeometry, fallback: displayBounds)
+            return Move(
+                time: sample.t,
+                uv: CursorSmoother.uv(x: sample.x, y: sample.y, displayBounds: bounds),
+                visible: Self.isVisible(sample, at: sample.t, geometry: sortedGeometry, fallback: displayBounds)
+            )
+        }
+        // Off-target movement must not influence the spring or auto-zoom. Keep
+        // visibility in rawSamples so interpolateIfVisible can hide the overlay
+        // throughout an off-target interval.
+        let visibleMoves = moves.filter(\.visible)
 
-        let filtered = Self.filterShake(moves, displayBounds: displayBounds)
+        let filtered = Self.filterShake(visibleMoves, displayBounds: displayBounds)
         let smoothed = Self.smoothEMA(filtered)
         let dense = Self.densify(smoothed)
         self.samples = Self.simulate(moves: dense, clicks: self.clicks)
@@ -48,6 +76,105 @@ public struct CursorSmoother: Sendable {
 
     public static func uv(_ sample: CursorSample, displayBounds: Rect2D) -> Point2D {
         uv(x: sample.x, y: sample.y, displayBounds: displayBounds)
+    }
+
+    /// Whether the pointer is on-screen and inside the selected target at time.
+    /// This is public so auto-zoom can apply the exact same filtering as the
+    /// preview/export cursor path.
+    public static func isVisible(
+        _ sample: CursorSample,
+        at time: TimeInterval,
+        geometry: [TargetGeometrySample],
+        fallback: Rect2D
+    ) -> Bool {
+        guard sample.isVisible else { return false }
+        // `visible` and target geometry were both optional v1.0.1 additions.
+        // With no geometry sidecar, preserve v1's contract exactly: a missing
+        // visibility flag means visible, without introducing bounds filtering.
+        guard !geometry.isEmpty else { return true }
+        let bounds = Self.geometry(at: time, samples: geometry, fallback: fallback)
+        guard let current = Self.geometrySample(at: time, samples: geometry) else {
+            return Self.contains(sample.x, sample.y, in: bounds)
+        }
+        return current.available && Self.contains(sample.x, sample.y, in: bounds)
+    }
+
+    /// Interpolate the cursor, returning nil during hidden/off-target periods.
+    public func interpolateIfVisible(at time: TimeInterval) -> Point2D? {
+        guard !samples.isEmpty else { return nil }
+        guard let raw = latestRawSample(at: time),
+              Self.isVisible(raw, at: time, geometry: targetGeometry, fallback: displayBounds)
+        else { return nil }
+        return interpolate(at: time)
+    }
+
+    /// Whether a cursor overlay should be shown at time.
+    public func isVisible(at time: TimeInterval) -> Bool {
+        guard let raw = latestRawSample(at: time) else { return false }
+        return Self.isVisible(raw, at: time, geometry: targetGeometry, fallback: displayBounds)
+    }
+
+    private func latestRawSample(at time: TimeInterval) -> CursorSample? {
+        guard !rawSamples.isEmpty else { return nil }
+        guard time >= rawSamples[0].t else { return nil }
+        var lo = 0
+        var hi = rawSamples.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if rawSamples[mid].t <= time { lo = mid + 1 } else { hi = mid }
+        }
+        return rawSamples[max(0, lo - 1)]
+    }
+
+    private static func filterClicks(
+        _ clicks: [ClickSample],
+        samples: [CursorSample],
+        geometry: [TargetGeometrySample],
+        fallback: Rect2D
+    ) -> [ClickSample] {
+        guard !samples.isEmpty else { return clicks }
+        return clicks.filter { click in
+            var lo = 0
+            var hi = samples.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if samples[mid].t <= click.t { lo = mid + 1 } else { hi = mid }
+            }
+            guard lo > 0 else { return geometry.isEmpty }
+            let sample = samples[lo - 1]
+            return isVisible(sample, at: click.t, geometry: geometry, fallback: fallback)
+        }
+    }
+
+    private static func geometrySample(
+        at time: TimeInterval,
+        samples: [TargetGeometrySample]
+    ) -> TargetGeometrySample? {
+        guard !samples.isEmpty else { return nil }
+        var lo = 0
+        var hi = samples.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if samples[mid].t <= time { lo = mid + 1 } else { hi = mid }
+        }
+        guard lo > 0 else { return nil }
+        return samples[lo - 1]
+    }
+
+    private static func geometry(
+        at time: TimeInterval,
+        samples: [TargetGeometrySample],
+        fallback: Rect2D
+    ) -> Rect2D {
+        guard let sample = geometrySample(at: time, samples: samples), sample.available else {
+            return fallback
+        }
+        return sample.bounds
+    }
+
+    private static func contains(_ x: Double, _ y: Double, in bounds: Rect2D) -> Bool {
+        x >= bounds.x && x <= bounds.x + bounds.width
+            && y >= bounds.y && y <= bounds.y + bounds.height
     }
 
     /// Spring-smoothed cursor UV at `time` seconds from recording start.
@@ -102,6 +229,7 @@ public struct CursorSmoother: Sendable {
     private struct Move {
         var time: TimeInterval
         var uv: Point2D
+        var visible: Bool = true
     }
 
     private static let shakeThresholdPoints = 4.0
@@ -257,7 +385,8 @@ public struct CursorSmoother: Sendable {
                     time: 0,
                     position: first.uv,
                     velocity: Point2D(x: 0, y: 0),
-                    target: first.uv
+                    target: first.uv,
+                    visible: true
                 )
             )
         }
@@ -274,7 +403,8 @@ public struct CursorSmoother: Sendable {
                     time: move.time,
                     position: Point2D(x: Self.clamp01(state.posU), y: Self.clamp01(state.posV)),
                     velocity: Point2D(x: state.velU, y: state.velV),
-                    target: move.uv
+                    target: move.uv,
+                    visible: move.visible
                 )
             )
         }

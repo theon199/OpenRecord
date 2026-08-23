@@ -70,20 +70,25 @@ private enum ExportSession {
             ProjectMeta.self,
             from: ProjectLayout.metaURL(in: bundleURL)
         )
-        let mouse = try ExportJSONL.decode(
+        let mouse = (try? ExportJSONL.decode(
             CursorSample.self,
             from: ProjectLayout.mouseURL(in: bundleURL)
-        )
-        let clicks = try ExportJSONL.decode(
+        )) ?? []
+        let clicks = (try? ExportJSONL.decode(
             ClickSample.self,
             from: ProjectLayout.clicksURL(in: bundleURL)
-        )
+        )) ?? []
+        let targetGeometry = (try? ExportJSONL.decode(
+            TargetGeometrySample.self,
+            from: ProjectLayout.targetGeometryURL(in: bundleURL)
+        )) ?? []
 
         let engine = ZoomEngine(
             document: project,
             samples: mouse,
             clicks: clicks,
-            displayBounds: meta.displayBounds
+            displayBounds: meta.displayBounds,
+            targetGeometry: targetGeometry
         )
 
         let sourceAsset = AVURLAsset(
@@ -125,7 +130,23 @@ private enum ExportSession {
         let systemURL = await ExportMediaIO.usableAudioURL(
             ProjectLayout.systemAudioURL(in: bundleURL)
         )
-        let audioSources = [micURL, systemURL].compactMap { $0 }
+        var audioSources: [ExportAudioMux.Source] = []
+        if let micURL {
+            audioSources.append(
+                ExportAudioMux.Source(
+                    url: micURL,
+                    offset: meta.captureTiming?.microphoneOffset ?? 0
+                )
+            )
+        }
+        if let systemURL {
+            audioSources.append(
+                ExportAudioMux.Source(
+                    url: systemURL,
+                    offset: meta.captureTiming?.systemAudioOffset ?? 0
+                )
+            )
+        }
         let audioComposition = try await ExportAudioMux.makeComposition(
             sources: audioSources,
             start: trimStart,
@@ -178,7 +199,9 @@ private enum ExportSession {
         }
 
         var succeeded = false
+        var audioTask: Task<Void, Error>?
         defer {
+            audioTask?.cancel()
             if !succeeded {
                 if writer.status == .writing {
                     writer.cancelWriting()
@@ -193,6 +216,17 @@ private enum ExportSession {
             )
         }
         writer.startSession(atSourceTime: .zero)
+
+        if let audioInput, let audioComposition {
+            let box = ExportAudioTaskBox(
+                writer: writer,
+                input: audioInput,
+                composition: audioComposition
+            )
+            audioTask = Task.detached(priority: .userInitiated) {
+                try box.appendAndFinish()
+            }
+        }
 
         report(progress, 0.02)
 
@@ -212,7 +246,7 @@ private enum ExportSession {
                 let cursorUV = engine.interpolateCursor(at: t)
                 let clicking = engine.isClicking(at: t)
                 let clickAge = clicking
-                    ? (ExportLayout.primaryClickAge(at: t, clicks: clicks) ?? 0)
+                    ? (ExportLayout.primaryClickAge(at: t, clicks: engine.smoother.clicks) ?? 0)
                     : nil
 
                 let pixelBuffer: CVPixelBuffer
@@ -255,26 +289,44 @@ private enum ExportSession {
         videoInput.markAsFinished()
         report(progress, 0.90)
 
-        if let audioInput, let audioComposition {
-            try ExportAudioMux.append(
-                to: writer,
-                input: audioInput,
-                composition: audioComposition
-            )
-            audioInput.markAsFinished()
+        if let audioTask {
+            do {
+                let cancellationBox = WriterCancellationBox(writer: writer)
+                try await withTaskCancellationHandler {
+                    try await audioTask.value
+                } onCancel: {
+                    audioTask.cancel()
+                    cancellationBox.cancel()
+                }
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                throw error
+            }
         }
         report(progress, 0.97)
 
+        try Task.checkCancellation()
         try await finish(writer)
+        try Task.checkCancellation()
         try install(tempURL, at: outputURL)
         succeeded = true
         report(progress, 1)
     }
 
     private static func finish(_ writer: AVAssetWriter) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let box = WriterFinishBox(writer: writer, continuation: continuation)
-            box.start()
+        let cancellationBox = WriterCancellationBox(writer: writer)
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    let box = WriterFinishBox(writer: writer, continuation: continuation)
+                    box.start()
+                }
+            } onCancel: {
+                cancellationBox.cancel()
+            }
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            throw error
         }
     }
 
@@ -304,6 +356,46 @@ private enum ExportSession {
 
     private static func report(_ progress: ExportProgressHandler?, _ value: Double) {
         progress?(min(1, max(0, value)))
+    }
+}
+
+/// AVAssetWriter expects enabled inputs to advance together. Keeping audio on
+/// its own producer prevents video backpressure from deadlocking while it waits
+/// for the first audio samples.
+private final class ExportAudioTaskBox: @unchecked Sendable {
+    let writer: AVAssetWriter
+    let input: AVAssetWriterInput
+    let composition: AVMutableComposition
+
+    init(
+        writer: AVAssetWriter,
+        input: AVAssetWriterInput,
+        composition: AVMutableComposition
+    ) {
+        self.writer = writer
+        self.input = input
+        self.composition = composition
+    }
+
+    func appendAndFinish() throws {
+        try ExportAudioMux.append(
+            to: writer,
+            input: input,
+            composition: composition
+        )
+        input.markAsFinished()
+    }
+}
+
+private final class WriterCancellationBox: @unchecked Sendable {
+    let writer: AVAssetWriter
+
+    init(writer: AVAssetWriter) {
+        self.writer = writer
+    }
+
+    func cancel() {
+        writer.cancelWriting()
     }
 }
 

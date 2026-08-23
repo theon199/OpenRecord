@@ -12,8 +12,8 @@ struct PreviewCanvas: View {
             let cursor = session.engine.interpolateCursor(at: session.playhead)
             let clicking = session.engine.isClicking(at: session.playhead)
             let canvas = session.document.canvas
-            let sourceWidth = max(Int((session.meta.displayBounds.width * session.meta.scale).rounded()), 1)
-            let sourceHeight = max(Int((session.meta.displayBounds.height * session.meta.scale).rounded()), 1)
+            let sourceWidth = session.sourceWidth
+            let sourceHeight = session.sourceHeight
             let layout = ExportLayout.canvasLayout(
                 canvas: canvas,
                 sourceWidth: sourceWidth,
@@ -25,7 +25,7 @@ struct PreviewCanvas: View {
             let video = mapRect(layout.videoRect, from: layout.size, into: outer)
             let corner = layout.cornerRadius * Double(viewScale)
             let clickAge = clicking
-                ? ExportLayout.primaryClickAge(at: session.playhead, clicks: session.clicks)
+                ? ExportLayout.primaryClickAge(at: session.playhead, clicks: session.engine.smoother.clicks)
                 : nil
 
             ZStack(alignment: .topLeading) {
@@ -132,16 +132,27 @@ struct PreviewCanvas: View {
             }
             if let image = session.cursorImage {
                 let sprite = session.cursorSprite
-                let width = (sprite?.standardSize.width ?? image.size.width) * canvas.cursorScale * viewPixelsPerPoint
-                let height = (sprite?.standardSize.height ?? image.size.height) * canvas.cursorScale * viewPixelsPerPoint
-                let hotspot = sprite?.hotspot ?? Point2D(x: 1, y: 1)
+                let pixelSize = cursorPixelSize(image)
+                let placement = sprite.map {
+                    CursorSpriteLayout.placement(
+                        sprite: $0,
+                        imagePixelSize: pixelSize,
+                        cursorScale: canvas.cursorScale,
+                        pixelsPerPoint: viewPixelsPerPoint
+                    )
+                }
+                let width = placement?.drawSize.width
+                    ?? image.size.width * canvas.cursorScale * viewPixelsPerPoint
+                let height = placement?.drawSize.height
+                    ?? image.size.height * canvas.cursorScale * viewPixelsPerPoint
+                let hotspot = placement?.hotspot ?? Point2D(x: 1, y: 1)
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
                     .frame(width: width, height: height)
                     .offset(
-                        x: width / 2 - hotspot.x * (width / max(image.size.width, 1)),
-                        y: height / 2 - hotspot.y * (height / max(image.size.height, 1))
+                        x: width / 2 - hotspot.x,
+                        y: height / 2 - hotspot.y
                     )
             } else {
                 CursorPointerShape()
@@ -153,6 +164,16 @@ struct PreviewCanvas: View {
         }
         .position(x: point.x, y: point.y)
         .allowsHitTesting(false)
+    }
+
+    private func cursorPixelSize(_ image: NSImage) -> Size2D {
+        let bitmap = image.representations
+            .compactMap { $0 as? NSBitmapImageRep }
+            .max { lhs, rhs in lhs.pixelsWide * lhs.pixelsHigh < rhs.pixelsWide * rhs.pixelsHigh }
+        return Size2D(
+            width: Double(max(bitmap?.pixelsWide ?? Int(image.size.width), 1)),
+            height: Double(max(bitmap?.pixelsHigh ?? Int(image.size.height), 1))
+        )
     }
 
     @ViewBuilder
@@ -220,7 +241,7 @@ final class PlayerNSView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = .clear
-        playerLayer.videoGravity = .resize
+        playerLayer.videoGravity = .resizeAspect
         layer?.addSublayer(playerLayer)
     }
 

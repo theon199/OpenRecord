@@ -141,11 +141,18 @@ final class ExportCompositor {
         let extent = cursorImage.extent
         guard extent.width > 0, extent.height > 0 else { return nil }
 
-        let drawWidth = max(sprite.standardSize.width * canvas.cursorScale * pixelsPerPoint, 1)
-        let drawHeight = max(sprite.standardSize.height * canvas.cursorScale * pixelsPerPoint, 1)
-        let hotspotX = (sprite.hotspot.x / max(extent.width, 1)) * drawWidth
-        let hotspotY = (sprite.hotspot.y / max(extent.height, 1)) * drawHeight
-        let topLeft = CGPoint(x: hotspot.x - hotspotX, y: hotspot.y - hotspotY)
+        let placement = CursorSpriteLayout.placement(
+            sprite: sprite,
+            imagePixelSize: Size2D(width: extent.width, height: extent.height),
+            cursorScale: canvas.cursorScale,
+            pixelsPerPoint: pixelsPerPoint
+        )
+        let drawWidth = placement.drawSize.width
+        let drawHeight = placement.drawSize.height
+        let topLeft = CGPoint(
+            x: hotspot.x - placement.hotspot.x,
+            y: hotspot.y - placement.hotspot.y
+        )
 
         var transform = CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
         transform = transform.concatenating(
@@ -232,7 +239,10 @@ enum ExportCursorImage {
         }
 
         for sprite in ordered {
-            let url = bundleURL.appendingPathComponent(sprite.pngRelativePath, isDirectory: false)
+            guard let url = ProjectAssetResolver.cursorPNG(
+                relativePath: sprite.pngRelativePath,
+                in: bundleURL
+            ) else { continue }
             if let image = CIImage(contentsOf: url) {
                 return (sprite, image)
             }

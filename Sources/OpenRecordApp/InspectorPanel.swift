@@ -30,6 +30,7 @@ struct InspectorPanel: View {
                     Button("Add Zoom at Playhead") {
                         session.addZoomAtPlayhead()
                     }
+                    .disabled(!session.canAddZoomAtPlayhead)
                     regenerateZoomsButton
                 }
             }

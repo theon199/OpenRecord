@@ -77,20 +77,72 @@ public struct ProjectMeta: Codable, Sendable, Hashable {
     public var displayBounds: Rect2D
     public var scale: Double
     public var captureTarget: CaptureTarget
+    /// Offsets, in seconds, from the first complete display frame.
+    public var captureTiming: CaptureTiming?
+    /// Capture completion/recovery state. Missing on legacy projects means complete.
+    public var captureHealth: CaptureHealth?
 
     public init(
         createdAt: Date = Date(),
         appVersion: String = OpenRecordInfo.appVersion,
         displayBounds: Rect2D,
         scale: Double,
-        captureTarget: CaptureTarget
+        captureTarget: CaptureTarget,
+        captureTiming: CaptureTiming? = nil,
+        captureHealth: CaptureHealth? = nil
     ) {
         self.createdAt = createdAt
         self.appVersion = appVersion
         self.displayBounds = displayBounds
         self.scale = scale
         self.captureTarget = captureTarget
+        self.captureTiming = captureTiming
+        self.captureHealth = captureHealth
     }
+}
+
+public struct CaptureTiming: Codable, Sendable, Hashable {
+    public var systemAudioOffset: TimeInterval?
+    public var microphoneOffset: TimeInterval?
+
+    public init(
+        systemAudioOffset: TimeInterval? = nil,
+        microphoneOffset: TimeInterval? = nil
+    ) {
+        self.systemAudioOffset = systemAudioOffset
+        self.microphoneOffset = microphoneOffset
+    }
+}
+
+public enum CaptureHealthState: String, Codable, Sendable, Hashable {
+    case complete
+    case recovered
+}
+
+public enum CaptureWarningCode: String, Codable, Sendable, Hashable {
+    case missingDisplayVideo
+    case screenStoppedUnexpectedly
+    case finalizationTimedOut
+    case missingSystemAudio
+    case missingMicrophone
+    case truncatedVideo
+    case truncatedSystemAudio
+    case truncatedMicrophone
+    case truncatedMouseTelemetry
+    case truncatedClickTelemetry
+    case truncatedTargetGeometry
+}
+
+public struct CaptureHealth: Codable, Sendable, Hashable {
+    public var state: CaptureHealthState
+    public var warnings: [CaptureWarningCode]
+
+    public init(state: CaptureHealthState = .complete, warnings: [CaptureWarningCode] = []) {
+        self.state = state
+        self.warnings = warnings
+    }
+
+    public static let complete = CaptureHealth()
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {

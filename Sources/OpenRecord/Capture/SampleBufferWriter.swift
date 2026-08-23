@@ -10,7 +10,10 @@ final class SampleBufferWriter: @unchecked Sendable {
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
     private var didStartSession = false
+    private var requestedSessionTime: CMTime?
     private(set) var didAppend = false
+    private(set) var appendError: Error?
+    private(set) var droppedSamples = false
 
     static func video(url: URL, width: Int, height: Int, queue: DispatchQueue) throws -> SampleBufferWriter {
         let bitRate = min(80_000_000, max(10_000_000, width * height * 10))
@@ -73,21 +76,36 @@ final class SampleBufferWriter: @unchecked Sendable {
             return
         }
         if writer.status == .unknown {
-            writer.startWriting()
+            guard writer.startWriting() else {
+                appendError = writer.error ?? OpenRecordError.io("Could not start \(url.lastPathComponent).")
+                return
+            }
         }
         if writer.status == .failed {
             return
         }
         if !didStartSession, writer.status == .writing {
-            writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+            writer.startSession(atSourceTime: requestedSessionTime ?? CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
             didStartSession = true
         }
-        guard didStartSession, writer.status == .writing, input.isReadyForMoreMediaData else {
+        guard didStartSession, writer.status == .writing else {
+            return
+        }
+        guard input.isReadyForMoreMediaData else {
+            droppedSamples = true
             return
         }
         if input.append(sampleBuffer) {
             didAppend = true
+        } else if appendError == nil {
+            appendError = writer.error ?? OpenRecordError.io("Could not append to \(url.lastPathComponent).")
         }
+    }
+
+    /// Configures the shared host-time origin used by the capture pipeline.
+    /// Must be called on `queue`, before the first append.
+    func startSession(at sourceTime: CMTime) {
+        requestedSessionTime = sourceTime
     }
 
     func finish() async throws {
@@ -114,7 +132,7 @@ final class SampleBufferWriter: @unchecked Sendable {
             }
         case .failed:
             continuation.resume(
-                throwing: writer.error ?? OpenRecordError.io("Media writer failed for \(url.lastPathComponent).")
+                throwing: writer.error ?? appendError ?? OpenRecordError.io("Media writer failed for \(url.lastPathComponent).")
             )
         case .unknown:
             writer.cancelWriting()

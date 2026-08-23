@@ -11,6 +11,7 @@ public enum ProjectLayout: Sendable {
     public static let systemAudioFileName = "system.m4a"
     public static let mouseFileName = "mouse.jsonl"
     public static let clicksFileName = "clicks.jsonl"
+    public static let targetGeometryFileName = "target.jsonl"
     public static let cursorsDirectoryName = "cursors"
 
     public static func metaURL(in projectURL: URL) -> URL {
@@ -48,6 +49,11 @@ public enum ProjectLayout: Sendable {
     public static func clicksURL(in projectURL: URL) -> URL {
         recordingDirectory(in: projectURL)
             .appendingPathComponent(clicksFileName, isDirectory: false)
+    }
+
+    public static func targetGeometryURL(in projectURL: URL) -> URL {
+        recordingDirectory(in: projectURL)
+            .appendingPathComponent(targetGeometryFileName, isDirectory: false)
     }
 
     public static func cursorsDirectory(in projectURL: URL) -> URL {
