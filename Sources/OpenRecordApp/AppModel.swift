@@ -3,6 +3,41 @@ import Foundation
 import OpenRecord
 import SwiftUI
 
+private enum PendingEditorTransition {
+    case close
+    case open(URL, generateAutoZooms: Bool)
+    case delete(URL)
+}
+
+private struct PendingDegradedOpen {
+    var url: URL
+    var generateAutoZooms: Bool
+}
+
+private enum TerminationCaptureOutcome: Sendable {
+    case stopped(CaptureStopResult)
+    case failed(String)
+    case timedOut
+}
+
+private final class OneShotContinuation<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Never>?
+
+    init(_ continuation: CheckedContinuation<Value, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning value: sending Value) {
+        let continuation = lock.withLock {
+            let current = self.continuation
+            self.continuation = nil
+            return current
+        }
+        continuation?.resume(returning: value)
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -21,6 +56,8 @@ final class AppModel {
     var recordedDuration: TimeInterval = 0
     var isProcessingCapture = false
     var isLoadingSources = false
+    var degradedOpenMessage: String?
+    var saveFailureMessage: String?
 
     var allPermissionsGranted: Bool {
         CapturePermissionKind.allCases.allSatisfy { permissionGranted[$0] == true }
@@ -46,6 +83,9 @@ final class AppModel {
     private var globalMonitor: Any?
     private var didStart = false
     private var openGeneration = 0
+    private var captureEventTask: Task<Void, Never>?
+    private var pendingDegradedOpen: PendingDegradedOpen?
+    private var pendingEditorTransition: PendingEditorTransition?
 
     init() {
         library = .resolved()
@@ -58,6 +98,10 @@ final class AppModel {
         refreshPermissions()
         refreshProjects()
         installRecordShortcut()
+        observeCaptureEvents()
+        AppDelegate.terminationHandler = { [weak self] in
+            await self?.prepareForTermination() ?? true
+        }
     }
 
     func refreshPermissions() {
@@ -94,19 +138,7 @@ final class AppModel {
     }
 
     func deleteProject(_ url: URL) {
-        let url = url.standardizedFileURL
-        do {
-            let isOpen = editor?.projectURL.standardizedFileURL == url
-                || selectedProjectURL?.standardizedFileURL == url
-            if isOpen {
-                closeEditor()
-            }
-            try library.delete(url)
-            refreshProjects()
-        } catch {
-            errorMessage = error.localizedDescription
-            refreshProjects()
-        }
+        Task { await requestEditorTransition(.delete(url.standardizedFileURL)) }
     }
 
     func chooseLibraryFolder() {
@@ -136,38 +168,58 @@ final class AppModel {
     }
 
     func openProject(_ url: URL, generateAutoZooms: Bool = false) async {
+        await requestEditorTransition(.open(url, generateAutoZooms: generateAutoZooms))
+    }
+
+    private func performOpenProject(
+        _ url: URL,
+        generateAutoZooms: Bool,
+        allowDegradedTelemetry: Bool = false
+    ) async {
         openGeneration += 1
         let generation = openGeneration
-        editor?.shutdown()
-        editor = nil
         do {
             let opened = try library.open(url: url)
-            let session = await EditorSession.load(opened: opened, library: library)
+            let session = try await EditorSession.load(
+                opened: opened,
+                library: library,
+                allowDegradedTelemetry: allowDegradedTelemetry
+            )
             guard generation == openGeneration else {
                 session.shutdown()
                 return
             }
             if generateAutoZooms {
-                try session.applyAutoZoomsAndSave()
+                try await session.applyAutoZoomsAndSave()
             }
             guard generation == openGeneration else {
                 session.shutdown()
                 return
             }
+            editor?.shutdown()
             editor = session
             selectedProjectURL = url
+            pendingDegradedOpen = nil
+            degradedOpenMessage = nil
+        } catch let issue as EditorTelemetryLoadIssue {
+            if generation == openGeneration {
+                pendingDegradedOpen = PendingDegradedOpen(
+                    url: url,
+                    generateAutoZooms: generateAutoZooms
+                )
+                degradedOpenMessage = issue.localizedDescription
+                selectedProjectURL = editor?.projectURL
+            }
         } catch {
             if generation == openGeneration {
                 errorMessage = error.localizedDescription
+                selectedProjectURL = editor?.projectURL
             }
         }
     }
 
     func closeEditor() {
-        openGeneration += 1
-        editor?.shutdown()
-        editor = nil
-        selectedProjectURL = nil
+        Task { await requestEditorTransition(.close) }
     }
 
     func selectProject(_ url: URL?) {
@@ -177,6 +229,122 @@ final class AppModel {
         }
         if url == editor?.projectURL { return }
         Task { await openProject(url) }
+    }
+
+    func openDegradedProjectAnyway() {
+        guard let pending = pendingDegradedOpen else { return }
+        Task {
+            await performOpenProject(
+                pending.url,
+                generateAutoZooms: pending.generateAutoZooms,
+                allowDegradedTelemetry: true
+            )
+        }
+    }
+
+    func cancelDegradedOpen() {
+        pendingDegradedOpen = nil
+        degradedOpenMessage = nil
+        selectedProjectURL = editor?.projectURL
+    }
+
+    func retryPendingSave() {
+        guard let transition = pendingEditorTransition else { return }
+        Task {
+            do {
+                try await editor?.flushSave()
+                pendingEditorTransition = nil
+                saveFailureMessage = nil
+                await performEditorTransition(transition)
+            } catch {
+                saveFailureMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func saveCopyAndContinue() {
+        guard let transition = pendingEditorTransition, let editor else { return }
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = "\(editor.title) Copy.\(ProjectLayout.bundleExtension)"
+        panel.title = "Save a Copy"
+        panel.prompt = "Save Copy"
+        panel.message = "Saves the complete recording bundle with your current edits."
+        guard panel.runModal() == .OK, var destination = panel.url else { return }
+        if destination.pathExtension.lowercased() == ProjectLayout.bundleExtension,
+           destination.pathExtension != ProjectLayout.bundleExtension
+        {
+            destination.deletePathExtension()
+            destination.appendPathExtension(ProjectLayout.bundleExtension)
+        } else if destination.pathExtension != ProjectLayout.bundleExtension {
+            destination.appendPathExtension(ProjectLayout.bundleExtension)
+        }
+        Task {
+            do {
+                _ = try await editor.saveCopy(to: destination)
+                editor.discardUnsavedChanges()
+                pendingEditorTransition = nil
+                saveFailureMessage = nil
+                await performEditorTransition(transition)
+            } catch {
+                saveFailureMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func discardChangesAndContinue() {
+        guard let transition = pendingEditorTransition else { return }
+        editor?.discardUnsavedChanges()
+        pendingEditorTransition = nil
+        saveFailureMessage = nil
+        Task { await performEditorTransition(transition) }
+    }
+
+    func cancelPendingEditorTransition() {
+        pendingEditorTransition = nil
+        saveFailureMessage = nil
+        selectedProjectURL = editor?.projectURL
+    }
+
+    private func requestEditorTransition(_ transition: PendingEditorTransition) async {
+        if let editor, editor.hasUnsavedChanges {
+            do {
+                try await editor.flushSave()
+            } catch {
+                pendingEditorTransition = transition
+                saveFailureMessage = error.localizedDescription
+                selectedProjectURL = editor.projectURL
+                return
+            }
+        }
+        await performEditorTransition(transition)
+    }
+
+    private func performEditorTransition(_ transition: PendingEditorTransition) async {
+        switch transition {
+        case .close:
+            openGeneration += 1
+            editor?.shutdown()
+            editor = nil
+            selectedProjectURL = nil
+        case .open(let url, let generateAutoZooms):
+            await performOpenProject(url, generateAutoZooms: generateAutoZooms)
+        case .delete(let url):
+            do {
+                if editor?.projectURL.standardizedFileURL == url {
+                    openGeneration += 1
+                    editor?.shutdown()
+                    editor = nil
+                    selectedProjectURL = nil
+                }
+                try library.delete(url)
+                refreshProjects()
+            } catch {
+                errorMessage = error.localizedDescription
+                refreshProjects()
+            }
+        }
     }
 
     func presentRecorder(autoStart: Bool) async {
@@ -236,29 +404,41 @@ final class AppModel {
     }
 
     func stopRecording() async {
+        await finishRecording(reason: .manual)
+    }
+
+    private func finishRecording(reason: CaptureStopReason) async {
         cancelCountdown()
         elapsedTask?.cancel()
         elapsedTask = nil
-        guard isRecording else { return }
+        guard isRecording || recordingURL != nil else { return }
         isRecording = false
         isProcessingCapture = true
         defer { isProcessingCapture = false }
 
         let url = recordingURL
-        recordingURL = nil
         do {
-            try await capture.stop()
+            let result = try await capture.stop(reason: reason)
+            recordingURL = nil
+            if let finalizationError = result.finalizationError {
+                errorMessage = finalizationError
+            }
             isRecorderPresented = false
             showMainWindow()
-            if let url {
-                await openProject(url, generateAutoZooms: true)
+            if result.hasUsableVideo {
+                await openProject(result.projectURL, generateAutoZooms: true)
                 refreshProjects()
+            } else if let url {
+                try? FileManager.default.removeItem(at: url)
             }
         } catch {
+            recordingURL = nil
             errorMessage = error.localizedDescription
             isRecorderPresented = false
             if let url {
-                await openProject(url, generateAutoZooms: false)
+                // Capture finalization only throws when the display track is
+                // unusable. This exact, newly-created bundle is safe to remove.
+                try? FileManager.default.removeItem(at: url)
                 refreshProjects()
             }
         }
@@ -287,6 +467,109 @@ final class AppModel {
         AppDelegate.orderFrontMainWindows()
     }
 
+    func prepareForTermination() async -> Bool {
+        cancelCountdown()
+        if recordingURL != nil || isRecording || isProcessingCapture {
+            elapsedTask?.cancel()
+            elapsedTask = nil
+            isRecording = false
+            let url = recordingURL
+            let outcome = await stopCaptureForTermination()
+            switch outcome {
+            case .stopped(let result):
+                recordingURL = nil
+                if !result.hasUsableVideo, let url {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            case .failed:
+                recordingURL = nil
+                if let url {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            case .timedOut:
+                if let url {
+                    try? CaptureRecovery.markFinalizationTimedOut(at: url)
+                }
+            }
+        }
+
+        guard let editor, editor.hasUnsavedChanges else { return true }
+        while editor.hasUnsavedChanges {
+            do {
+                try await editor.flushSave()
+                return true
+            } catch {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "OpenRecord Couldn’t Save Your Changes"
+                alert.informativeText = error.localizedDescription
+                alert.addButton(withTitle: "Retry")
+                alert.addButton(withTitle: "Save a Copy…")
+                alert.addButton(withTitle: "Discard Changes")
+                alert.addButton(withTitle: "Cancel Quit")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn:
+                    continue
+                case .alertSecondButtonReturn:
+                    if await saveCopyForTermination(editor) {
+                        editor.discardUnsavedChanges()
+                        return true
+                    }
+                case .alertThirdButtonReturn:
+                    editor.discardUnsavedChanges()
+                    return true
+                default:
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private func stopCaptureForTermination() async -> TerminationCaptureOutcome {
+        await withCheckedContinuation { continuation in
+            let gate = OneShotContinuation(continuation)
+            Task { @MainActor [capture] in
+                do {
+                    let result = try await capture.stop(reason: .applicationTermination)
+                    gate.resume(returning: .stopped(result))
+                } catch {
+                    gate.resume(returning: .failed(error.localizedDescription))
+                }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(15))
+                gate.resume(returning: .timedOut)
+            }
+        }
+    }
+
+    private func saveCopyForTermination(_ editor: EditorSession) async -> Bool {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = "\(editor.title) Copy.\(ProjectLayout.bundleExtension)"
+        panel.title = "Save a Copy"
+        panel.prompt = "Save Copy"
+        guard panel.runModal() == .OK, var destination = panel.url else { return false }
+        if destination.pathExtension.lowercased() == ProjectLayout.bundleExtension,
+           destination.pathExtension != ProjectLayout.bundleExtension
+        {
+            destination.deletePathExtension()
+            destination.appendPathExtension(ProjectLayout.bundleExtension)
+        } else if destination.pathExtension != ProjectLayout.bundleExtension {
+            destination.appendPathExtension(ProjectLayout.bundleExtension)
+        }
+        do {
+            _ = try await editor.saveCopy(to: destination)
+            return true
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.runModal()
+            return false
+        }
+    }
+
     private func startCapture() async {
         guard let source = selectedSource else {
             errorMessage = "Pick a display or window to record."
@@ -308,10 +591,16 @@ final class AppModel {
             let url = try library.create(name: name, meta: meta)
             recordingURL = url
             try await capture.start(target: source.target, projectURL: url)
+            guard capture.isRunning else { return }
             isRecording = true
             recordedDuration = 0
             startElapsedTimer()
         } catch {
+            if capture.state == .stopping || capture.state == .finalized {
+                // An unexpected-stop or termination finalizer owns this exact
+                // bundle; do not race it by deleting a potentially playable capture.
+                return
+            }
             if let url = recordingURL {
                 try? FileManager.default.removeItem(at: url)
                 recordingURL = nil
@@ -328,6 +617,24 @@ final class AppModel {
             while !Task.isCancelled, isRecording {
                 recordedDuration = Date().timeIntervalSince(started)
                 try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
+    private func observeCaptureEvents() {
+        captureEventTask?.cancel()
+        captureEventTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await event in capture.events {
+                guard !Task.isCancelled else { return }
+                switch event {
+                case .stoppedUnexpectedly(let message):
+                    await finishRecording(reason: .unexpected(message))
+                case .finalizationFailed(let message):
+                    errorMessage = message
+                case .started, .stopRequested, .finalized:
+                    break
+                }
             }
         }
     }

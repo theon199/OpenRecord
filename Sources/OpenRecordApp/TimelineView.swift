@@ -30,6 +30,7 @@ struct TimelineView: View {
                 Button("Add Zoom") {
                     session.addZoomAtPlayhead()
                 }
+                .disabled(!session.canAddZoomAtPlayhead)
                 .help("Add a zoom at the playhead")
                 Button("Delete Zoom") {
                     session.deleteSelectedZoom()

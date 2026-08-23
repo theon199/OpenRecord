@@ -62,10 +62,21 @@ public enum AutoZoom: Sendable {
         samples: [CursorSample],
         clicks: [ClickSample] = [],
         duration: TimeInterval? = nil,
-        config: AutoZoomConfig = .default
+        config: AutoZoomConfig = .default,
+        displayBounds: Rect2D = .unit,
+        targetGeometry: [TargetGeometrySample] = []
     ) -> [SilenceZone] {
-        let end = timelineEnd(samples: samples, clicks: clicks, duration: duration)
-        let active = activityIntervals(samples: samples, clicks: clicks, duration: end, config: config)
+        let filteredSamples = visibleSamples(samples, displayBounds: displayBounds, targetGeometry: targetGeometry)
+        let filteredClicks = visibleClicks(clicks, samples: samples, displayBounds: displayBounds, targetGeometry: targetGeometry)
+        let end = timelineEnd(samples: filteredSamples, clicks: filteredClicks, duration: duration)
+        let active = activityIntervals(
+            samples: samples,
+            clicks: filteredClicks,
+            duration: end,
+            config: config,
+            displayBounds: displayBounds,
+            targetGeometry: targetGeometry
+        )
         return complement(active, from: 0, to: end, minDuration: config.minSilence)
     }
 
@@ -77,18 +88,28 @@ public enum AutoZoom: Sendable {
         clicks: [ClickSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
-        config: AutoZoomConfig = .default
+        config: AutoZoomConfig = .default,
+        targetGeometry: [TargetGeometrySample] = []
     ) -> [ZoomRange] {
         let end = max(0, duration)
+        let visible = visibleSamples(samples, displayBounds: displayBounds, targetGeometry: targetGeometry)
+        let visibleClickEvents = visibleClicks(clicks, samples: samples, displayBounds: displayBounds, targetGeometry: targetGeometry)
         let active = expandToMinHold(
-            activityIntervals(samples: samples, clicks: clicks, duration: end, config: config)
+            activityIntervals(
+                samples: samples,
+                clicks: visibleClickEvents,
+                duration: end,
+                config: config,
+                displayBounds: displayBounds,
+                targetGeometry: targetGeometry
+            )
                 .filter { $0.end - $0.start >= config.minActiveDuration },
             minHold: config.minZoomHold,
             duration: end
         )
 
-        let sortedSamples = samples.sorted { $0.t < $1.t }
-        let downs = clicks.filter(\.down).sorted { $0.t < $1.t }
+        let sortedSamples = visible.sorted { $0.t < $1.t }
+        let downs = visibleClickEvents.filter(\.down).sorted { $0.t < $1.t }
         let amount = max(config.zoomAmount, 1)
 
         return active.map { island in
@@ -97,7 +118,8 @@ public enum AutoZoom: Sendable {
                 end: island.end,
                 samples: sortedSamples,
                 clicks: downs,
-                displayBounds: displayBounds
+                displayBounds: displayBounds,
+                targetGeometry: targetGeometry
             )
             return ZoomRange(
                 start: island.start,
@@ -134,7 +156,9 @@ public enum AutoZoom: Sendable {
         samples: [CursorSample],
         clicks: [ClickSample],
         duration: TimeInterval,
-        config: AutoZoomConfig
+        config: AutoZoomConfig,
+        displayBounds: Rect2D = .unit,
+        targetGeometry: [TargetGeometrySample] = []
     ) -> [Interval] {
         var raw: [Interval] = []
         let sorted = samples.sorted { $0.t < $1.t }
@@ -143,7 +167,30 @@ public enum AutoZoom: Sendable {
             for i in 1..<sorted.count {
                 let a = sorted[i - 1]
                 let b = sorted[i]
-                let dist = hypot(b.x - a.x, b.y - a.y)
+                guard CursorSmoother.isVisible(
+                    a,
+                    at: a.t,
+                    geometry: targetGeometry,
+                    fallback: displayBounds
+                ), CursorSmoother.isVisible(
+                    b,
+                    at: b.t,
+                    geometry: targetGeometry,
+                    fallback: displayBounds
+                ) else { continue }
+                let dist: Double
+                if targetGeometry.isEmpty {
+                    // Preserve v1's capture-point interpretation when no
+                    // geometry sidecar is present.
+                    dist = hypot(b.x - a.x, b.y - a.y)
+                } else {
+                    let auv = normalized(a, displayBounds: displayBounds, targetGeometry: targetGeometry)
+                    let buv = normalized(b, displayBounds: displayBounds, targetGeometry: targetGeometry)
+                    dist = hypot(
+                        (buv.x - auv.x) * displayBounds.width,
+                        (buv.y - auv.y) * displayBounds.height
+                    )
+                }
                 if dist >= config.stillDisplacementPoints {
                     raw.append(Interval(start: a.t, end: b.t))
                 }
@@ -164,6 +211,60 @@ public enum AutoZoom: Sendable {
                 .filter { $0.end > $0.start },
             gap: config.mergeGap
         )
+    }
+
+    /// Apply the same target/visibility policy used by CursorSmoother. Keeping
+    /// this at the edge of auto-zoom prevents off-target desktop motion from
+    /// generating zoom ranges.
+    static func visibleSamples(
+        _ samples: [CursorSample],
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample]
+    ) -> [CursorSample] {
+        samples.filter {
+            CursorSmoother.isVisible(
+                $0,
+                at: $0.t,
+                geometry: targetGeometry,
+                fallback: displayBounds
+            )
+        }
+    }
+
+    static func visibleClicks(
+        _ clicks: [ClickSample],
+        samples: [CursorSample],
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample]
+    ) -> [ClickSample] {
+        guard !clicks.isEmpty else { return [] }
+        // A click is in-target when the nearest cursor sample at that time is
+        // visible. For sparse legacy telemetry, retain clicks when no sample
+        // exists rather than silently changing the old behavior.
+        let sorted = samples.sorted { $0.t < $1.t }
+        return clicks.filter { click in
+            guard let sample = nearestSample(at: click.t, samples: sorted) else {
+                return targetGeometry.isEmpty
+            }
+            return CursorSmoother.isVisible(
+                sample,
+                at: click.t,
+                geometry: targetGeometry,
+                fallback: displayBounds
+            )
+        }
+    }
+
+    private static func nearestSample(at time: TimeInterval, samples: [CursorSample]) -> CursorSample? {
+        guard !samples.isEmpty else { return nil }
+        var lo = 0
+        var hi = samples.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if samples[mid].t <= time { lo = mid + 1 } else { hi = mid }
+        }
+        guard lo > 0 else { return nil }
+        return samples[lo - 1]
     }
 
     /// Stretch short islands to `minHold` (extend end, then start), then merge overlaps.
@@ -238,27 +339,31 @@ public enum AutoZoom: Sendable {
         end: TimeInterval,
         samples: [CursorSample],
         clicks: [ClickSample],
-        displayBounds: Rect2D
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample] = []
     ) -> Point2D {
         if let click = clicks.first(where: { $0.t >= start && $0.t <= end }) {
-            return nearestUV(at: click.t, samples: samples, displayBounds: displayBounds)
+            return nearestUV(at: click.t, samples: samples, displayBounds: displayBounds, targetGeometry: targetGeometry)
                 ?? Point2D(x: 0.5, y: 0.5)
         }
-        return nearestUV(at: start, samples: samples, displayBounds: displayBounds)
+        return nearestUV(at: start, samples: samples, displayBounds: displayBounds, targetGeometry: targetGeometry)
             ?? Point2D(x: 0.5, y: 0.5)
     }
 
     static func nearestUV(
         at time: TimeInterval,
         samples: [CursorSample],
-        displayBounds: Rect2D
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample] = []
     ) -> Point2D? {
         guard !samples.isEmpty else { return nil }
         if time <= samples[0].t {
-            return CursorSmoother.uv(samples[0], displayBounds: displayBounds)
+            let bounds = geometry(at: samples[0].t, samples: targetGeometry, fallback: displayBounds)
+            return CursorSmoother.uv(samples[0], displayBounds: bounds)
         }
         if time >= samples[samples.count - 1].t {
-            return CursorSmoother.uv(samples[samples.count - 1], displayBounds: displayBounds)
+            let bounds = geometry(at: samples[samples.count - 1].t, samples: targetGeometry, fallback: displayBounds)
+            return CursorSmoother.uv(samples[samples.count - 1], displayBounds: bounds)
         }
 
         var lo = 0
@@ -278,6 +383,33 @@ public enum AutoZoom: Sendable {
         let t = (time - a.t) / span
         let x = a.x + (b.x - a.x) * t
         let y = a.y + (b.y - a.y) * t
-        return CursorSmoother.uv(x: x, y: y, displayBounds: displayBounds)
+        let bounds = geometry(at: time, samples: targetGeometry, fallback: displayBounds)
+        return CursorSmoother.uv(x: x, y: y, displayBounds: bounds)
+    }
+
+    private static func geometry(
+        at time: TimeInterval,
+        samples: [TargetGeometrySample],
+        fallback: Rect2D
+    ) -> Rect2D {
+        guard !samples.isEmpty else { return fallback }
+        var lo = 0
+        var hi = samples.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if samples[mid].t <= time { lo = mid + 1 } else { hi = mid }
+        }
+        guard lo > 0 else { return fallback }
+        let sample = samples[lo - 1]
+        return sample.available ? sample.bounds : fallback
+    }
+
+    private static func normalized(
+        _ sample: CursorSample,
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample]
+    ) -> Point2D {
+        let bounds = geometry(at: sample.t, samples: targetGeometry, fallback: displayBounds)
+        return CursorSmoother.uv(sample, displayBounds: bounds)
     }
 }

@@ -22,6 +22,20 @@ struct EditorView: View {
                 .frame(minWidth: 240, idealWidth: 268, maxWidth: 300)
         }
         .navigationTitle(session.title)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !session.persistentWarnings.isEmpty {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                    Text(session.persistentWarnings.joined(separator: " "))
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.yellow.opacity(0.12))
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button("Library") {

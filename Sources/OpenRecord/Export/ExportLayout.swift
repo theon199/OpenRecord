@@ -74,6 +74,31 @@ public enum ExportLayout: Sendable {
         return (start, end)
     }
 
+    /// Map a source audio track onto an exported video interval. The track's
+    /// offset is relative to the first display frame; a positive offset creates
+    /// leading silence and a negative offset trims early audio.
+    public static func audioPlacement(
+        trackOffset: TimeInterval,
+        trimStart: TimeInterval,
+        exportDuration: TimeInterval,
+        sourceDuration: TimeInterval
+    ) -> ExportAudioPlacement? {
+        guard trackOffset.isFinite, trimStart.isFinite, exportDuration > 0,
+              sourceDuration > 0
+        else { return nil }
+        let sourceStart = max(0, trimStart - trackOffset)
+        let sourceEnd = min(
+            sourceDuration,
+            max(0, trimStart + exportDuration - trackOffset)
+        )
+        guard sourceStart < sourceDuration, sourceEnd > sourceStart else { return nil }
+        return ExportAudioPlacement(
+            sourceStart: sourceStart,
+            duration: sourceEnd - sourceStart,
+            destinationStart: max(0, trackOffset - trimStart)
+        )
+    }
+
     /// UV crop (origin top-left) → source pixel rect (origin top-left).
     public static func pixelRect(
         fromUV uv: CGRect,
@@ -279,5 +304,21 @@ public struct ExportClickRipple: Equatable, Sendable {
     public init(radius: Double, opacity: Double) {
         self.radius = radius
         self.opacity = opacity
+    }
+}
+
+public struct ExportAudioPlacement: Equatable, Sendable {
+    public var sourceStart: TimeInterval
+    public var duration: TimeInterval
+    public var destinationStart: TimeInterval
+
+    public init(
+        sourceStart: TimeInterval,
+        duration: TimeInterval,
+        destinationStart: TimeInterval
+    ) {
+        self.sourceStart = sourceStart
+        self.duration = duration
+        self.destinationStart = destinationStart
     }
 }

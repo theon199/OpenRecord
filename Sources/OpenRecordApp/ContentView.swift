@@ -25,6 +25,44 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .alert(
+            "Recording Telemetry Is Damaged",
+            isPresented: Binding(
+                get: { model.degradedOpenMessage != nil },
+                set: { _ in }
+            )
+        ) {
+            Button("Open Anyway") {
+                model.openDegradedProjectAnyway()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelDegradedOpen()
+            }
+        } message: {
+            Text(model.degradedOpenMessage ?? "")
+        }
+        .alert(
+            "OpenRecord Couldn’t Save Your Changes",
+            isPresented: Binding(
+                get: { model.saveFailureMessage != nil },
+                set: { _ in }
+            )
+        ) {
+            Button("Retry") {
+                model.retryPendingSave()
+            }
+            Button("Save a Copy…") {
+                model.saveCopyAndContinue()
+            }
+            Button("Discard Changes", role: .destructive) {
+                model.discardChangesAndContinue()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelPendingEditorTransition()
+            }
+        } message: {
+            Text(model.saveFailureMessage ?? "")
+        }
         .onAppear {
             model.start()
         }

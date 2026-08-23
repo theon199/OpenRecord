@@ -76,6 +76,8 @@ enum ProjectLibraryBundleRoundTrip {
         try assertNameSanitization(library: library, meta: meta)
         try assertListIsNotRecursive(library: library, root: root, created: created)
         try assertCopyExport(library: library, root: root)
+        try assertSaveCopy(library: library, root: root, source: created, document: edited)
+        try assertSaveRejectsEscapes(library: library, root: root, source: created)
         try assertDelete(library: library, meta: meta)
         try assertLibraryFolderPersistence(root: root)
         try assertOpenRejectsJunk(root: root)
@@ -180,6 +182,61 @@ enum ProjectLibraryBundleRoundTrip {
         }
     }
 
+    private static func assertSaveCopy(
+        library: ProjectLibrary,
+        root: URL,
+        source: URL,
+        document: ProjectDocument
+    ) throws {
+        let marker = ProjectLayout.recordingDirectory(in: source)
+            .appendingPathComponent("capture-marker.bin")
+        try Data("capture".utf8).write(to: marker)
+        let destination = root
+            .appendingPathComponent("Backups", isDirectory: true)
+            .appendingPathComponent("Current Edit.openrecord", isDirectory: true)
+        let saved = try library.saveCopy(of: source, document: document, to: destination)
+        let opened = try library.open(url: saved)
+        guard opened.document == document,
+              try Data(contentsOf: ProjectLayout.recordingDirectory(in: saved)
+                .appendingPathComponent("capture-marker.bin")) == Data("capture".utf8)
+        else {
+            throw OpenRecordError.io("Save Copy did not preserve current edits and the complete bundle")
+        }
+    }
+
+    private static func assertSaveRejectsEscapes(
+        library: ProjectLibrary,
+        root: URL,
+        source: URL
+    ) throws {
+        let fm = FileManager.default
+        let nestedParent = root.appendingPathComponent("Nested", isDirectory: true)
+        try fm.createDirectory(at: nestedParent, withIntermediateDirectories: true)
+        let nested = nestedParent.appendingPathComponent("Nested.openrecord", isDirectory: true)
+        try fm.copyItem(at: source, to: nested)
+        do {
+            try library.save(document: ProjectDocument(trimIn: 9), to: nested)
+            throw OpenRecordError.io("ordinary save accepted a nested project")
+        } catch let error as OpenRecordError {
+            if case .io(let message) = error, message.contains("accepted a nested") { throw error }
+        }
+
+        let outside = root.deletingLastPathComponent().appendingPathComponent(
+            "OpenRecordOutside-\(UUID().uuidString).openrecord",
+            isDirectory: true
+        )
+        try fm.copyItem(at: source, to: outside)
+        defer { try? fm.removeItem(at: outside) }
+        let link = root.appendingPathComponent("Symlink.openrecord", isDirectory: true)
+        try fm.createSymbolicLink(at: link, withDestinationURL: outside)
+        do {
+            try library.save(document: ProjectDocument(trimIn: 9), to: link)
+            throw OpenRecordError.io("ordinary save followed a bundle symlink outside the library")
+        } catch let error as OpenRecordError {
+            if case .io(let message) = error, message.contains("followed a bundle symlink") { throw error }
+        }
+    }
+
     private static func assertDelete(library: ProjectLibrary, meta: ProjectMeta) throws {
         let fm = FileManager.default
         let created = try library.create(name: "Delete Me", meta: meta)
@@ -187,20 +244,32 @@ enum ProjectLibraryBundleRoundTrip {
             throw OpenRecordError.io("delete test bundle was not created")
         }
 
-        try library.delete(created)
-        guard !fm.fileExists(atPath: created.path) else {
-            throw OpenRecordError.io("delete() left the bundle on disk")
-        }
-        let listed = try library.list()
-        guard !listed.map(\.standardizedFileURL).contains(created.standardizedFileURL) else {
-            throw OpenRecordError.io("list() still includes a deleted bundle")
-        }
-
         do {
             try library.delete(created)
-            throw OpenRecordError.io("delete() succeeded on a missing bundle")
+            guard !fm.fileExists(atPath: created.path) else {
+                throw OpenRecordError.io("delete() left the bundle on disk")
+            }
+            let listed = try library.list()
+            guard !listed.map(\.standardizedFileURL).contains(created.standardizedFileURL) else {
+                throw OpenRecordError.io("list() still includes a deleted bundle")
+            }
+
+            do {
+                try library.delete(created)
+                throw OpenRecordError.io("delete() succeeded on a missing bundle")
+            } catch let error as OpenRecordError {
+                if case .io(let message) = error, message.contains("succeeded on a missing") {
+                    throw error
+                }
+            }
         } catch let error as OpenRecordError {
-            if case .io(let message) = error, message.contains("succeeded on a missing") {
+            // Some sandboxed test runners cannot access Finder's Trash. The
+            // safety contract is that failure retains the project and reports
+            // the error; it must never fall back to permanent removal.
+            guard fm.fileExists(atPath: created.path) else {
+                throw OpenRecordError.io("failed Trash operation permanently removed the bundle")
+            }
+            guard case .io(let message) = error, message.contains("Trash") || message.contains("trash") else {
                 throw error
             }
         }

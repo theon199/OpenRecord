@@ -31,6 +31,7 @@ public struct ZoomEngine: Sendable {
     public var document: ProjectDocument
     public let smoother: CursorSmoother
     public let displayBounds: Rect2D
+    public let targetGeometry: [TargetGeometrySample]
     public let viewportSpring: SpringConfig
 
     private let bake: BakeCache
@@ -45,15 +46,18 @@ public struct ZoomEngine: Sendable {
         samples: [CursorSample],
         clicks: [ClickSample] = [],
         displayBounds: Rect2D = .unit,
+        targetGeometry: [TargetGeometrySample] = [],
         viewportSpring: SpringConfig = .viewportSmooth
     ) {
         self.document = document
         self.displayBounds = displayBounds
+        self.targetGeometry = targetGeometry
         self.viewportSpring = viewportSpring
         self.smoother = CursorSmoother(
             samples: samples,
             clicks: clicks,
-            displayBounds: displayBounds
+            displayBounds: displayBounds,
+            targetGeometry: targetGeometry
         )
         self.telemetryHorizon = max(samples.map(\.t).max() ?? 0, clicks.map(\.t).max() ?? 0)
         self.bake = BakeCache()
@@ -100,13 +104,13 @@ public struct ZoomEngine: Sendable {
     /// Spring-smoothed cursor in source UV. `nil` when the engine was built without mouse samples
     /// (export should omit the overlay).
     public func interpolateCursor(at time: TimeInterval) -> Point2D? {
-        guard !smoother.isEmpty else { return nil }
-        return smoother.interpolate(at: time)
+        smoother.interpolateIfVisible(at: time)
     }
 
     /// Primary-button down at `time`, from click telemetry captured with the engine.
     public func isClicking(at time: TimeInterval) -> Bool {
-        smoother.isClicking(at: time)
+        guard smoother.isVisible(at: time) else { return false }
+        return smoother.isClicking(at: time)
     }
 
     /// Detect idle stretches (cursor still ≥ ~1.6s; clicks count as activity).
@@ -114,13 +118,17 @@ public struct ZoomEngine: Sendable {
         samples: [CursorSample],
         clicks: [ClickSample] = [],
         duration: TimeInterval? = nil,
-        config: AutoZoomConfig = .default
+        config: AutoZoomConfig = .default,
+        displayBounds: Rect2D = .unit,
+        targetGeometry: [TargetGeometrySample] = []
     ) -> [SilenceZone] {
         AutoZoom.detectSilenceZones(
             samples: samples,
             clicks: clicks,
             duration: duration,
-            config: config
+            config: config,
+            displayBounds: displayBounds,
+            targetGeometry: targetGeometry
         )
     }
 
@@ -130,14 +138,16 @@ public struct ZoomEngine: Sendable {
         clicks: [ClickSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
-        config: AutoZoomConfig = .default
+        config: AutoZoomConfig = .default,
+        targetGeometry: [TargetGeometrySample] = []
     ) -> [ZoomRange] {
         AutoZoom.generateRanges(
             samples: samples,
             clicks: clicks,
             duration: duration,
             displayBounds: displayBounds,
-            config: config
+            config: config,
+            targetGeometry: targetGeometry
         )
     }
 
@@ -232,8 +242,7 @@ private struct ZoomEvaluator {
             center = (cursor.segment ?? cursor.prevSegment)?.anchor
         }
         let zoom = interpolatedZoom(cursor: cursor, cursorCenter: center, ranges: sorted)
-        if !smoother.isEmpty {
-            let live = smoother.interpolate(at: time)
+        if let live = smoother.interpolateIfVisible(at: time) {
             return boundsToCrop(ensureCursorVisible(zoom, cursorX: live.x, cursorY: live.y).bounds)
         }
         return boundsToCrop(zoom.bounds)
@@ -326,7 +335,7 @@ private struct ZoomEvaluator {
                 for i in 1...Self.recenterLookaheadSamples {
                     let futureT =
                         time + (Self.recenterLookahead * Double(i) / Double(Self.recenterLookaheadSamples))
-                    let fc = smoother.interpolate(at: futureT)
+                    guard let fc = smoother.interpolateIfVisible(at: futureT) else { continue }
                     let futureInSafe =
                         fc.x >= vpLeft + triggerMargin
                         && fc.x <= vpLeft + vpSize - triggerMargin
@@ -343,9 +352,9 @@ private struct ZoomEvaluator {
                     var sumV = liveCursor.y
                     let n = Self.recenterLookaheadSamples
                     for i in 1...n {
-                        let fc = smoother.interpolate(
+                        guard let fc = smoother.interpolateIfVisible(
                             at: time + (Self.recenterAvgWindow * Double(i) / Double(n))
-                        )
+                        ) else { continue }
                         sumU += fc.x
                         sumV += fc.y
                     }

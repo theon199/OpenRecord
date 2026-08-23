@@ -14,6 +14,7 @@ import Foundation
 ///   system.m4a
 ///   mouse.jsonl
 ///   clicks.jsonl
+///   target.jsonl
 ///   cursors/
 /// ```
 ///
@@ -210,36 +211,23 @@ public struct ProjectLibrary: Sendable {
         }
     }
 
-    /// Move a top-level `.openrecord` bundle to the Trash (falls back to deleting it).
+    /// Move a top-level `.openrecord` bundle to the Trash.
+    ///
+    /// We deliberately do not fall back to `removeItem`: if Finder cannot
+    /// honor the recoverable delete, retaining the project is safer than
+    /// silently turning a user mistake or transient filesystem failure into
+    /// permanent data loss.
     public func delete(_ url: URL) throws {
         let url = url.standardizedFileURL
         try withAccess(to: url) {
             let fm = FileManager.default
-            var isDirectory: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else {
-                throw OpenRecordError.io("Project does not exist: \(url.path)")
-            }
-            guard url.pathExtension == ProjectLayout.bundleExtension else {
-                throw OpenRecordError.io(
-                    "Expected a .\(ProjectLayout.bundleExtension) bundle: \(url.path)"
-                )
-            }
-            let parent = url.deletingLastPathComponent().standardizedFileURL
-            guard parent == rootURL.standardizedFileURL else {
-                throw OpenRecordError.io("Project is not in this library: \(url.path)")
-            }
+            try validateProjectBundleURL(url, fileManager: fm)
             do {
                 try fm.trashItem(at: url, resultingItemURL: nil)
             } catch {
-                do {
-                    try fm.removeItem(at: url)
-                } catch {
-                    throw OpenRecordError.io(
-                        "Could not delete \(url.lastPathComponent): \(error.localizedDescription)"
-                    )
-                }
+                throw OpenRecordError.io(
+                    "Could not move \(url.lastPathComponent) to the Trash: \(error.localizedDescription)"
+                )
             }
         }
     }
@@ -308,26 +296,80 @@ public struct ProjectLibrary: Sendable {
     public func save(document: ProjectDocument, to projectURL: URL) throws {
         let projectURL = projectURL.standardizedFileURL
         try withAccess(to: projectURL) {
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: projectURL.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else {
-                throw OpenRecordError.io("Project does not exist: \(projectURL.path)")
-            }
+            try validateProjectBundleURL(projectURL, fileManager: .default)
             try AtomicFileWrite.writeJSON(document, to: ProjectLayout.documentURL(in: projectURL))
         }
+    }
+
+    /// Save a complete project bundle to another location.
+    ///
+    /// If `destinationURL` is an existing directory, the source bundle's
+    /// filename is appended. The copy is staged beside the destination and
+    /// installed with a single replace/move operation so an interrupted copy
+    /// cannot leave a partially-written `.openrecord` bundle behind.
+    @discardableResult
+    public func saveCopy(
+        of projectURL: URL,
+        document: ProjectDocument,
+        to destinationURL: URL
+    ) throws -> URL {
+        let source = projectURL.standardizedFileURL
+        var destination = destinationURL.standardizedFileURL
+        try withAccess(to: source) {
+            let fm = FileManager.default
+            try validateProjectBundleURL(source, fileManager: fm)
+
+            var destinationIsDirectory: ObjCBool = false
+            if fm.fileExists(atPath: destination.path, isDirectory: &destinationIsDirectory),
+               destinationIsDirectory.boolValue
+            {
+                destination = destination.appendingPathComponent(source.lastPathComponent, isDirectory: true)
+            }
+            guard destination.pathExtension == ProjectLayout.bundleExtension else {
+                throw OpenRecordError.io(
+                    "Save Copy destination must be a .\(ProjectLayout.bundleExtension) bundle: \(destination.path)"
+                )
+            }
+            guard source.standardizedFileURL != destination.standardizedFileURL else {
+                throw OpenRecordError.io("Save Copy destination must differ from the source project")
+            }
+
+            let parent = destination.deletingLastPathComponent()
+            do {
+                try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+            } catch {
+                throw OpenRecordError.io(
+                    "Could not create Save Copy folder \(parent.path): \(error.localizedDescription)"
+                )
+            }
+
+            let staging = parent.appendingPathComponent(
+                ".\(destination.lastPathComponent).copy-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            do {
+                try fm.copyItem(at: source, to: staging)
+                try AtomicFileWrite.writeJSON(document, to: ProjectLayout.documentURL(in: staging))
+                if fm.fileExists(atPath: destination.path) {
+                    _ = try fm.replaceItemAt(destination, withItemAt: staging, backupItemName: nil, options: [])
+                } else {
+                    try fm.moveItem(at: staging, to: destination)
+                }
+            } catch {
+                try? fm.removeItem(at: staging)
+                throw OpenRecordError.io(
+                    "Could not save project copy to \(destination.path): \(error.localizedDescription)"
+                )
+            }
+        }
+        return destination
     }
 
     /// Atomically replace `meta.json` (capture agents may refresh bounds after record).
     public func save(meta: ProjectMeta, to projectURL: URL) throws {
         let projectURL = projectURL.standardizedFileURL
         try withAccess(to: projectURL) {
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: projectURL.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue
-            else {
-                throw OpenRecordError.io("Project does not exist: \(projectURL.path)")
-            }
+            try validateProjectBundleURL(projectURL, fileManager: .default)
             try AtomicFileWrite.writeJSON(meta, to: ProjectLayout.metaURL(in: projectURL))
         }
     }
@@ -346,6 +388,29 @@ public struct ProjectLibrary: Sendable {
 // MARK: - Private
 
 extension ProjectLibrary {
+    /// Validate that an operation targets an existing, top-level project in
+    /// this library. This prevents a malformed URL from saving into a nested
+    /// bundle or an arbitrary directory outside the active library.
+    fileprivate func validateProjectBundleURL(_ url: URL, fileManager: FileManager) throws {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            throw OpenRecordError.io("Project does not exist: \(url.path)")
+        }
+        guard url.pathExtension == ProjectLayout.bundleExtension else {
+            throw OpenRecordError.io(
+                "Expected a .\(ProjectLayout.bundleExtension) bundle: \(url.path)"
+            )
+        }
+        let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
+        let parent = resolvedURL.deletingLastPathComponent()
+        let resolvedRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
+        guard parent == resolvedRoot else {
+            throw OpenRecordError.io("Project is not in this library: \(url.path)")
+        }
+    }
+
     fileprivate func withAccess<T>(to url: URL, _ body: () throws -> T) throws -> T {
         let rootAccessed = rootURL.startAccessingSecurityScopedResource()
         let urlAccessed = url.startAccessingSecurityScopedResource()

@@ -70,7 +70,11 @@ struct OpenRecordApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var terminationHandler: (() async -> Bool)?
+    private var terminationInProgress = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         DispatchQueue.main.async {
@@ -82,6 +86,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         Self.orderFrontMainWindows()
         return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let handler = Self.terminationHandler else { return .terminateNow }
+        guard !terminationInProgress else { return .terminateLater }
+        terminationInProgress = true
+        Task { @MainActor [weak self] in
+            let shouldTerminate = await handler()
+            self?.terminationInProgress = false
+            sender.reply(toApplicationShouldTerminate: shouldTerminate)
+        }
+        return .terminateLater
     }
 
     @MainActor

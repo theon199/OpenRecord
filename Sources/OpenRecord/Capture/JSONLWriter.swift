@@ -33,8 +33,16 @@ final class JSONLWriter<Sample: Encodable>: @unchecked Sendable {
 
     func close() {
         lock.lock()
-        defer { lock.unlock() }
-        try? handle.synchronize()
-        try? handle.close()
+        do {
+            try handle.synchronize()
+        } catch {
+            if writeError == nil { writeError = error }
+        }
+        do {
+            try handle.close()
+        } catch {
+            if writeError == nil { writeError = error }
+        }
+        lock.unlock()
     }
 }

@@ -80,12 +80,15 @@ Each recording is a folder package:
     display.mp4             # H.264, cursor hidden in the pixels
     mic.m4a                 # microphone (may be absent)
     system.m4a              # system audio (may be absent)
-    mouse.jsonl             # { t, x, y, cursorId } in points, ~90–120 Hz
+    mouse.jsonl             # { t, x, y, cursorId, visible? } in points, ~90–120 Hz
     clicks.jsonl            # { t, button, down }
+    target.jsonl            # optional timestamped target bounds for moving/resizing windows
     cursors/                # sprite PNGs + hotspot in project.json
 ```
 
-Coordinates are **points** (Quartz, origin top-left of the main display). Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
+Coordinates are **points** (Quartz, origin top-left of the main display). Cursor samples may include `visible: false` while the pointer is outside the captured target. New window recordings use `target.jsonl` to map global cursor points through the window bounds at each timestamp; older projects fall back to `meta.json` bounds. Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
+
+`meta.json` may also contain capture timing offsets and health warnings. Video is the timing origin; microphone and system-audio offsets keep separately recorded tracks synchronized. If capture stops unexpectedly but the display video is usable, OpenRecord finalizes and opens the recovered project with a warning instead of discarding it.
 
 ## Out of scope
 

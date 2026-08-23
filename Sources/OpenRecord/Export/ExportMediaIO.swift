@@ -225,8 +225,31 @@ final class ExportVideoReader {
 }
 
 enum ExportAudioMux {
+    struct Source: Sendable {
+        var url: URL
+        /// Position of the first source sample relative to the first video frame.
+        var offset: TimeInterval
+
+        init(url: URL, offset: TimeInterval = 0) {
+            self.url = url
+            self.offset = offset.isFinite ? offset : 0
+        }
+    }
+
     static func makeComposition(
         sources: [URL],
+        start: TimeInterval,
+        duration: TimeInterval
+    ) async throws -> AVMutableComposition? {
+        try await makeComposition(
+            sources: sources.map { Source(url: $0) },
+            start: start,
+            duration: duration
+        )
+    }
+
+    static func makeComposition(
+        sources: [Source],
         start: TimeInterval,
         duration: TimeInterval
     ) async throws -> AVMutableComposition? {
@@ -234,21 +257,36 @@ enum ExportAudioMux {
 
         let composition = AVMutableComposition()
         var inserted = false
-        for url in sources {
+        for source in sources {
+            try Task.checkCancellation()
+            let url = source.url
             let asset = AVURLAsset(url: url)
             let tracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
             guard let sourceTrack = tracks.first else { continue }
-            let assetDuration = (try? await asset.load(.duration)) ?? .zero
-            guard assetDuration.isNumeric else { continue }
+            let trackRange = (try? await sourceTrack.load(.timeRange)) ?? .zero
+            guard trackRange.start.isNumeric, trackRange.duration.isNumeric else { continue }
 
-            let timescale = max(assetDuration.timescale, 48_000)
-            let trimStart = CMTime(seconds: start, preferredTimescale: timescale)
-            if trimStart >= assetDuration { continue }
-
-            let remaining = CMTimeSubtract(assetDuration, trimStart)
-            let wanted = CMTime(seconds: duration, preferredTimescale: timescale)
-            let insertDuration = CMTimeMinimum(remaining, wanted)
+            let timescale = max(trackRange.duration.timescale, 48_000)
+            guard let placement = ExportLayout.audioPlacement(
+                trackOffset: source.offset,
+                trimStart: start,
+                exportDuration: duration,
+                sourceDuration: trackRange.duration.seconds
+            ) else { continue }
+            let relativeSourceStart = CMTime(
+                seconds: placement.sourceStart,
+                preferredTimescale: timescale
+            )
+            let sourceStart = CMTimeAdd(trackRange.start, relativeSourceStart)
+            let insertDuration = CMTime(
+                seconds: placement.duration,
+                preferredTimescale: timescale
+            )
             guard insertDuration.seconds > 0.01 else { continue }
+            let destination = CMTime(
+                seconds: placement.destinationStart,
+                preferredTimescale: timescale
+            )
 
             guard let dest = composition.addMutableTrack(
                 withMediaType: .audio,
@@ -258,9 +296,9 @@ enum ExportAudioMux {
             }
             do {
                 try dest.insertTimeRange(
-                    CMTimeRange(start: trimStart, duration: insertDuration),
+                    CMTimeRange(start: sourceStart, duration: insertDuration),
                     of: sourceTrack,
-                    at: .zero
+                    at: destination
                 )
                 inserted = true
             } catch {
@@ -304,6 +342,7 @@ enum ExportAudioMux {
             throw OpenRecordError.io("Could not decode mixed audio for export.")
         }
         reader.add(mixOutput)
+        try Task.checkCancellation()
         guard reader.startReading() else {
             throw OpenRecordError.io(
                 "Could not start reading mixed audio: \(reader.error?.localizedDescription ?? "unknown error")"
@@ -311,6 +350,7 @@ enum ExportAudioMux {
         }
 
         while let sample = mixOutput.copyNextSampleBuffer() {
+            try Task.checkCancellation()
             try waitUntilReady(input, writer: writer)
             guard input.append(sample) else {
                 throw OpenRecordError.io(
@@ -323,6 +363,7 @@ enum ExportAudioMux {
                 "Audio mix failed: \(reader.error?.localizedDescription ?? "unknown error")"
             )
         }
+        try Task.checkCancellation()
     }
 
     static func waitUntilReady(_ input: AVAssetWriterInput, writer: AVAssetWriter) throws {
