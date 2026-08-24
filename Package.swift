@@ -5,7 +5,10 @@ import PackageDescription
 let developerDir = Context.environment["DEVELOPER_DIR"] ?? "/Library/Developer/CommandLineTools"
 let testingFrameworksPath = "\(developerDir)/Library/Developer/Frameworks"
 let testingInteropLibPath = "\(developerDir)/Library/Developer/usr/lib"
-let testingMacrosPath = "\(developerDir)/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
+let swiftToolchainRoot = developerDir.hasSuffix("/Contents/Developer")
+    ? "\(developerDir)/Toolchains/XcodeDefault.xctoolchain"
+    : developerDir
+let testingMacrosPath = "\(swiftToolchainRoot)/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
 
 let appleFrameworks: [LinkerSetting] = [
     .linkedFramework("SwiftUI"),
