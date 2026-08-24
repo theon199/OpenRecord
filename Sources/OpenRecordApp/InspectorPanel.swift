@@ -46,7 +46,32 @@ struct InspectorPanel: View {
             }
 
             Section("Canvas") {
-                ColorPicker("Background", selection: backgroundColor, supportsOpacity: false)
+                Picker("Aspect ratio", selection: aspectPreset) {
+                    ForEach(CanvasAspectPreset.allCases, id: \.self) { preset in
+                        Text(preset.rawValue).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Picker("Background", selection: backgroundMode) {
+                    ForEach(CanvasBackgroundMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                switch session.document.canvas.background {
+                case .solid:
+                    ColorPicker("Color", selection: solidColor, supportsOpacity: false)
+                case .linearGradient:
+                    ColorPicker("Start color", selection: gradientStartColor, supportsOpacity: false)
+                    ColorPicker("End color", selection: gradientEndColor, supportsOpacity: false)
+                    Picker("Direction", selection: gradientDirection) {
+                        ForEach(CanvasGradientDirection.allCases) { direction in
+                            Text(direction.rawValue).tag(direction)
+                        }
+                    }
+                }
                 labeledSlider(
                     "Padding",
                     value: padding,
@@ -125,7 +150,52 @@ struct InspectorPanel: View {
         )
     }
 
-    private var backgroundColor: Binding<Color> {
+    private var aspectPreset: Binding<CanvasAspectPreset> {
+        Binding(
+            get: {
+                CanvasAspectPreset.matching(
+                    aspectWidth: session.document.canvas.aspectWidth,
+                    aspectHeight: session.document.canvas.aspectHeight
+                ) ?? .widescreen
+            },
+            set: { preset in
+                session.updateCanvas(actionName: "Change Aspect Ratio") {
+                    preset.apply(to: &$0)
+                }
+            }
+        )
+    }
+
+    private var backgroundMode: Binding<CanvasBackgroundMode> {
+        Binding(
+            get: {
+                switch session.document.canvas.background {
+                case .solid: .solid
+                case .linearGradient: .gradient
+                }
+            },
+            set: { mode in
+                session.updateCanvas(actionName: "Change Background Style") { canvas in
+                    switch (mode, canvas.background) {
+                    case (.solid, .solid), (.gradient, .linearGradient):
+                        return
+                    case (.solid, .linearGradient(let start, _, _, _)):
+                        canvas.background = .solid(start)
+                    case (.gradient, .solid(let color)):
+                        let direction = CanvasGradientDirection.diagonalDown
+                        canvas.background = .linearGradient(
+                            start: color,
+                            end: gradientCompanionColor(color),
+                            startPoint: direction.startPoint,
+                            endPoint: direction.endPoint
+                        )
+                    }
+                }
+            }
+        )
+    }
+
+    private var solidColor: Binding<Color> {
         Binding(
             get: {
                 switch session.document.canvas.background {
@@ -138,6 +208,78 @@ struct InspectorPanel: View {
             set: { color in
                 session.updateCanvas(actionName: "Change Background") {
                     $0.background = .solid(RGBAColor(color))
+                }
+            }
+        )
+    }
+
+    private var gradientStartColor: Binding<Color> {
+        Binding(
+            get: {
+                switch session.document.canvas.background {
+                case .solid(let color): return color.swiftUIColor
+                case .linearGradient(let start, _, _, _): return start.swiftUIColor
+                }
+            },
+            set: { color in
+                session.updateCanvas(actionName: "Change Gradient Start") { canvas in
+                    guard case .linearGradient(_, let end, let startPoint, let endPoint) = canvas.background
+                    else { return }
+                    canvas.background = .linearGradient(
+                        start: RGBAColor(color),
+                        end: end,
+                        startPoint: startPoint,
+                        endPoint: endPoint
+                    )
+                }
+            }
+        )
+    }
+
+    private var gradientEndColor: Binding<Color> {
+        Binding(
+            get: {
+                switch session.document.canvas.background {
+                case .solid(let color): return gradientCompanionColor(color).swiftUIColor
+                case .linearGradient(_, let end, _, _): return end.swiftUIColor
+                }
+            },
+            set: { color in
+                session.updateCanvas(actionName: "Change Gradient End") { canvas in
+                    guard case .linearGradient(let start, _, let startPoint, let endPoint) = canvas.background
+                    else { return }
+                    canvas.background = .linearGradient(
+                        start: start,
+                        end: RGBAColor(color),
+                        startPoint: startPoint,
+                        endPoint: endPoint
+                    )
+                }
+            }
+        )
+    }
+
+    private var gradientDirection: Binding<CanvasGradientDirection> {
+        Binding(
+            get: {
+                guard case .linearGradient(_, _, let startPoint, let endPoint) =
+                    session.document.canvas.background
+                else { return .diagonalDown }
+                return CanvasGradientDirection.matching(
+                    startPoint: startPoint,
+                    endPoint: endPoint
+                ) ?? .diagonalDown
+            },
+            set: { direction in
+                session.updateCanvas(actionName: "Change Gradient Direction") { canvas in
+                    guard case .linearGradient(let start, let end, _, _) = canvas.background
+                    else { return }
+                    canvas.background = .linearGradient(
+                        start: start,
+                        end: end,
+                        startPoint: direction.startPoint,
+                        endPoint: direction.endPoint
+                    )
                 }
             }
         )
@@ -218,6 +360,54 @@ struct InspectorPanel: View {
             session.beginDocumentEdit(actionName: actionName)
         } else {
             session.endDocumentEdit()
+        }
+    }
+
+    private func gradientCompanionColor(_ color: RGBAColor) -> RGBAColor {
+        RGBAColor(
+            r: min(color.r + 0.18, 1),
+            g: min(color.g + 0.08, 1),
+            b: min(color.b + 0.28, 1),
+            a: color.a
+        )
+    }
+}
+
+private enum CanvasBackgroundMode: String, CaseIterable, Identifiable {
+    case solid = "Solid"
+    case gradient = "Gradient"
+
+    var id: Self { self }
+}
+
+private enum CanvasGradientDirection: String, CaseIterable, Identifiable {
+    case diagonalDown = "Diagonal ↘"
+    case horizontal = "Horizontal →"
+    case vertical = "Vertical ↓"
+    case diagonalUp = "Diagonal ↗"
+
+    var id: Self { self }
+
+    var startPoint: Point2D {
+        switch self {
+        case .diagonalDown, .horizontal: Point2D(x: 0, y: 0)
+        case .vertical: Point2D(x: 0.5, y: 0)
+        case .diagonalUp: Point2D(x: 0, y: 1)
+        }
+    }
+
+    var endPoint: Point2D {
+        switch self {
+        case .diagonalDown: Point2D(x: 1, y: 1)
+        case .horizontal: Point2D(x: 1, y: 0)
+        case .vertical: Point2D(x: 0.5, y: 1)
+        case .diagonalUp: Point2D(x: 1, y: 0)
+        }
+    }
+
+    static func matching(startPoint: Point2D, endPoint: Point2D) -> Self? {
+        allCases.first {
+            $0.startPoint == startPoint && $0.endPoint == endPoint
         }
     }
 }

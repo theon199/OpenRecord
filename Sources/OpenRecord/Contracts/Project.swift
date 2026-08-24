@@ -21,6 +21,47 @@ public enum CanvasBackground: Codable, Sendable, Hashable {
     case linearGradient(start: RGBAColor, end: RGBAColor, startPoint: Point2D, endPoint: Point2D)
 }
 
+public enum CanvasAspectPreset: String, CaseIterable, Sendable, Hashable {
+    case widescreen = "16:9"
+    case portrait = "9:16"
+    case square = "1:1"
+    case standard = "4:3"
+
+    public var width: Double {
+        switch self {
+        case .widescreen: 16
+        case .portrait: 9
+        case .square: 1
+        case .standard: 4
+        }
+    }
+
+    public var height: Double {
+        switch self {
+        case .widescreen: 9
+        case .portrait: 16
+        case .square: 1
+        case .standard: 3
+        }
+    }
+
+    public func apply(to canvas: inout CanvasSettings) {
+        canvas.aspectWidth = width
+        canvas.aspectHeight = height
+    }
+
+    public static func matching(
+        aspectWidth: Double,
+        aspectHeight: Double,
+        tolerance: Double = 0.000_001
+    ) -> CanvasAspectPreset? {
+        let ratio = aspectWidth / max(aspectHeight, 1e-12)
+        return allCases.first {
+            abs(ratio - ($0.width / $0.height)) <= tolerance
+        }
+    }
+}
+
 public struct CanvasSettings: Codable, Sendable, Hashable {
     public static let cursorScaleRange = 0.1...3.0
 

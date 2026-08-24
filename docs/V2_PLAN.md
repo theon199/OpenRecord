@@ -58,12 +58,11 @@ v2.2 — Captions, annotations, export expansion
 **v2.0 is in progress.** The repository now includes CI, document-level undo/redo
 for trim, zoom, and canvas edits, auto-zoom regeneration, export cancellation,
 library deletion, and direct zoom-anchor dragging in the preview. Gradient
-backgrounds and multiple aspect ratios already render through the
-model/compositor, but their editor controls are not built.
+backgrounds and 16:9, 9:16, 1:1, and 4:3 aspect presets are now exposed in the
+editor and render through the shared model/compositor path.
 
-Next: aspect and gradient controls, style presets, library rename/thumbnails,
-then keyboard capture/overlay and the format-version-2 migration. v2.1 and v2.2
-have not started.
+Next: style presets, library rename/thumbnails, then keyboard capture/overlay
+and the format-version-2 migration. v2.1 and v2.2 have not started.
 
 ---
 

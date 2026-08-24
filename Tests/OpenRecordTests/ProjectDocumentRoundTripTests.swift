@@ -30,7 +30,12 @@ enum ProjectDocumentJSONRoundTrip {
             trimOut: 12,
             zoomRanges: [zoom],
             canvas: CanvasSettings(
-                background: .solid(RGBAColor(r: 0.25, g: 0.5, b: 0.75, a: 1)),
+                background: .linearGradient(
+                    start: RGBAColor(r: 0.25, g: 0.5, b: 0.75, a: 1),
+                    end: RGBAColor(r: 0.75, g: 0.25, b: 0.5, a: 1),
+                    startPoint: Point2D(x: 0, y: 0),
+                    endPoint: Point2D(x: 1, y: 1)
+                ),
                 padding: 40,
                 cornerRadius: 12,
                 cursorScale: 1.5,

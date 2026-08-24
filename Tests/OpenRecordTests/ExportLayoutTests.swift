@@ -7,6 +7,7 @@ import OpenRecord
 enum ExportLayoutSuite {
     static func run() throws {
         try outputSizePreservesAspectInside1080p()
+        try aspectPresetsMapToExpectedOutputSizes()
         try evenDimensions()
         try frameRateSelection()
         try uvCropToPixelAndCIRects()
@@ -36,6 +37,31 @@ enum ExportLayoutSuite {
         let fourThree = ExportLayout.outputPixelSize(aspectWidth: 4, aspectHeight: 3)
         try expectEqual(fourThree.width, 1440, "4:3 width")
         try expectEqual(fourThree.height, 1080, "4:3 height")
+    }
+
+    static func aspectPresetsMapToExpectedOutputSizes() throws {
+        let expected: [(CanvasAspectPreset, Int, Int)] = [
+            (.widescreen, 1920, 1080),
+            (.portrait, 1080, 1920),
+            (.square, 1080, 1080),
+            (.standard, 1440, 1080),
+        ]
+        for (preset, width, height) in expected {
+            var canvas = CanvasSettings.default
+            preset.apply(to: &canvas)
+            let output = ExportLayout.outputPixelSize(
+                aspectWidth: canvas.aspectWidth,
+                aspectHeight: canvas.aspectHeight
+            )
+            try expectEqual(output.width, width, "\(preset.rawValue) preset width")
+            try expectEqual(output.height, height, "\(preset.rawValue) preset height")
+            guard CanvasAspectPreset.matching(
+                aspectWidth: canvas.aspectWidth,
+                aspectHeight: canvas.aspectHeight
+            ) == preset else {
+                throw OpenRecordError.io("Could not match the \(preset.rawValue) aspect preset")
+            }
+        }
     }
 
     static func evenDimensions() throws {
@@ -305,6 +331,11 @@ enum ExportLayoutSuite {
 @Test
 func exportOutputSizePreservesAspectInside1080p() throws {
     try ExportLayoutSuite.outputSizePreservesAspectInside1080p()
+}
+
+@Test
+func exportAspectPresetsMapToExpectedOutputSizes() throws {
+    try ExportLayoutSuite.aspectPresetsMapToExpectedOutputSizes()
 }
 
 @Test
