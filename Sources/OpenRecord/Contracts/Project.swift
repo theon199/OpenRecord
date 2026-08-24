@@ -272,6 +272,18 @@ public enum KeyboardOverlayPosition: String, Codable, CaseIterable, Sendable, Ha
     case bottomLeft = "bottom-left"
 }
 
+public enum AutoZoomSensitivity: String, Codable, CaseIterable, Sendable, Hashable {
+    case subtle
+    case normal
+    case aggressive
+}
+
+public enum ZoomEasingPreset: String, Codable, CaseIterable, Sendable, Hashable {
+    case fast
+    case smooth
+    case cinematic
+}
+
 public struct KeyboardOverlaySettings: Codable, Sendable, Hashable {
     public var enabled: Bool
     public var style: KeyboardOverlayStyle
@@ -353,6 +365,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var cursorSprites: [CursorSprite]
     public var keyboardOverlay: KeyboardOverlaySettings
     public var stylePresetID: String?
+    public var autoZoomSensitivity: AutoZoomSensitivity
+    public var zoomEasing: ZoomEasingPreset
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -362,7 +376,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         canvas: CanvasSettings = .default,
         cursorSprites: [CursorSprite] = [],
         keyboardOverlay: KeyboardOverlaySettings = .disabled,
-        stylePresetID: String? = nil
+        stylePresetID: String? = nil,
+        autoZoomSensitivity: AutoZoomSensitivity = .normal,
+        zoomEasing: ZoomEasingPreset = .smooth
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -372,6 +388,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.cursorSprites = cursorSprites
         self.keyboardOverlay = keyboardOverlay
         self.stylePresetID = stylePresetID ?? CanvasPreset.matching(canvas)?.id
+        self.autoZoomSensitivity = autoZoomSensitivity
+        self.zoomEasing = zoomEasing
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -383,6 +401,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case cursorSprites
         case keyboardOverlay
         case stylePresetID
+        case autoZoomSensitivity
+        case zoomEasing
     }
 
     public init(from decoder: Decoder) throws {
@@ -398,6 +418,12 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             forKey: .keyboardOverlay
         ) ?? .disabled
         stylePresetID = try container.decodeIfPresent(String.self, forKey: .stylePresetID)
+        autoZoomSensitivity = (try? container.decode(
+            AutoZoomSensitivity.self,
+            forKey: .autoZoomSensitivity
+        )) ?? .normal
+        zoomEasing = (try? container.decode(ZoomEasingPreset.self, forKey: .zoomEasing))
+            ?? .smooth
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -410,6 +436,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encode(cursorSprites, forKey: .cursorSprites)
         try container.encode(keyboardOverlay, forKey: .keyboardOverlay)
         try container.encodeIfPresent(stylePresetID, forKey: .stylePresetID)
+        try container.encode(autoZoomSensitivity, forKey: .autoZoomSensitivity)
+        try container.encode(zoomEasing, forKey: .zoomEasing)
     }
 
     /// Opening a legacy project is read-only. Write paths call this helper so

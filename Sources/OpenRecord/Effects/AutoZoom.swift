@@ -55,6 +55,39 @@ public struct AutoZoomConfig: Sendable, Hashable {
     public static let `default` = AutoZoomConfig()
 }
 
+public extension AutoZoomSensitivity {
+    /// Concrete generator settings for each user-facing sensitivity preset.
+    /// Normal intentionally preserves the v1/v2.0 behavior.
+    var config: AutoZoomConfig {
+        switch self {
+        case .subtle:
+            AutoZoomConfig(
+                minSilence: 2.0,
+                minActiveDuration: 0.55,
+                zoomAmount: 1.35,
+                stillDisplacementPoints: 10,
+                clickPaddingBefore: 0.25,
+                clickPaddingAfter: 1.0,
+                mergeGap: 1.1,
+                minZoomHold: 1.8
+            )
+        case .normal:
+            .default
+        case .aggressive:
+            AutoZoomConfig(
+                minSilence: 1.2,
+                minActiveDuration: 0.2,
+                zoomAmount: 1.7,
+                stillDisplacementPoints: 2.5,
+                clickPaddingBefore: 0.45,
+                clickPaddingAfter: 1.4,
+                mergeGap: 1.6,
+                minZoomHold: 2.2
+            )
+        }
+    }
+}
+
 /// Click/activity → `ZoomRange` generation. Call after capture stop; editor stores the result.
 public enum AutoZoom: Sendable {
     /// Idle stretches from cursor displacement, with click windows punched out as activity.

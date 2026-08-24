@@ -17,6 +17,8 @@ enum ZoomEngineSuite {
         try isolatedClickIslandHoldsMinZoom()
         try longPauseZoomsOutAndIsSilence()
         try movementIslandOpensNearStartCursor()
+        try sensitivityPresetsProduceIncreasingActivity()
+        try easingPresetsProduceOrderedMotion()
     }
 
     static func cropWithNoZoomsIsUnitRect() throws {
@@ -368,7 +370,97 @@ enum ZoomEngineSuite {
         }
     }
 
+    static func sensitivityPresetsProduceIncreasingActivity() throws {
+        let duration: TimeInterval = 12
+        let samples = sensitivityFixture(duration: duration)
+        let presets: [AutoZoomSensitivity] = [.subtle, .normal, .aggressive]
+        let ranges = presets.map { preset in
+            ZoomEngine.generateAutoZooms(
+                samples: samples,
+                duration: duration,
+                displayBounds: bounds,
+                config: preset.config
+            )
+        }
+        let counts = ranges.map(\.count)
+        guard counts == [1, 2, 3] else {
+            throw OpenRecordError.io(
+                "sensitivity presets should detect 1/2/3 movement islands, got \(counts)"
+            )
+        }
+        let amounts = ranges.compactMap { $0.first?.amount }
+        guard amounts == [1.35, 1.5, 1.7] else {
+            throw OpenRecordError.io(
+                "sensitivity presets should apply subtle/normal/aggressive zoom amounts, got \(amounts)"
+            )
+        }
+    }
+
+    static func easingPresetsProduceOrderedMotion() throws {
+        let zoom = ZoomRange(
+            start: 1,
+            end: 4,
+            amount: 2,
+            anchor: Point2D(x: 0.5, y: 0.5)
+        )
+        let presets: [ZoomEasingPreset] = [.fast, .smooth, .cinematic]
+        let engines = presets.map { preset in
+            ZoomEngine(
+                document: ProjectDocument(
+                    trimOut: 8,
+                    zoomRanges: [zoom],
+                    zoomEasing: preset
+                )
+            )
+        }
+
+        let openingWidths = engines.map { $0.crop(at: 1.25).width }
+        guard openingWidths[0] < openingWidths[1],
+              openingWidths[1] < openingWidths[2]
+        else {
+            throw OpenRecordError.io(
+                "Fast/Smooth/Cinematic should open from quickest to slowest, got \(openingWidths)"
+            )
+        }
+
+        let closingWidths = engines.map { $0.crop(at: 4.45).width }
+        guard closingWidths[0] > closingWidths[1],
+              closingWidths[1] > closingWidths[2]
+        else {
+            throw OpenRecordError.io(
+                "Fast/Smooth/Cinematic should close from quickest to slowest, got \(closingWidths)"
+            )
+        }
+
+        for (preset, engine) in zip(presets, engines) {
+            guard engine.easing == preset,
+                  engine.viewportSpring == preset.viewportSpring
+            else {
+                throw OpenRecordError.io("ZoomEngine did not adopt the \(preset.rawValue) motion preset")
+            }
+            try expectRect(engine.crop(at: 7), unit, "\(preset.rawValue) zoom should settle to unit")
+        }
+    }
+
     // MARK: - Fixture
+
+    static func sensitivityFixture(duration: TimeInterval) -> [CursorSample] {
+        var samples: [CursorSample] = []
+        var x = 100.0
+        var t = 0.0
+        while t <= duration + 1e-9 {
+            if t >= 1, t < 1.8 {
+                x += 18
+            } else if t >= 5, t < 5.8 {
+                x += 7
+            } else if t >= 9, t < 9.8 {
+                x += 3.5
+            }
+            samples.append(CursorSample(t: t, x: x, y: 300))
+            t += 0.1
+        }
+        return samples
+    }
 
     /// 0–2s still, 2–3.2s move+click, 3.2–5.5s still, 5.5–6.5s move, 6.5–8s still.
     static func activityFixture() -> ([CursorSample], [ClickSample]) {
@@ -485,6 +577,16 @@ func longPauseZoomsOutAndIsSilence() throws {
 @Test
 func movementIslandOpensNearStartCursor() throws {
     try ZoomEngineSuite.movementIslandOpensNearStartCursor()
+}
+
+@Test
+func sensitivityPresetsProduceIncreasingActivity() throws {
+    try ZoomEngineSuite.sensitivityPresetsProduceIncreasingActivity()
+}
+
+@Test
+func easingPresetsProduceOrderedMotion() throws {
+    try ZoomEngineSuite.easingPresetsProduceOrderedMotion()
 }
 
 #if compiler(>=6.2)

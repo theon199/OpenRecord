@@ -30,7 +30,7 @@ struct InspectorPanel: View {
                     Button("Delete Zoom", role: .destructive) {
                         session.deleteSelectedZoom()
                     }
-                    regenerateZoomsButton
+                    autoZoomControls
                 }
             } else {
                 Section("Zoom") {
@@ -41,7 +41,7 @@ struct InspectorPanel: View {
                         session.addZoomAtPlayhead()
                     }
                     .disabled(!session.canAddZoomAtPlayhead)
-                    regenerateZoomsButton
+                    autoZoomControls
                 }
             }
 
@@ -166,8 +166,31 @@ struct InspectorPanel: View {
                 session.regenerateAutoZooms()
             }
         } message: {
-            Text("Auto-zooms from cursor activity will replace the current zoom ranges.")
+            Text("Auto-zooms from cursor activity will replace the current zoom ranges using the selected sensitivity.")
         }
+    }
+
+    private var autoZoomControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Sensitivity", selection: autoZoomSensitivity) {
+                Text("Subtle").tag(AutoZoomSensitivity.subtle)
+                Text("Normal").tag(AutoZoomSensitivity.normal)
+                Text("Aggressive").tag(AutoZoomSensitivity.aggressive)
+            }
+
+            Picker("Easing", selection: zoomEasing) {
+                Text("Fast").tag(ZoomEasingPreset.fast)
+                Text("Smooth").tag(ZoomEasingPreset.smooth)
+                Text("Cinematic").tag(ZoomEasingPreset.cinematic)
+            }
+
+            Text("Sensitivity applies when auto-zooms are regenerated. Easing updates preview and export immediately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            regenerateZoomsButton
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var regenerateZoomsButton: some View {
@@ -187,6 +210,20 @@ struct InspectorPanel: View {
             set: { value in
                 session.updateSelectedZoom { $0.amount = value }
             }
+        )
+    }
+
+    private var autoZoomSensitivity: Binding<AutoZoomSensitivity> {
+        Binding(
+            get: { session.document.autoZoomSensitivity },
+            set: { session.updateAutoZoomSensitivity($0) }
+        )
+    }
+
+    private var zoomEasing: Binding<ZoomEasingPreset> {
+        Binding(
+            get: { session.document.zoomEasing },
+            set: { session.updateZoomEasing($0) }
         )
     }
 

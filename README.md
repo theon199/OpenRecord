@@ -65,7 +65,7 @@ Open a project from the sidebar.
 
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
 - **Timeline**: playhead, trim in/out handles, zoom blocks (drag to move/resize). Space play/pause, Delete removes the selected zoom.
-- **Inspector**: zoom amount, background, padding, corner radius, cursor scale, keyboard overlay controls, export.
+- **Inspector**: zoom amount, auto-zoom sensitivity (Subtle / Normal / Aggressive), camera easing (Fast / Smooth / Cinematic), background, padding, corner radius, cursor scale, keyboard overlay controls, export.
 
 **Export…** (⌘E) renders the **in-memory** document (current trims, zoom ranges, canvas) — not a stale re-read from disk. Output is H.264 High, Rec.709, **1080p-capped** (long edge ≤ 1920, short ≤ 1080), 60 fps if the source averages ≥ 45 fps else 30. Mic + system AAC are mixed to one stereo 48 kHz track when those files exist.
 
@@ -76,7 +76,7 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # createdAt, app version, display bounds, scale, capture target
-  project.json              # v2: trims, zooms, canvas, cursor sprites, keyboard overlay
+  project.json              # v2: trims, zooms, auto-zoom/easing presets, canvas, cursor sprites, keyboard overlay
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     mic.m4a                 # microphone (may be absent)

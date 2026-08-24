@@ -32,6 +32,7 @@ public struct ZoomEngine: Sendable {
     public let smoother: CursorSmoother
     public let displayBounds: Rect2D
     public let targetGeometry: [TargetGeometrySample]
+    public let easing: ZoomEasingPreset
     public let viewportSpring: SpringConfig
 
     private let bake: BakeCache
@@ -47,12 +48,13 @@ public struct ZoomEngine: Sendable {
         clicks: [ClickSample] = [],
         displayBounds: Rect2D = .unit,
         targetGeometry: [TargetGeometrySample] = [],
-        viewportSpring: SpringConfig = .viewportSmooth
+        viewportSpring: SpringConfig? = nil
     ) {
         self.document = document
         self.displayBounds = displayBounds
         self.targetGeometry = targetGeometry
-        self.viewportSpring = viewportSpring
+        self.easing = document.zoomEasing
+        self.viewportSpring = viewportSpring ?? document.zoomEasing.viewportSpring
         self.smoother = CursorSmoother(
             samples: samples,
             clicks: clicks,
@@ -68,7 +70,8 @@ public struct ZoomEngine: Sendable {
                 document: document,
                 telemetryHorizon: telemetryHorizon
             ),
-            viewportSpring: viewportSpring
+            easing: easing,
+            viewportSpring: self.viewportSpring
         )
     }
 
@@ -86,16 +89,18 @@ public struct ZoomEngine: Sendable {
                 document: document,
                 telemetryHorizon: telemetryHorizon
             ),
+            easing: easing,
             viewportSpring: viewportSpring
         )
 
-        if bake.matches(ranges), let baked = bake.crop(at: time) {
+        if bake.matches(ranges, easing: easing), let baked = bake.crop(at: time) {
             return clampUV(baked)
         }
 
         let evaluator = ZoomEvaluator(
             ranges: ranges,
             smoother: smoother,
+            easing: easing,
             viewportSpring: viewportSpring
         )
         return clampUV(evaluator.evaluateLive(at: time))
@@ -157,7 +162,7 @@ public struct ZoomEngine: Sendable {
     ) -> TimeInterval {
         var end = max(document.trimOut ?? 0, telemetryHorizon)
         if let last = document.zoomRanges.map(\.end).max() {
-            end = max(end, last + zoomOutDuration)
+            end = max(end, last + document.zoomEasing.zoomOutDuration)
         }
         return max(end, 0)
     }
@@ -219,6 +224,7 @@ private struct ZoomEvaluator {
 
     var ranges: [ZoomRange]
     var smoother: CursorSmoother
+    var easing: ZoomEasingPreset
     var viewportSpring: SpringConfig
 
     private static let viewportEdgeThresh = 0.19
@@ -428,8 +434,8 @@ private struct ZoomEvaluator {
             cursor: cursor,
             cursorCenter: cursorCenter,
             ranges: ranges,
-            easeIn: { SpringEasing.easeIn($0) },
-            easeOut: { SpringEasing.easeOut($0) }
+            easeIn: { SpringEasing.easeIn($0, config: easing.zoomSpring) },
+            easeOut: { SpringEasing.easeOut($0, config: easing.zoomSpring) }
         )
     }
 
@@ -459,14 +465,14 @@ private struct ZoomEvaluator {
                 let nextBounds = segmentBounds(amount: next.amount, cx: nFocus.x, cy: nFocus.y)
                 return InterpolatedZoom(t: 1, bounds: lerpBounds(prevBounds, nextBounds, u))
             }
-            let zoomT = easeOut(clamp01((time - prev.end) / ZoomEngine.zoomOutDuration))
+            let zoomT = easeOut(clamp01((time - prev.end) / easing.zoomOutDuration))
             let focus = zoomFocus(prev, cursorCenter: cursorCenter)
             let prevBounds = segmentBounds(amount: prev.amount, cx: focus.x, cy: focus.y)
             return InterpolatedZoom(t: 1 - zoomT, bounds: lerpBounds(prevBounds, def, zoomT))
         }
 
         if prev == nil, let seg {
-            let t = easeIn(clamp01((time - seg.start) / ZoomEngine.zoomInDuration))
+            let t = easeIn(clamp01((time - seg.start) / easing.zoomInDuration))
             let focus = zoomFocus(seg, cursorCenter: cursorCenter)
             let segBounds = segmentBounds(amount: seg.amount, cx: focus.x, cy: focus.y)
             return InterpolatedZoom(t: t, bounds: lerpBounds(def, segBounds, t))
@@ -480,7 +486,7 @@ private struct ZoomEvaluator {
         let sFocus = zoomFocus(seg, cursorCenter: cursorCenter)
         let prevBounds = segmentBounds(amount: prev.amount, cx: pFocus.x, cy: pFocus.y)
         let segBounds = segmentBounds(amount: seg.amount, cx: sFocus.x, cy: sFocus.y)
-        let zoomT = easeIn(clamp01((time - seg.start) / ZoomEngine.zoomInDuration))
+        let zoomT = easeIn(clamp01((time - seg.start) / easing.zoomInDuration))
 
         if seg.start == prev.end {
             return InterpolatedZoom(t: 1, bounds: lerpBounds(prevBounds, segBounds, zoomT))
@@ -581,12 +587,13 @@ private final class BakeCache: @unchecked Sendable {
     private static let dt: TimeInterval = 1.0 / 60.0
 
     private var ranges: [ZoomRange] = []
+    private var easing: ZoomEasingPreset = .smooth
     private var times: [TimeInterval] = []
     private var crops: [CGRect] = []
     private var baked = false
 
-    func matches(_ current: [ZoomRange]) -> Bool {
-        baked && ranges == current && !crops.isEmpty
+    func matches(_ current: [ZoomRange], easing: ZoomEasingPreset) -> Bool {
+        baked && ranges == current && self.easing == easing && !crops.isEmpty
     }
 
     func crop(at time: TimeInterval) -> CGRect? {
@@ -613,13 +620,15 @@ private final class BakeCache: @unchecked Sendable {
         ranges: [ZoomRange],
         smoother: CursorSmoother,
         duration: TimeInterval,
+        easing: ZoomEasingPreset,
         viewportSpring: SpringConfig
     ) {
-        if baked, self.ranges == ranges { return }
+        if baked, self.ranges == ranges, self.easing == easing { return }
         rebuild(
             ranges: ranges,
             smoother: smoother,
             duration: duration,
+            easing: easing,
             viewportSpring: viewportSpring
         )
     }
@@ -628,9 +637,11 @@ private final class BakeCache: @unchecked Sendable {
         ranges: [ZoomRange],
         smoother: CursorSmoother,
         duration: TimeInterval,
+        easing: ZoomEasingPreset,
         viewportSpring: SpringConfig
     ) {
         self.ranges = ranges
+        self.easing = easing
         times = []
         crops = []
         baked = false
@@ -640,6 +651,7 @@ private final class BakeCache: @unchecked Sendable {
         let evaluator = ZoomEvaluator(
             ranges: ranges,
             smoother: smoother,
+            easing: easing,
             viewportSpring: viewportSpring
         )
         var state = ZoomEvaluator.PlaybackState(

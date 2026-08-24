@@ -49,7 +49,9 @@ enum ProjectDocumentJSONRoundTrip {
                 fadeDelay: 1.2,
                 maxVisibleKeys: 4
             ),
-            stylePresetID: "custom-demo"
+            stylePresetID: "custom-demo",
+            autoZoomSensitivity: .aggressive,
+            zoomEasing: .cinematic
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -70,7 +72,9 @@ enum ProjectDocumentJSONRoundTrip {
         let legacy = try ProjectJSON.decoder.decode(ProjectDocument.self, from: legacyJSON)
         guard legacy.formatVersion == 1,
               legacy.keyboardOverlay == .disabled,
-              legacy.stylePresetID == nil
+              legacy.stylePresetID == nil,
+              legacy.autoZoomSensitivity == .normal,
+              legacy.zoomEasing == .smooth
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
         }
@@ -87,6 +91,19 @@ enum ProjectDocumentJSONRoundTrip {
         future.formatVersion = 7
         guard future.upgradedForSave().formatVersion == 7 else {
             throw OpenRecordError.io("Saving attempted to downgrade a future project format")
+        }
+
+        let unknownPresetJSON = Data(
+            #"{"formatVersion":2,"autoZoomSensitivity":"extreme","zoomEasing":"elastic"}"#.utf8
+        )
+        let unknownPreset = try ProjectJSON.decoder.decode(
+            ProjectDocument.self,
+            from: unknownPresetJSON
+        )
+        guard unknownPreset.autoZoomSensitivity == .normal,
+              unknownPreset.zoomEasing == .smooth
+        else {
+            throw OpenRecordError.io("Unknown zoom presets did not fall back to safe defaults")
         }
     }
 

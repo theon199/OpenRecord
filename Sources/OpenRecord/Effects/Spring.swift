@@ -36,8 +36,48 @@ public struct SpringConfig: Sendable, Hashable {
     public static let viewportFocused = SpringConfig(tension: 300, mass: 6.75, friction: 120)
     /// Cinematic viewport pan.
     public static let viewportSmooth = SpringConfig(tension: 240, mass: 3.375, friction: 80)
+    /// Slower, weightier viewport pan for the Cinematic preset.
+    public static let viewportCinematic = SpringConfig(tension: 160, mass: 5, friction: 75)
+    /// Fast zoom amount response with a small amount of spring character.
+    public static let zoomTransitionFast = SpringConfig(tension: 320, mass: 1.5, friction: 35)
     /// Zoom in/out amount easing.
     public static let zoomTransition = SpringConfig(tension: 200, mass: 2.25, friction: 40)
+    /// Deliberate, near-critically-damped zoom amount response.
+    public static let zoomTransitionCinematic = SpringConfig(tension: 110, mass: 3.5, friction: 39)
+}
+
+public extension ZoomEasingPreset {
+    var zoomInDuration: TimeInterval {
+        switch self {
+        case .fast: 0.55
+        case .smooth: 0.85
+        case .cinematic: 1.25
+        }
+    }
+
+    var zoomOutDuration: TimeInterval {
+        switch self {
+        case .fast: 0.8
+        case .smooth: 1.35
+        case .cinematic: 1.9
+        }
+    }
+
+    var zoomSpring: SpringConfig {
+        switch self {
+        case .fast: .zoomTransitionFast
+        case .smooth: .zoomTransition
+        case .cinematic: .zoomTransitionCinematic
+        }
+    }
+
+    var viewportSpring: SpringConfig {
+        switch self {
+        case .fast: .viewportFocused
+        case .smooth: .viewportSmooth
+        case .cinematic: .viewportCinematic
+        }
+    }
 }
 
 /// 2D spring body in UV space.

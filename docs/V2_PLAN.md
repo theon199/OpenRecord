@@ -66,9 +66,11 @@ safely, and representative JPEG thumbnails are generated on capture completion
 and backfilled for existing recordings. Privacy-filtered keyboard shortcut
 telemetry, a configurable pill overlay, preview/export rendering, and the
 backward-compatible format-version-2 migration are now implemented as well.
+Auto-zoom generation now has Subtle, Normal, and Aggressive sensitivity
+presets, while the shared preview/export camera supports Fast, Smooth, and
+Cinematic easing. Normal + Smooth preserve the prior default behavior.
 
-Next: auto-zoom sensitivity/easing improvements, then v2.1 motion, webcam, and
-audio work. v2.1 and v2.2 have not started.
+Next: v2.1 motion, webcam, and audio work. v2.1 and v2.2 have not started.
 
 ---
 
@@ -146,13 +148,19 @@ Screen Studio's keyboard overlay is the single most requested feature for tutori
 | **Zoom easing presets** | Fast / Smooth / Cinematic → `SpringConfig` variants |
 | **Silence trimming suggestion** | Post-capture: "Remove pauses longer than 2s?" with preview of cuts |
 
+Sensitivity and easing presets are persisted in `project.json`. Changing
+sensitivity affects the next auto-zoom regeneration; changing easing updates
+preview and export immediately through the same `ZoomEngine` path.
+
 ### 4. Project format v2 (minimal)
 
 ```json
 {
   "formatVersion": 2,
   "keyboardOverlay": { ... },
-  "stylePresetID": "default"
+  "stylePresetID": "default",
+  "autoZoomSensitivity": "normal",
+  "zoomEasing": "smooth"
 }
 ```
 

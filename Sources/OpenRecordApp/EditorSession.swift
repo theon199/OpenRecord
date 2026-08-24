@@ -270,6 +270,7 @@ final class EditorSession {
             clicks: clicks,
             duration: max(duration, 0.01),
             displayBounds: meta.displayBounds,
+            config: document.autoZoomSensitivity.config,
             targetGeometry: targetGeometry
         )
         if document.trimOut == nil, duration > 0 {
@@ -451,6 +452,22 @@ final class EditorSession {
         body(&document.keyboardOverlay)
         document.keyboardOverlay = document.keyboardOverlay.normalized
         documentDidChange(from: before, actionName: actionName)
+    }
+
+    func updateAutoZoomSensitivity(_ sensitivity: AutoZoomSensitivity) {
+        let before = document
+        document.autoZoomSensitivity = sensitivity
+        documentDidChange(from: before, actionName: "Change Auto-Zoom Sensitivity")
+    }
+
+    func updateZoomEasing(_ easing: ZoomEasingPreset) {
+        let before = document
+        document.zoomEasing = easing
+        documentDidChange(
+            from: before,
+            actionName: "Change Zoom Easing",
+            rebuildZoomEngine: true
+        )
     }
 
     func beginDocumentEdit(actionName: String) {
