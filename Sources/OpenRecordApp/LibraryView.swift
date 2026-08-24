@@ -4,6 +4,8 @@ import SwiftUI
 struct LibrarySidebar: View {
     @Bindable var model: AppModel
     @State private var pendingDelete: LibraryItem?
+    @State private var pendingRename: LibraryItem?
+    @State private var renameText = ""
 
     var body: some View {
         List(selection: $model.selectedProjectURL) {
@@ -13,17 +15,25 @@ struct LibrarySidebar: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(model.projects) { item in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.name)
-                            .lineLimit(1)
-                        if let modified = item.modified {
-                            Text(modified, format: .dateTime.month(.abbreviated).day().hour().minute())
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        ProjectThumbnailView(image: model.thumbnail(for: item.url))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.name)
+                                .lineLimit(1)
+                            if let modified = item.modified {
+                                Text(modified, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    .padding(.vertical, 2)
                     .tag(item.url)
                     .contextMenu {
+                        Button("Rename…") {
+                            renameText = item.name
+                            pendingRename = item
+                        }
                         Button("Reveal in Finder") {
                             model.reveal(item.url)
                         }
@@ -67,6 +77,27 @@ struct LibrarySidebar: View {
         } message: { item in
             Text("“\(item.name)” will be moved to the Trash.")
         }
+        .alert(
+            "Rename Recording",
+            isPresented: Binding(
+                get: { pendingRename != nil },
+                set: { if !$0 { pendingRename = nil } }
+            )
+        ) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) {
+                pendingRename = nil
+            }
+            Button("Rename") {
+                if let item = pendingRename {
+                    model.renameProject(item.url, to: renameText)
+                }
+                pendingRename = nil
+            }
+            .keyboardShortcut(.defaultAction)
+        } message: {
+            Text("The recording and all of its media will stay together in the library.")
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -97,6 +128,31 @@ struct LibrarySidebar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
             .background(.bar)
+        }
+    }
+}
+
+private struct ProjectThumbnailView: View {
+    var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.12)
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "video")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 64, height: 40)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(.quaternary, lineWidth: 1)
         }
     }
 }

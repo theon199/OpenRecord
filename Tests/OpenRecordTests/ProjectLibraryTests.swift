@@ -74,6 +74,7 @@ enum ProjectLibraryBundleRoundTrip {
         }
 
         try assertNameSanitization(library: library, meta: meta)
+        try assertRename(library: library, root: root, meta: meta)
         try assertListIsNotRecursive(library: library, root: root, created: created)
         try assertCopyExport(library: library, root: root)
         try assertSaveCopy(library: library, root: root, source: created, document: edited)
@@ -130,6 +131,61 @@ enum ProjectLibraryBundleRoundTrip {
         let untitled = try library.create(name: "///", meta: meta)
         guard untitled.lastPathComponent == "Untitled.openrecord" else {
             throw OpenRecordError.io("Empty name became \(untitled.lastPathComponent)")
+        }
+    }
+
+    private static func assertRename(
+        library: ProjectLibrary,
+        root: URL,
+        meta: ProjectMeta
+    ) throws {
+        let fm = FileManager.default
+        let source = try library.create(name: "Rename Me", meta: meta)
+        let marker = ProjectLayout.thumbnailURL(in: source)
+        let markerData = Data("thumbnail-marker".utf8)
+        try markerData.write(to: marker)
+
+        let renamed = try library.rename(source, to: "Renamed / Project")
+        guard renamed.lastPathComponent == "Renamed - Project.openrecord" else {
+            throw OpenRecordError.io("Renamed project was \(renamed.lastPathComponent)")
+        }
+        guard !fm.fileExists(atPath: source.path), fm.fileExists(atPath: renamed.path) else {
+            throw OpenRecordError.io("rename() did not move the complete bundle")
+        }
+        guard try Data(contentsOf: ProjectLayout.thumbnailURL(in: renamed)) == markerData else {
+            throw OpenRecordError.io("rename() did not preserve the project thumbnail")
+        }
+        guard try library.open(url: renamed).meta == meta else {
+            throw OpenRecordError.io("rename() did not preserve the project metadata")
+        }
+        guard try library.rename(renamed, to: "Renamed - Project") == renamed else {
+            throw OpenRecordError.io("rename() did not treat an unchanged name as a no-op")
+        }
+
+        let caseRenamed = try library.rename(renamed, to: "renamed - project")
+        guard caseRenamed.lastPathComponent == "renamed - project.openrecord",
+              fm.fileExists(atPath: caseRenamed.path)
+        else {
+            throw OpenRecordError.io("rename() did not support a case-only rename")
+        }
+
+        _ = try library.create(name: "Taken", meta: meta)
+        let collision = try library.rename(caseRenamed, to: "Taken")
+        guard collision.lastPathComponent == "Taken 2.openrecord" else {
+            throw OpenRecordError.io("rename() collision became \(collision.lastPathComponent)")
+        }
+
+        let nestedParent = root.appendingPathComponent("RenameNested", isDirectory: true)
+        try fm.createDirectory(at: nestedParent, withIntermediateDirectories: true)
+        let nested = nestedParent.appendingPathComponent("Nested.openrecord", isDirectory: true)
+        try fm.copyItem(at: collision, to: nested)
+        do {
+            _ = try library.rename(nested, to: "Escaped")
+            throw OpenRecordError.io("rename() accepted a nested project")
+        } catch let error as OpenRecordError {
+            if case .io(let message) = error, message.contains("accepted a nested") {
+                throw error
+            }
         }
     }
 

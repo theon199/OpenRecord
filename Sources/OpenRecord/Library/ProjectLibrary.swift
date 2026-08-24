@@ -10,6 +10,7 @@ import Foundation
 /// project.json
 /// recording/
 ///   display.mp4
+///   thumb.jpg
 ///   mic.m4a
 ///   system.m4a
 ///   mouse.jsonl
@@ -230,6 +231,91 @@ public struct ProjectLibrary: Sendable {
                 )
             }
         }
+    }
+
+    /// Rename a top-level project bundle while preserving every file inside it.
+    /// Name collisions use the same numbered suffixes as project creation.
+    @discardableResult
+    public func rename(_ url: URL, to rawName: String) throws -> URL {
+        let source = url.standardizedFileURL
+        return try withAccess(to: source) {
+            let fm = FileManager.default
+            try validateProjectBundleURL(source, fileManager: fm)
+
+            let baseName = ProjectBundleNaming.sanitizedBaseName(rawName)
+            let currentBaseName = source.deletingPathExtension().lastPathComponent
+            guard baseName != currentBaseName else { return source }
+
+            let requested = rootURL.appendingPathComponent(
+                "\(baseName).\(ProjectLayout.bundleExtension)",
+                isDirectory: true
+            )
+            let requestedExists = fm.fileExists(atPath: requested.path)
+            let requestedIsSource = requestedExists && ProjectBundleNaming.sameFileSystemItem(
+                requested,
+                source,
+                fileManager: fm
+            )
+            let isCaseOnlyRename = requested.path.caseInsensitiveCompare(source.path) == .orderedSame
+                && (!requestedExists || requestedIsSource)
+            let destination = isCaseOnlyRename
+                ? requested
+                : ProjectBundleNaming.uniqueBundleURL(
+                    root: rootURL,
+                    baseName: baseName,
+                    fileManager: fm
+                )
+
+            do {
+                if isCaseOnlyRename {
+                    let staging = rootURL.appendingPathComponent(
+                        ".\(UUID().uuidString).renaming",
+                        isDirectory: true
+                    )
+                    try fm.moveItem(at: source, to: staging)
+                    do {
+                        try fm.moveItem(at: staging, to: destination)
+                    } catch {
+                        do {
+                            try fm.moveItem(at: staging, to: source)
+                        } catch let rollbackError {
+                            throw OpenRecordError.io(
+                                "Could not finish renaming \(source.lastPathComponent), and recovery failed. "
+                                    + "The project remains at \(staging.path): \(rollbackError.localizedDescription)"
+                            )
+                        }
+                        throw error
+                    }
+                } else {
+                    try fm.moveItem(at: source, to: destination)
+                }
+            } catch let error as OpenRecordError {
+                throw error
+            } catch {
+                throw OpenRecordError.io(
+                    "Could not rename \(source.lastPathComponent): \(error.localizedDescription)"
+                )
+            }
+            return destination.standardizedFileURL
+        }
+    }
+
+    /// Generate and cache a representative JPEG for a project that has video.
+    /// Existing thumbnails are reused so library refreshes do not re-decode media.
+    public func generateThumbnailIfNeeded(for projectURL: URL) async throws -> URL? {
+        let projectURL = projectURL.standardizedFileURL
+        let rootAccessed = rootURL.startAccessingSecurityScopedResource()
+        let projectAccessed = projectURL.startAccessingSecurityScopedResource()
+        defer {
+            if projectAccessed {
+                projectURL.stopAccessingSecurityScopedResource()
+            }
+            if rootAccessed {
+                rootURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        try validateProjectBundleURL(projectURL, fileManager: .default)
+        return try await ProjectThumbnail.generateIfNeeded(in: projectURL)
     }
 
     /// Copy an exported MP4 (or any file / bundle) to `destinationURL`.
@@ -547,5 +633,22 @@ enum ProjectBundleNaming {
             }
         }
         return candidate
+    }
+
+    static func sameFileSystemItem(
+        _ lhs: URL,
+        _ rhs: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        guard let lhsAttributes = try? fileManager.attributesOfItem(atPath: lhs.path),
+              let rhsAttributes = try? fileManager.attributesOfItem(atPath: rhs.path),
+              let lhsVolume = lhsAttributes[.systemNumber] as? NSNumber,
+              let rhsVolume = rhsAttributes[.systemNumber] as? NSNumber,
+              let lhsFile = lhsAttributes[.systemFileNumber] as? NSNumber,
+              let rhsFile = rhsAttributes[.systemFileNumber] as? NSNumber
+        else {
+            return false
+        }
+        return lhsVolume == rhsVolume && lhsFile == rhsFile
     }
 }

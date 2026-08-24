@@ -7,6 +7,7 @@ public enum ProjectLayout: Sendable {
     public static let documentFileName = "project.json"
     public static let recordingDirectoryName = "recording"
     public static let displayVideoFileName = "display.mp4"
+    public static let thumbnailFileName = "thumb.jpg"
     public static let microphoneAudioFileName = "mic.m4a"
     public static let systemAudioFileName = "system.m4a"
     public static let mouseFileName = "mouse.jsonl"
@@ -29,6 +30,11 @@ public enum ProjectLayout: Sendable {
     public static func displayVideoURL(in projectURL: URL) -> URL {
         recordingDirectory(in: projectURL)
             .appendingPathComponent(displayVideoFileName, isDirectory: false)
+    }
+
+    public static func thumbnailURL(in projectURL: URL) -> URL {
+        recordingDirectory(in: projectURL)
+            .appendingPathComponent(thumbnailFileName, isDirectory: false)
     }
 
     public static func microphoneAudioURL(in projectURL: URL) -> URL {

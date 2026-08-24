@@ -7,6 +7,7 @@ private enum PendingEditorTransition {
     case close
     case open(URL, generateAutoZooms: Bool)
     case delete(URL)
+    case rename(URL, String)
 }
 
 private struct PendingDegradedOpen {
@@ -43,6 +44,7 @@ private final class OneShotContinuation<Value: Sendable>: @unchecked Sendable {
 final class AppModel {
     var library: ProjectLibrary
     var projects: [LibraryItem] = []
+    private(set) var projectThumbnails: [URL: NSImage] = [:]
     var permissionGranted: [CapturePermissionKind: Bool] = [:]
     var errorMessage: String?
     var selectedProjectURL: URL?
@@ -86,6 +88,7 @@ final class AppModel {
     private var captureEventTask: Task<Void, Never>?
     private var pendingDegradedOpen: PendingDegradedOpen?
     private var pendingEditorTransition: PendingEditorTransition?
+    private var thumbnailTask: Task<Void, Never>?
 
     init() {
         library = .resolved()
@@ -123,10 +126,24 @@ final class AppModel {
     func refreshProjects() {
         do {
             try library.ensureRootExists()
-            projects = try library.list().map(LibraryItem.from)
+            let items = try library.list().map(LibraryItem.from)
+            projects = items
+            let currentURLs = Set(items.map(\.url))
+            projectThumbnails = projectThumbnails.filter { currentURLs.contains($0.key) }
+            for item in items where projectThumbnails[item.url] == nil {
+                let thumbnailURL = ProjectLayout.thumbnailURL(in: item.url)
+                if let image = NSImage(contentsOf: thumbnailURL) {
+                    projectThumbnails[item.url] = image
+                }
+            }
+            scheduleThumbnailBackfill(for: items)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func thumbnail(for url: URL) -> NSImage? {
+        projectThumbnails[url.standardizedFileURL]
     }
 
     func reveal(_ url: URL) {
@@ -139,6 +156,10 @@ final class AppModel {
 
     func deleteProject(_ url: URL) {
         Task { await requestEditorTransition(.delete(url.standardizedFileURL)) }
+    }
+
+    func renameProject(_ url: URL, to name: String) {
+        Task { await requestEditorTransition(.rename(url.standardizedFileURL, name)) }
     }
 
     func chooseLibraryFolder() {
@@ -347,6 +368,54 @@ final class AppModel {
                 errorMessage = error.localizedDescription
                 refreshProjects()
             }
+        case .rename(let url, let name):
+            do {
+                let wasOpen = editor?.projectURL.standardizedFileURL == url
+                let renamedURL = try library.rename(url, to: name)
+                guard renamedURL != url else {
+                    refreshProjects()
+                    return
+                }
+                if let thumbnail = projectThumbnails.removeValue(forKey: url) {
+                    projectThumbnails[renamedURL] = thumbnail
+                }
+                if wasOpen {
+                    editor?.shutdown()
+                    editor = nil
+                    await performOpenProject(
+                        renamedURL,
+                        generateAutoZooms: false,
+                        allowDegradedTelemetry: true
+                    )
+                } else if selectedProjectURL?.standardizedFileURL == url {
+                    selectedProjectURL = renamedURL
+                }
+                refreshProjects()
+            } catch {
+                errorMessage = error.localizedDescription
+                refreshProjects()
+            }
+        }
+    }
+
+    private func scheduleThumbnailBackfill(for items: [LibraryItem]) {
+        thumbnailTask?.cancel()
+        let missing = items.filter { projectThumbnails[$0.url] == nil }
+        guard !missing.isEmpty else {
+            thumbnailTask = nil
+            return
+        }
+        let library = library
+        thumbnailTask = Task { @MainActor [weak self] in
+            for item in missing {
+                guard !Task.isCancelled else { return }
+                guard let thumbnailURL = try? await library.generateThumbnailIfNeeded(for: item.url),
+                      let image = NSImage(contentsOf: thumbnailURL)
+                else {
+                    continue
+                }
+                self?.projectThumbnails[item.url] = image
+            }
         }
     }
 
@@ -429,6 +498,7 @@ final class AppModel {
             isRecorderPresented = false
             showMainWindow()
             if result.hasUsableVideo {
+                _ = try? await library.generateThumbnailIfNeeded(for: result.projectURL)
                 await openProject(result.projectURL, generateAutoZooms: true)
                 refreshProjects()
             } else if let url {

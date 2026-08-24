@@ -61,10 +61,12 @@ library deletion, and direct zoom-anchor dragging in the preview. Gradient
 backgrounds and 16:9, 9:16, 1:1, and 4:3 aspect presets are now exposed in the
 editor and render through the shared model/compositor path. Default, Dark,
 Light, and Minimal canvas style presets are also available without changing a
-project's aspect ratio or cursor scale.
+project's aspect ratio or cursor scale. Library projects can now be renamed
+safely, and representative JPEG thumbnails are generated on capture completion
+and backfilled for existing recordings.
 
-Next: library rename/thumbnails, then keyboard capture/overlay and the
-format-version-2 migration. v2.1 and v2.2 have not started.
+Next: keyboard capture/overlay and the format-version-2 migration. v2.1 and
+v2.2 have not started.
 
 ---
 
