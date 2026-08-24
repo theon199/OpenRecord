@@ -7,17 +7,20 @@ enum CaptureContractTests {
     static func runJSONLEncoding() throws {
         let cursor = CursorSample(t: 1.25, x: 640.5, y: 12, cursorId: CaptureMediaFormat.defaultCursorSpriteID)
         let click = ClickSample(t: 1.25, button: .left, down: true)
+        let key = KeySample(t: 1.25, key: "c", modifiers: [.command], down: true)
 
         let cursorLine = try ProjectJSON.jsonlEncoder.encode(cursor)
         let clickLine = try ProjectJSON.jsonlEncoder.encode(click)
+        let keyLine = try ProjectJSON.jsonlEncoder.encode(key)
 
-        guard !cursorLine.contains(UInt8(ascii: "\n")), !clickLine.contains(UInt8(ascii: "\n")) else {
+        guard !cursorLine.contains(UInt8(ascii: "\n")), !clickLine.contains(UInt8(ascii: "\n")), !keyLine.contains(UInt8(ascii: "\n")) else {
             throw OpenRecordError.io("JSONL encoder emitted a newline inside a sample")
         }
 
         let decodedCursor = try ProjectJSON.decoder.decode(CursorSample.self, from: cursorLine)
         let decodedClick = try ProjectJSON.decoder.decode(ClickSample.self, from: clickLine)
-        guard decodedCursor == cursor, decodedClick == click else {
+        let decodedKey = try ProjectJSON.decoder.decode(KeySample.self, from: keyLine)
+        guard decodedCursor == cursor, decodedClick == click, decodedKey == key else {
             throw OpenRecordError.io("JSONL sample round-trip produced a different value")
         }
 
@@ -28,6 +31,16 @@ enum CaptureContractTests {
         let lines = String(data: fileBody, encoding: .utf8)?.split(whereSeparator: \.isNewline) ?? []
         guard lines.count == 2 else {
             throw OpenRecordError.io("JSONL file body did not split into two records")
+        }
+
+        guard KeyboardCapturePolicy.shouldCapture(keyCode: 8, modifiers: [.command], label: "c"),
+              !KeyboardCapturePolicy.shouldCapture(keyCode: 8, modifiers: [], label: "c"),
+              !KeyboardCapturePolicy.shouldCapture(keyCode: 8, modifiers: [.shift], label: "C"),
+              KeyboardCapturePolicy.shouldCapture(keyCode: 36, modifiers: [], label: "Return"),
+              KeyboardCapturePolicy.shouldCapture(keyCode: 122, modifiers: [], label: "F1"),
+              !KeyboardCapturePolicy.shouldCapture(keyCode: 55, modifiers: [.command], label: "")
+        else {
+            throw OpenRecordError.io("Keyboard capture privacy policy did not match its contract")
         }
     }
 

@@ -13,6 +13,7 @@ let appleFrameworks: [LinkerSetting] = [
     .linkedFramework("AVFoundation"),
     .linkedFramework("CoreMedia"),
     .linkedFramework("CoreGraphics"),
+    .linkedFramework("CoreText"),
     .linkedFramework("Metal"),
     .linkedFramework("MetalKit"),
     .linkedFramework("UniformTypeIdentifiers"),

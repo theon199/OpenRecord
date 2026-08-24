@@ -9,6 +9,7 @@ final class ExportCompositor {
     private let context: CIContext
     private let colorSpace: CGColorSpace
     private let canvas: CanvasSettings
+    private let keyboardOverlay: KeyboardOverlaySettings
     private let layout: ExportCanvasLayout
     private let canvasExtent: CGRect
     private let background: CIImage
@@ -22,6 +23,7 @@ final class ExportCompositor {
         context: CIContext,
         colorSpace: CGColorSpace,
         canvas: CanvasSettings,
+        keyboardOverlay: KeyboardOverlaySettings,
         layout: ExportCanvasLayout,
         sourceWidth: Int,
         sourceHeight: Int,
@@ -32,6 +34,7 @@ final class ExportCompositor {
         self.context = context
         self.colorSpace = colorSpace
         self.canvas = canvas
+        self.keyboardOverlay = keyboardOverlay
         self.layout = layout
         self.sourceWidth = sourceWidth
         self.sourceHeight = sourceHeight
@@ -48,6 +51,7 @@ final class ExportCompositor {
         cursorUV: Point2D?,
         clicking: Bool,
         clickAge: TimeInterval?,
+        keyboardState: KeyboardOverlayState,
         into pixelBuffer: CVPixelBuffer
     ) {
         let videoRect = ExportLayout.videoRect(
@@ -90,6 +94,15 @@ final class ExportCompositor {
             if let cursor = makeCursor(hotspot: hotspot, pixelsPerPoint: pxPerPoint) {
                 output = cursor.composited(over: output)
             }
+        }
+
+        if let keyboard = KeyboardOverlayRenderer.image(
+            state: keyboardState,
+            settings: keyboardOverlay,
+            canvasSize: layout.size,
+            canvasPadding: canvas.padding
+        ) {
+            output = keyboard.composited(over: output)
         }
 
         context.render(

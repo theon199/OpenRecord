@@ -60,6 +60,53 @@ public struct ClickSample: Codable, Sendable, Hashable {
     }
 }
 
+public enum KeyModifier: String, Codable, CaseIterable, Sendable, Hashable {
+    case control
+    case option
+    case shift
+    case command
+    case function
+
+    public var symbol: String {
+        switch self {
+        case .control: "⌃"
+        case .option: "⌥"
+        case .shift: "⇧"
+        case .command: "⌘"
+        case .function: "fn"
+        }
+    }
+}
+
+/// One privacy-filtered keyboard event. Written as a single JSONL line in
+/// `recording/keys.jsonl`; `t` shares the display video's time origin.
+public struct KeySample: Codable, Sendable, Hashable {
+    public var t: TimeInterval
+    public var key: String
+    public var modifiers: [KeyModifier]
+    public var down: Bool
+
+    public init(
+        t: TimeInterval,
+        key: String,
+        modifiers: [KeyModifier] = [],
+        down: Bool
+    ) {
+        self.t = t
+        self.key = key
+        self.modifiers = modifiers
+        self.down = down
+    }
+
+    public var displayLabel: String {
+        let prefix = KeyModifier.allCases
+            .filter { modifiers.contains($0) }
+            .map(\.symbol)
+            .joined()
+        return prefix.isEmpty ? key : "\(prefix) \(key)"
+    }
+}
+
 /// Cursor glyph captured during recording. PNG lives under `recording/cursors/`.
 public struct CursorSprite: Codable, Sendable, Hashable, Identifiable {
     public var id: String

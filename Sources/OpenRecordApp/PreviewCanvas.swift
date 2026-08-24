@@ -29,6 +29,10 @@ struct PreviewCanvas: View {
             let clickAge = clicking
                 ? ExportLayout.primaryClickAge(at: session.playhead, clicks: session.engine.smoother.clicks)
                 : nil
+            let keyboardState = session.keyboardTimeline.state(
+                at: session.playhead,
+                settings: session.document.keyboardOverlay
+            )
 
             ZStack(alignment: .topLeading) {
                 canvasFill(canvas.background)
@@ -52,6 +56,14 @@ struct PreviewCanvas: View {
                     )
                 }
 
+                keyboardOverlay(
+                    state: keyboardState,
+                    canvasSize: layout.size,
+                    canvasPadding: canvas.padding,
+                    outer: outer,
+                    viewScale: viewScale
+                )
+
                 if let zoom = session.selectedZoom {
                     zoomAnchorOverlay(
                         zoom: zoom,
@@ -64,6 +76,53 @@ struct PreviewCanvas: View {
             .clipped()
         }
         .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func keyboardOverlay(
+        state: KeyboardOverlayState,
+        canvasSize: CGSize,
+        canvasPadding: Double,
+        outer: CGRect,
+        viewScale: CGFloat
+    ) -> some View {
+        if let geometry = KeyboardOverlayLayout.geometry(
+            for: state,
+            settings: session.document.keyboardOverlay,
+            canvasSize: canvasSize,
+            canvasPadding: canvasPadding
+        ) {
+            let count = min(state.keys.count, geometry.keyRects.count)
+            ForEach(0..<count, id: \.self) { index in
+                let key = state.keys[index]
+                let rect = mapRect(geometry.keyRects[index], from: canvasSize, into: outer)
+                Text(key.label)
+                    .font(.system(size: geometry.fontSize * viewScale, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+                    .frame(width: rect.width, height: rect.height)
+                    .background(
+                        RoundedRectangle(
+                            cornerRadius: geometry.cornerRadius * Double(viewScale),
+                            style: .continuous
+                        )
+                        .fill(.black.opacity(0.88))
+                    )
+                    .overlay(
+                        RoundedRectangle(
+                            cornerRadius: geometry.cornerRadius * Double(viewScale),
+                            style: .continuous
+                        )
+                        .stroke(.white.opacity(0.24), lineWidth: max(1, viewScale))
+                    )
+                    .opacity(key.opacity)
+                    .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
+                    .position(x: rect.midX, y: rect.midY)
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Keyboard key \(key.label)")
+            }
+        }
     }
 
     private func zoomAnchorOverlay(

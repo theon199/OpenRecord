@@ -74,6 +74,7 @@ enum ProjectLibraryBundleRoundTrip {
         }
 
         try assertNameSanitization(library: library, meta: meta)
+        try assertLegacyDocumentMigration(library: library, root: root, meta: meta)
         try assertRename(library: library, root: root, meta: meta)
         try assertListIsNotRecursive(library: library, root: root, created: created)
         try assertCopyExport(library: library, root: root)
@@ -186,6 +187,50 @@ enum ProjectLibraryBundleRoundTrip {
             if case .io(let message) = error, message.contains("accepted a nested") {
                 throw error
             }
+        }
+    }
+
+    private static func assertLegacyDocumentMigration(
+        library: ProjectLibrary,
+        root: URL,
+        meta: ProjectMeta
+    ) throws {
+        let source = try library.create(name: "Legacy V1", meta: meta)
+        let documentURL = ProjectLayout.documentURL(in: source)
+        let legacyData = Data(
+            #"{"formatVersion":1,"trimIn":0.5,"zoomRanges":[],"cursorSprites":[]}"#.utf8
+        )
+        try legacyData.write(to: documentURL, options: .atomic)
+
+        let opened = try library.open(url: source)
+        guard opened.document.formatVersion == 1,
+              opened.document.keyboardOverlay == .disabled,
+              try Data(contentsOf: documentURL) == legacyData
+        else {
+            throw OpenRecordError.io("Opening a v1 project rewrote it or changed its migration defaults")
+        }
+
+        try library.save(document: opened.document, to: source)
+        let migrated = try library.open(url: source).document
+        guard migrated.formatVersion == ProjectDocument.currentFormatVersion,
+              migrated.stylePresetID == CanvasPreset.defaultStyle.id,
+              migrated.keyboardOverlay == .disabled
+        else {
+            throw OpenRecordError.io("Saving a v1 project did not migrate it to v2")
+        }
+
+        let copyDestination = root
+            .appendingPathComponent("Legacy Copies", isDirectory: true)
+            .appendingPathComponent("Legacy Copy.openrecord", isDirectory: true)
+        let copied = try library.saveCopy(
+            of: source,
+            document: opened.document,
+            to: copyDestination
+        )
+        guard try library.open(url: copied).document.formatVersion
+            == ProjectDocument.currentFormatVersion
+        else {
+            throw OpenRecordError.io("Save Copy emitted an unmigrated v1 project")
         }
     }
 

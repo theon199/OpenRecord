@@ -106,6 +106,36 @@ struct InspectorPanel: View {
                 )
             }
 
+            Section("Keyboard") {
+                Toggle("Show keyboard shortcuts", isOn: keyboardOverlayEnabled)
+                if session.keys.isEmpty {
+                    Text("This recording has no keyboard shortcut data.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Position", selection: keyboardOverlayPosition) {
+                        Text("Center").tag(KeyboardOverlayPosition.bottomCenter)
+                        Text("Left").tag(KeyboardOverlayPosition.bottomLeft)
+                    }
+                    .pickerStyle(.segmented)
+
+                    labeledSlider(
+                        "Hold time",
+                        value: keyboardOverlayFadeDelay,
+                        range: 0.2...3,
+                        format: "%.1f s",
+                        actionName: "Change Keyboard Hold Time",
+                        step: 0.1
+                    )
+
+                    Stepper(
+                        "Visible shortcuts: \(session.document.keyboardOverlay.maxVisibleKeys)",
+                        value: keyboardOverlayMaxVisibleKeys,
+                        in: 1...5
+                    )
+                }
+            }
+
             Section("Trim") {
                 LabeledContent("In", value: Timecode.string(session.document.trimIn))
                 LabeledContent("Out", value: Timecode.string(session.effectiveTrimOut))
@@ -120,7 +150,7 @@ struct InspectorPanel: View {
                     session.presentExportPanel()
                 }
                 .disabled(session.exportProgress != nil)
-                Text("Renders the live trim, zooms, and canvas to an H.264 MP4 (1080p-capped). Mic and system audio are mixed when present.")
+                Text("Renders the live trim, zooms, canvas, and keyboard overlay to an H.264 MP4 (1080p-capped). Mic and system audio are mixed when present.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -184,8 +214,50 @@ struct InspectorPanel: View {
             set: { presetID in
                 guard let preset = CanvasPreset.builtIns.first(where: { $0.id == presetID })
                 else { return }
-                session.updateCanvas(actionName: "Apply \(preset.name) Style") { canvas in
-                    preset.apply(to: &canvas)
+                session.applyCanvasPreset(preset)
+            }
+        )
+    }
+
+    private var keyboardOverlayEnabled: Binding<Bool> {
+        Binding(
+            get: { session.document.keyboardOverlay.enabled },
+            set: { enabled in
+                session.updateKeyboardOverlay(actionName: "Toggle Keyboard Overlay") {
+                    $0.enabled = enabled
+                }
+            }
+        )
+    }
+
+    private var keyboardOverlayPosition: Binding<KeyboardOverlayPosition> {
+        Binding(
+            get: { session.document.keyboardOverlay.position },
+            set: { position in
+                session.updateKeyboardOverlay(actionName: "Move Keyboard Overlay") {
+                    $0.position = position
+                }
+            }
+        )
+    }
+
+    private var keyboardOverlayFadeDelay: Binding<Double> {
+        Binding(
+            get: { session.document.keyboardOverlay.fadeDelay },
+            set: { fadeDelay in
+                session.updateKeyboardOverlay(actionName: "Change Keyboard Hold Time") {
+                    $0.fadeDelay = fadeDelay
+                }
+            }
+        )
+    }
+
+    private var keyboardOverlayMaxVisibleKeys: Binding<Int> {
+        Binding(
+            get: { session.document.keyboardOverlay.maxVisibleKeys },
+            set: { count in
+                session.updateKeyboardOverlay(actionName: "Change Visible Keyboard Shortcuts") {
+                    $0.maxVisibleKeys = count
                 }
             }
         )

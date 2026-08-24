@@ -2,7 +2,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 import Testing
-import OpenRecord
+@testable import OpenRecord
 
 enum ExportLayoutSuite {
     static func run() throws {
@@ -16,6 +16,8 @@ enum ExportLayoutSuite {
         try canvasPointMapsBackToSourceUV()
         try trimClamping()
         try clickAgeAndRipple()
+        try keyboardTimelineAndGeometry()
+        try keyboardRendererProducesBoundedImage()
         try jsonlMissingIsEmpty()
         try jsonlRoundTrip()
         try missingDisplayThrows()
@@ -211,6 +213,114 @@ enum ExportLayoutSuite {
         guard later.opacity < start.opacity else {
             throw OpenRecordError.io("ripple should fade with age")
         }
+    }
+
+    static func keyboardTimelineAndGeometry() throws {
+        let samples = [
+            KeySample(t: 1.0, key: "K", modifiers: [.command], down: true),
+            KeySample(t: 1.1, key: "K", modifiers: [.command], down: false),
+            KeySample(t: 1.4, key: "Enter", down: true),
+        ]
+        let timeline = KeyboardOverlayTimeline(samples: samples)
+        var settings = KeyboardOverlaySettings(
+            enabled: true,
+            position: .bottomCenter,
+            fadeDelay: 0.8,
+            maxVisibleKeys: 3
+        )
+        let early = timeline.state(at: 1.2, settings: settings)
+        guard early.keys.map(\.label) == ["⌘ K"] else {
+            throw OpenRecordError.io("keyboard timeline returned an unexpected early state")
+        }
+        guard timeline.state(at: 0.99, settings: settings).keys.isEmpty else {
+            throw OpenRecordError.io("keyboard timeline displayed a shortcut before its timestamp")
+        }
+        let later = timeline.state(at: 1.45, settings: settings)
+        guard later.keys.map(\.label) == ["⌘ K", "Enter"] else {
+            throw OpenRecordError.io("keyboard timeline ordering did not match capture order")
+        }
+        settings.maxVisibleKeys = 1
+        guard timeline.state(at: 1.45, settings: settings).keys.map(\.label) == ["Enter"] else {
+            throw OpenRecordError.io("keyboard timeline did not retain the most recent shortcut")
+        }
+        settings.maxVisibleKeys = 3
+        let fading = timeline.state(at: 2.30, settings: settings)
+        guard fading.keys.count == 1,
+              fading.keys[0].label == "Enter",
+              fading.keys[0].opacity > 0,
+              fading.keys[0].opacity < 1,
+              timeline.state(at: 2.5, settings: settings).keys.isEmpty
+        else {
+            throw OpenRecordError.io("keyboard timeline fade boundaries were incorrect")
+        }
+
+        let canvas = CGSize(width: 1920, height: 1080)
+        guard let previewGeometry = KeyboardOverlayLayout.geometry(
+            for: later,
+            settings: settings,
+            canvasSize: canvas,
+            canvasPadding: 48
+        ) else {
+            throw OpenRecordError.io("keyboard geometry should be visible")
+        }
+        // Export and preview both consume this shared geometry in canvas
+        // pixels; verify its rects are contiguous and remain inside the canvas.
+        guard previewGeometry.keyRects.count == later.keys.count else {
+            throw OpenRecordError.io("keyboard geometry key count mismatch")
+        }
+        let canvasRect = CGRect(origin: .zero, size: canvas)
+        for rect in previewGeometry.keyRects {
+            guard canvasRect.contains(rect) else {
+                throw OpenRecordError.io("keyboard key escaped the canvas bounds")
+            }
+        }
+        try expectClose(
+            previewGeometry.bounds.midX,
+            canvas.width / 2,
+            "bottom-center keyboard geometry"
+        )
+        settings.position = .bottomLeft
+        guard let leftGeometry = KeyboardOverlayLayout.geometry(
+            for: later,
+            settings: settings,
+            canvasSize: canvas,
+            canvasPadding: 48
+        ) else {
+            throw OpenRecordError.io("bottom-left keyboard geometry should be visible")
+        }
+        try expectClose(leftGeometry.bounds.minX, 48, "bottom-left keyboard inset")
+    }
+
+    static func keyboardRendererProducesBoundedImage() throws {
+        let settings = KeyboardOverlaySettings(enabled: true)
+        let state = KeyboardOverlayState(
+            keys: [KeyboardOverlayKey(id: 1, label: "⌘ K", opacity: 1)]
+        )
+        let canvas = CGSize(width: 1920, height: 1080)
+        guard let geometry = KeyboardOverlayLayout.geometry(
+            for: state,
+            settings: settings,
+            canvasSize: canvas,
+            canvasPadding: 48
+        ), let image = KeyboardOverlayRenderer.image(
+            state: state,
+            settings: settings,
+            canvasSize: canvas,
+            canvasPadding: 48
+        ) else {
+            throw OpenRecordError.io("keyboard renderer did not produce an image")
+        }
+        guard image.extent.width < canvas.width / 2,
+              image.extent.height < canvas.height / 2
+        else {
+            throw OpenRecordError.io("keyboard renderer allocated a full-canvas image")
+        }
+        try expectClose(image.extent.midX, geometry.bounds.midX, "keyboard image horizontal placement")
+        try expectClose(
+            image.extent.midY,
+            canvas.height - geometry.bounds.midY,
+            "keyboard image vertical placement"
+        )
     }
 
     static func jsonlMissingIsEmpty() throws {

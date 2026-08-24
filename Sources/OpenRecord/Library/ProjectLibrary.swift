@@ -15,6 +15,7 @@ import Foundation
 ///   system.m4a
 ///   mouse.jsonl
 ///   clicks.jsonl
+///   keys.jsonl
 ///   target.jsonl
 ///   cursors/
 /// ```
@@ -383,7 +384,10 @@ public struct ProjectLibrary: Sendable {
         let projectURL = projectURL.standardizedFileURL
         try withAccess(to: projectURL) {
             try validateProjectBundleURL(projectURL, fileManager: .default)
-            try AtomicFileWrite.writeJSON(document, to: ProjectLayout.documentURL(in: projectURL))
+            try AtomicFileWrite.writeJSON(
+                document.upgradedForSave(),
+                to: ProjectLayout.documentURL(in: projectURL)
+            )
         }
     }
 
@@ -435,7 +439,10 @@ public struct ProjectLibrary: Sendable {
             )
             do {
                 try fm.copyItem(at: source, to: staging)
-                try AtomicFileWrite.writeJSON(document, to: ProjectLayout.documentURL(in: staging))
+                try AtomicFileWrite.writeJSON(
+                    document.upgradedForSave(),
+                    to: ProjectLayout.documentURL(in: staging)
+                )
                 if fm.fileExists(atPath: destination.path) {
                     _ = try fm.replaceItemAt(destination, withItemAt: staging, backupItemName: nil, options: [])
                 } else {

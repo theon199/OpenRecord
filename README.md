@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, and cursor telemetry. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim and restyle the canvas, and exports an H.264 MP4.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, and optional keyboard shortcuts. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim and restyle the canvas, and exports an H.264 MP4.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -48,6 +48,7 @@ The first-run screen has **Open Settings** / **Request Remaining**. After flippi
 
 - **⌃⌥⌘R** starts and stops from anywhere (also in the Recording menu and the menu-bar extra).
 - **New Recording** from the library toolbar, File → New Recording…, or the menu-bar extra. Pick a **display** or **window**, then Record (3–2–1 countdown).
+- **Record keyboard shortcuts** adds shortcut chords and navigation keys to a separate overlay track. Ordinary unmodified typing and all input while macOS Secure Input is active are omitted.
 - Stop with **⌃⌥⌘R** or the Stop button. OpenRecord then writes the project and generates auto-zooms from cursor activity.
 
 ## Library folder
@@ -64,7 +65,7 @@ Open a project from the sidebar.
 
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
 - **Timeline**: playhead, trim in/out handles, zoom blocks (drag to move/resize). Space play/pause, Delete removes the selected zoom.
-- **Inspector**: zoom amount, background, padding, corner radius, cursor scale, export.
+- **Inspector**: zoom amount, background, padding, corner radius, cursor scale, keyboard overlay controls, export.
 
 **Export…** (⌘E) renders the **in-memory** document (current trims, zoom ranges, canvas) — not a stale re-read from disk. Output is H.264 High, Rec.709, **1080p-capped** (long edge ≤ 1920, short ≤ 1080), 60 fps if the source averages ≥ 45 fps else 30. Mic + system AAC are mixed to one stereo 48 kHz track when those files exist.
 
@@ -75,14 +76,16 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # createdAt, app version, display bounds, scale, capture target
-  project.json              # trims, zoom ranges, canvas, cursor sprites
+  project.json              # v2: trims, zooms, canvas, cursor sprites, keyboard overlay
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     mic.m4a                 # microphone (may be absent)
     system.m4a              # system audio (may be absent)
     mouse.jsonl             # { t, x, y, cursorId, visible? } in points, ~90–120 Hz
     clicks.jsonl            # { t, button, down }
+    keys.jsonl              # optional { t, key, modifiers, down } shortcut events
     target.jsonl            # optional timestamped target bounds for moving/resizing windows
+    thumb.jpg               # representative library thumbnail
     cursors/                # sprite PNGs + hotspot in project.json
 ```
 
@@ -92,4 +95,4 @@ Coordinates are **points** (Quartz, origin top-left of the main display). Cursor
 
 ## Out of scope
 
-No webcam, captions, motion blur, keyboard overlay, annotations, GIF, iPhone, shareable links, noise reduction, or in-app OAuth.
+No webcam, captions, motion blur, annotations, GIF, iPhone, shareable links, noise reduction, or in-app OAuth.

@@ -60,6 +60,14 @@ final class AppModel {
     var isLoadingSources = false
     var degradedOpenMessage: String?
     var saveFailureMessage: String?
+    var capturesKeyboardShortcuts = true {
+        didSet {
+            UserDefaults.standard.set(
+                capturesKeyboardShortcuts,
+                forKey: Self.capturesKeyboardShortcutsDefaultsKey
+            )
+        }
+    }
 
     var allPermissionsGranted: Bool {
         CapturePermissionKind.allCases.allSatisfy { permissionGranted[$0] == true }
@@ -89,9 +97,18 @@ final class AppModel {
     private var pendingDegradedOpen: PendingDegradedOpen?
     private var pendingEditorTransition: PendingEditorTransition?
     private var thumbnailTask: Task<Void, Never>?
+    private static let capturesKeyboardShortcutsDefaultsKey =
+        "OpenRecord.capturesKeyboardShortcuts"
 
     init() {
         library = .resolved()
+        if UserDefaults.standard.object(
+            forKey: Self.capturesKeyboardShortcutsDefaultsKey
+        ) != nil {
+            capturesKeyboardShortcuts = UserDefaults.standard.bool(
+                forKey: Self.capturesKeyboardShortcutsDefaultsKey
+            )
+        }
         refreshPermissions()
     }
 
@@ -662,8 +679,20 @@ final class AppModel {
         do {
             try library.ensureRootExists()
             let url = try library.create(name: name, meta: meta)
+            try library.save(
+                document: ProjectDocument(
+                    keyboardOverlay: KeyboardOverlaySettings(
+                        enabled: capturesKeyboardShortcuts
+                    )
+                ),
+                to: url
+            )
             recordingURL = url
-            try await capture.start(target: source.target, projectURL: url)
+            try await capture.start(
+                target: source.target,
+                projectURL: url,
+                capturesKeyboardShortcuts: capturesKeyboardShortcuts
+            )
             guard capture.isRunning else { return }
             isRecording = true
             recordedDuration = 0

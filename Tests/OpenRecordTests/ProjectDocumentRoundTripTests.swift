@@ -42,7 +42,14 @@ enum ProjectDocumentJSONRoundTrip {
                 aspectWidth: 16,
                 aspectHeight: 9
             ),
-            cursorSprites: [sprite]
+            cursorSprites: [sprite],
+            keyboardOverlay: KeyboardOverlaySettings(
+                enabled: true,
+                position: .bottomLeft,
+                fadeDelay: 1.2,
+                maxVisibleKeys: 4
+            ),
+            stylePresetID: "custom-demo"
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -51,8 +58,36 @@ enum ProjectDocumentJSONRoundTrip {
             throw OpenRecordError.io("ProjectDocument JSON round-trip produced a different value")
         }
 
+        try assertLegacyV1Migration()
         try assertCanvasPresetsPreserveFormatAndCursorChoices()
         try assertUndoHistoryCoalescesContinuousEdits()
+    }
+
+    private static func assertLegacyV1Migration() throws {
+        let legacyJSON = Data(
+            #"{"formatVersion":1,"trimIn":0.25,"zoomRanges":[],"cursorSprites":[]}"#.utf8
+        )
+        let legacy = try ProjectJSON.decoder.decode(ProjectDocument.self, from: legacyJSON)
+        guard legacy.formatVersion == 1,
+              legacy.keyboardOverlay == .disabled,
+              legacy.stylePresetID == nil
+        else {
+            throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
+        }
+
+        let upgraded = legacy.upgradedForSave()
+        guard upgraded.formatVersion == 2,
+              upgraded.keyboardOverlay == .disabled,
+              upgraded.stylePresetID == CanvasPreset.defaultStyle.id
+        else {
+            throw OpenRecordError.io("The first-save migration did not produce the v2 defaults")
+        }
+
+        var future = upgraded
+        future.formatVersion = 7
+        guard future.upgradedForSave().formatVersion == 7 else {
+            throw OpenRecordError.io("Saving attempted to downgrade a future project format")
+        }
     }
 
     private static func assertCanvasPresetsPreserveFormatAndCursorChoices() throws {

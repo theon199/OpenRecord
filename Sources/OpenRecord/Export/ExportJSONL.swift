@@ -1,6 +1,7 @@
 import Foundation
 
-/// Compact JSON-lines reader for `mouse.jsonl` / `clicks.jsonl`.
+/// Compact JSON-lines reader for capture telemetry such as `mouse.jsonl`,
+/// `clicks.jsonl`, and `keys.jsonl`.
 ///
 /// Missing or empty files decode as `[]` so export still runs without telemetry
 /// (cursor overlay is then skipped).

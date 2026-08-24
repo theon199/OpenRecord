@@ -82,6 +82,14 @@ private enum ExportSession {
             TargetGeometrySample.self,
             from: ProjectLayout.targetGeometryURL(in: bundleURL)
         )) ?? []
+        // Keyboard telemetry is optional for v1 projects and for captures made
+        // while secure input was enabled. A missing or malformed sidecar must
+        // not prevent the video itself from exporting.
+        let keys = (try? ExportJSONL.decode(
+            KeySample.self,
+            from: ProjectLayout.keysURL(in: bundleURL)
+        )) ?? []
+        let keyboardTimeline = KeyboardOverlayTimeline(samples: keys)
 
         let engine = ZoomEngine(
             document: project,
@@ -173,6 +181,7 @@ private enum ExportSession {
             context: ciContext,
             colorSpace: colorSpace,
             canvas: project.canvas,
+            keyboardOverlay: project.keyboardOverlay,
             layout: layout,
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
@@ -248,6 +257,10 @@ private enum ExportSession {
                 let clickAge = clicking
                     ? (ExportLayout.primaryClickAge(at: t, clicks: engine.smoother.clicks) ?? 0)
                     : nil
+                let keyboardState = keyboardTimeline.state(
+                    at: t,
+                    settings: project.keyboardOverlay
+                )
 
                 let pixelBuffer: CVPixelBuffer
                 if let pool = adaptor.pixelBufferPool {
@@ -270,6 +283,7 @@ private enum ExportSession {
                     cursorUV: cursorUV,
                     clicking: clicking,
                     clickAge: clickAge,
+                    keyboardState: keyboardState,
                     into: pixelBuffer
                 )
 

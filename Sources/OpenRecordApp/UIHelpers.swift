@@ -61,7 +61,9 @@ struct LibraryItem: Identifiable, Hashable {
 }
 
 enum TelemetryLoader {
-    static func load(from projectURL: URL) throws -> (mouse: [CursorSample], clicks: [ClickSample]) {
+    static func load(
+        from projectURL: URL
+    ) throws -> (mouse: [CursorSample], clicks: [ClickSample], keys: [KeySample]) {
         let mouse = try ProjectJSON.decodeJSONL(
             CursorSample.self,
             from: ProjectLayout.mouseURL(in: projectURL)
@@ -70,7 +72,11 @@ enum TelemetryLoader {
             ClickSample.self,
             from: ProjectLayout.clicksURL(in: projectURL)
         )
-        return (mouse, clicks)
+        let keys = try ProjectJSON.decodeJSONL(
+            KeySample.self,
+            from: ProjectLayout.keysURL(in: projectURL)
+        )
+        return (mouse, clicks, keys)
     }
 }
 

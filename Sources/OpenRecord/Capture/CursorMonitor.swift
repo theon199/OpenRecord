@@ -1,3 +1,5 @@
+import AppKit
+import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
 import QuartzCore
@@ -10,6 +12,7 @@ final class CursorMonitor: @unchecked Sendable {
     private let geometryQueue = DispatchQueue(label: "app.openrecord.desktop.capture.target", qos: .utility)
     private var mouseWriter: JSONLWriter<CursorSample>?
     private var clickWriter: JSONLWriter<ClickSample>?
+    private var keyWriter: JSONLWriter<KeySample>?
     private var targetWriter: JSONLWriter<TargetGeometrySample>?
     private let stateLock = NSLock()
     private var recordingStart: CFTimeInterval?
@@ -20,16 +23,20 @@ final class CursorMonitor: @unchecked Sendable {
     private var targetKind: CaptureTarget?
     private var targetVisible = false
     private var pendingGeometry: TargetGeometrySample?
+    private var pressedKeys: [UInt16: PressedKey] = [:]
     private(set) var closeWarnings = Set<CaptureWarningCode>()
 
     func start(mouseURL: URL, clicksURL: URL) throws {
         try start(mouseURL: mouseURL, clicksURL: clicksURL, target: nil, initialBounds: nil, targetURL: nil)
     }
 
-    func start(mouseURL: URL, clicksURL: URL, target: CaptureTarget?, initialBounds: Rect2D?, targetURL: URL?) throws {
+    func start(mouseURL: URL, clicksURL: URL, target: CaptureTarget?, initialBounds: Rect2D?, targetURL: URL?, keysURL: URL? = nil) throws {
         mouseWriter = try JSONLWriter(url: mouseURL)
         clickWriter = try JSONLWriter(url: clicksURL)
+        if let keysURL { keyWriter = try JSONLWriter(url: keysURL) }
         if let targetURL { targetWriter = try JSONLWriter(url: targetURL) }
+        pressedKeys.removeAll()
+        closeWarnings.removeAll()
         stateLock.lock()
         targetKind = target
         targetBounds = initialBounds?.cgRect
@@ -63,6 +70,7 @@ final class CursorMonitor: @unchecked Sendable {
         stateLock.lock()
         recordingStart = time
         lastMoveTime = -1
+        pressedKeys.removeAll()
         let geometry = pendingGeometry
         pendingGeometry = nil
         stateLock.unlock()
@@ -81,26 +89,36 @@ final class CursorMonitor: @unchecked Sendable {
         if let port { CFMachPortInvalidate(port) }
         port = nil
         runLoopSource = nil
+        stateLock.lock()
+        pressedKeys.removeAll()
+        recordingStart = nil
+        stateLock.unlock()
     }
 
     func closeFiles() throws {
-        mouseWriter?.close(); clickWriter?.close(); targetWriter?.close()
+        mouseWriter?.close(); clickWriter?.close(); keyWriter?.close(); targetWriter?.close()
         let mouseError = mouseWriter?.writeError
         let clickError = clickWriter?.writeError
+        let keyError = keyWriter?.writeError
         let targetError = targetWriter?.writeError
-        mouseWriter = nil; clickWriter = nil; targetWriter = nil
-        closeWarnings.removeAll()
+        mouseWriter = nil; clickWriter = nil; keyWriter = nil; targetWriter = nil
         if mouseError != nil { closeWarnings.insert(.truncatedMouseTelemetry) }
         if clickError != nil { closeWarnings.insert(.truncatedClickTelemetry) }
+        if keyError != nil { closeWarnings.insert(.truncatedKeyboardTelemetry) }
         if targetError != nil { closeWarnings.insert(.truncatedTargetGeometry) }
         if let mouseError { throw mouseError }
         if let clickError { throw clickError }
+        if let keyError { throw keyError }
         if let targetError { throw targetError }
     }
 
     fileprivate func handle(type: CGEventType, event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let port { CGEvent.tapEnable(tap: port, enable: true) }
+            return
+        }
+        if type == .keyDown || type == .keyUp {
+            handleKeyboard(type: type, event: event)
             return
         }
         stateLock.lock(); let start = recordingStart; stateLock.unlock()
@@ -118,6 +136,48 @@ final class CursorMonitor: @unchecked Sendable {
             guard updateVisibility(t: t, location: location) else { return }
             writeMove(t: t, location: location, force: false)
         default: break
+        }
+    }
+
+    private func handleKeyboard(type: CGEventType, event: CGEvent) {
+        guard keyWriter != nil else { return }
+        if IsSecureEventInputEnabled() {
+            stateLock.lock()
+            pressedKeys.removeAll()
+            let start = recordingStart
+            stateLock.unlock()
+            if start != nil, keyWriter != nil { closeWarnings.insert(.keyboardSecureInputGap) }
+            return
+        }
+        stateLock.lock(); let start = recordingStart; stateLock.unlock()
+        guard let start else { return }
+        let t = CACurrentMediaTime() - start
+        guard t >= 0 else { return }
+
+        let keyCode = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+        let modifiers = Self.modifiers(from: event.flags)
+        let isDown = type == .keyDown
+        let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        let rawLabel = KeyboardCapturePolicy.specialKeyLabel(keyCode: keyCode)
+            ?? NSEvent(cgEvent: event)?.charactersIgnoringModifiers
+            ?? ""
+        let label = rawLabel.count == 1 ? rawLabel.uppercased() : rawLabel
+
+        if isDown {
+            guard !isAutorepeat,
+                  KeyboardCapturePolicy.shouldCapture(keyCode: keyCode, modifiers: modifiers, label: label)
+            else { return }
+            stateLock.lock()
+            guard pressedKeys[keyCode] == nil else { stateLock.unlock(); return }
+            pressedKeys[keyCode] = PressedKey(label: label, modifiers: modifiers)
+            stateLock.unlock()
+            keyWriter?.write(KeySample(t: t, key: label, modifiers: modifiers, down: true))
+        } else {
+            stateLock.lock()
+            let pressed = pressedKeys.removeValue(forKey: keyCode)
+            stateLock.unlock()
+            guard let pressed else { return }
+            keyWriter?.write(KeySample(t: t, key: pressed.label, modifiers: pressed.modifiers, down: false))
         }
     }
 
@@ -191,9 +251,24 @@ final class CursorMonitor: @unchecked Sendable {
         }
     }
 
+    private static func modifiers(from flags: CGEventFlags) -> [KeyModifier] {
+        var modifiers: [KeyModifier] = []
+        if flags.contains(.maskControl) { modifiers.append(.control) }
+        if flags.contains(.maskAlternate) { modifiers.append(.option) }
+        if flags.contains(.maskShift) { modifiers.append(.shift) }
+        if flags.contains(.maskCommand) { modifiers.append(.command) }
+        if flags.contains(.maskSecondaryFn) { modifiers.append(.function) }
+        return modifiers
+    }
+
     private static let eventMask: CGEventMask = {
-        [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp].reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+        [CGEventType.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .keyDown, .keyUp].reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
     }()
+
+    private struct PressedKey: Sendable {
+        var label: String
+        var modifiers: [KeyModifier]
+    }
 }
 
 private func openRecordCursorEventTap(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {

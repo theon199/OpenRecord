@@ -32,7 +32,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private var targetInitialBounds: Rect2D?
     var onUnexpectedStop: ((Error) -> Void)?
 
-    func start(target: CaptureTarget, projectURL: URL) async throws {
+    func start(target: CaptureTarget, projectURL: URL, capturesKeyboardShortcuts: Bool = true) async throws {
         self.projectURL = projectURL; self.captureTarget = target; createdAt = Date()
         try prepareRecordingDirectory(in: projectURL)
         cursorSprite = try await MainActor.run { try CursorSpriteCapture.writeDefaultArrow(to: ProjectLayout.cursorsDirectory(in: projectURL)) }
@@ -44,8 +44,9 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         videoWriter = try SampleBufferWriter.video(url: ProjectLayout.displayVideoURL(in: projectURL), width: pixelWidth, height: pixelHeight, queue: videoQueue)
         systemAudioWriter = try SampleBufferWriter.systemAudio(url: ProjectLayout.systemAudioURL(in: projectURL), queue: audioQueue)
         let targetURL = ProjectLayout.targetGeometryURL(in: projectURL)
+        let keysURL = capturesKeyboardShortcuts ? ProjectLayout.keysURL(in: projectURL) : nil
         try await MainActor.run {
-            try cursor.start(mouseURL: ProjectLayout.mouseURL(in: projectURL), clicksURL: ProjectLayout.clicksURL(in: projectURL), target: target, initialBounds: targetInitialBounds, targetURL: targetURL)
+            try cursor.start(mouseURL: ProjectLayout.mouseURL(in: projectURL), clicksURL: ProjectLayout.clicksURL(in: projectURL), target: target, initialBounds: targetInitialBounds, targetURL: targetURL, keysURL: keysURL)
             try mic.start(url: ProjectLayout.microphoneAudioURL(in: projectURL))
         }
         let configuration = SCStreamConfiguration()
@@ -102,7 +103,8 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         }
         let hasUsableVideo = await Self.hasUsableVideo(at: ProjectLayout.displayVideoURL(in: projectURL!))
         if !hasUsableVideo { healthWarnings.insert(.missingDisplayVideo) }
-        let recovered = reason != .manual || !healthWarnings.isEmpty
+        let recoveryWarnings = healthWarnings.subtracting([.keyboardSecureInputGap])
+        let recovered = reason != .manual || !recoveryWarnings.isEmpty
         let health = CaptureHealth(state: recovered ? .recovered : .complete, warnings: healthWarnings.sorted { $0.rawValue < $1.rawValue })
         do { try writeSidecars(health: health) } catch { finalError = finalError ?? error }
         if let finalError, !hasUsableVideo { throw finalError }

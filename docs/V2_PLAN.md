@@ -63,10 +63,12 @@ editor and render through the shared model/compositor path. Default, Dark,
 Light, and Minimal canvas style presets are also available without changing a
 project's aspect ratio or cursor scale. Library projects can now be renamed
 safely, and representative JPEG thumbnails are generated on capture completion
-and backfilled for existing recordings.
+and backfilled for existing recordings. Privacy-filtered keyboard shortcut
+telemetry, a configurable pill overlay, preview/export rendering, and the
+backward-compatible format-version-2 migration are now implemented as well.
 
-Next: keyboard capture/overlay and the format-version-2 migration. v2.1 and
-v2.2 have not started.
+Next: auto-zoom sensitivity/easing improvements, then v2.1 motion, webcam, and
+audio work. v2.1 and v2.2 have not started.
 
 ---
 

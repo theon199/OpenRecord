@@ -122,6 +122,16 @@ struct RecorderView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
             }
+
+            Toggle(
+                "Record keyboard shortcuts",
+                isOn: $model.capturesKeyboardShortcuts
+            )
+            .toggleStyle(.switch)
+            Text("Shortcut chords and navigation keys are recorded for the overlay. Ordinary typing and Secure Input are omitted.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

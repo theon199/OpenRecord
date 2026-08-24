@@ -258,7 +258,76 @@ public enum CaptureWarningCode: String, Codable, Sendable, Hashable {
     case truncatedMicrophone
     case truncatedMouseTelemetry
     case truncatedClickTelemetry
+    case truncatedKeyboardTelemetry
     case truncatedTargetGeometry
+    case keyboardSecureInputGap
+}
+
+public enum KeyboardOverlayStyle: String, Codable, CaseIterable, Sendable, Hashable {
+    case pill
+}
+
+public enum KeyboardOverlayPosition: String, Codable, CaseIterable, Sendable, Hashable {
+    case bottomCenter = "bottom-center"
+    case bottomLeft = "bottom-left"
+}
+
+public struct KeyboardOverlaySettings: Codable, Sendable, Hashable {
+    public var enabled: Bool
+    public var style: KeyboardOverlayStyle
+    public var position: KeyboardOverlayPosition
+    public var fadeDelay: TimeInterval
+    public var maxVisibleKeys: Int
+
+    public init(
+        enabled: Bool = false,
+        style: KeyboardOverlayStyle = .pill,
+        position: KeyboardOverlayPosition = .bottomCenter,
+        fadeDelay: TimeInterval = 0.8,
+        maxVisibleKeys: Int = 3
+    ) {
+        self.enabled = enabled
+        self.style = style
+        self.position = position
+        self.fadeDelay = fadeDelay
+        self.maxVisibleKeys = maxVisibleKeys
+    }
+
+    public static let disabled = KeyboardOverlaySettings()
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case style
+        case position
+        case fadeDelay
+        case maxVisibleKeys
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        style = (try? container.decode(KeyboardOverlayStyle.self, forKey: .style)) ?? .pill
+        position = (try? container.decode(KeyboardOverlayPosition.self, forKey: .position))
+            ?? .bottomCenter
+        fadeDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .fadeDelay) ?? 0.8
+        maxVisibleKeys = try container.decodeIfPresent(Int.self, forKey: .maxVisibleKeys) ?? 3
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(style, forKey: .style)
+        try container.encode(position, forKey: .position)
+        try container.encode(fadeDelay, forKey: .fadeDelay)
+        try container.encode(maxVisibleKeys, forKey: .maxVisibleKeys)
+    }
+
+    public var normalized: KeyboardOverlaySettings {
+        var value = self
+        value.fadeDelay = min(max(value.fadeDelay, 0.2), 3)
+        value.maxVisibleKeys = min(max(value.maxVisibleKeys, 1), 5)
+        return value
+    }
 }
 
 public struct CaptureHealth: Codable, Sendable, Hashable {
@@ -274,7 +343,7 @@ public struct CaptureHealth: Codable, Sendable, Hashable {
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {
-    public static let currentFormatVersion = 1
+    public static let currentFormatVersion = 2
 
     public var formatVersion: Int
     public var trimIn: TimeInterval
@@ -282,6 +351,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var zoomRanges: [ZoomRange]
     public var canvas: CanvasSettings
     public var cursorSprites: [CursorSprite]
+    public var keyboardOverlay: KeyboardOverlaySettings
+    public var stylePresetID: String?
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -289,7 +360,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         trimOut: TimeInterval? = nil,
         zoomRanges: [ZoomRange] = [],
         canvas: CanvasSettings = .default,
-        cursorSprites: [CursorSprite] = []
+        cursorSprites: [CursorSprite] = [],
+        keyboardOverlay: KeyboardOverlaySettings = .disabled,
+        stylePresetID: String? = nil
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -297,6 +370,59 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.zoomRanges = zoomRanges
         self.canvas = canvas
         self.cursorSprites = cursorSprites
+        self.keyboardOverlay = keyboardOverlay
+        self.stylePresetID = stylePresetID ?? CanvasPreset.matching(canvas)?.id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion
+        case trimIn
+        case trimOut
+        case zoomRanges
+        case canvas
+        case cursorSprites
+        case keyboardOverlay
+        case stylePresetID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
+        trimIn = try container.decodeIfPresent(TimeInterval.self, forKey: .trimIn) ?? 0
+        trimOut = try container.decodeIfPresent(TimeInterval.self, forKey: .trimOut)
+        zoomRanges = try container.decodeIfPresent([ZoomRange].self, forKey: .zoomRanges) ?? []
+        canvas = try container.decodeIfPresent(CanvasSettings.self, forKey: .canvas) ?? .default
+        cursorSprites = try container.decodeIfPresent([CursorSprite].self, forKey: .cursorSprites) ?? []
+        keyboardOverlay = try container.decodeIfPresent(
+            KeyboardOverlaySettings.self,
+            forKey: .keyboardOverlay
+        ) ?? .disabled
+        stylePresetID = try container.decodeIfPresent(String.self, forKey: .stylePresetID)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(formatVersion, forKey: .formatVersion)
+        try container.encode(trimIn, forKey: .trimIn)
+        try container.encodeIfPresent(trimOut, forKey: .trimOut)
+        try container.encode(zoomRanges, forKey: .zoomRanges)
+        try container.encode(canvas, forKey: .canvas)
+        try container.encode(cursorSprites, forKey: .cursorSprites)
+        try container.encode(keyboardOverlay, forKey: .keyboardOverlay)
+        try container.encodeIfPresent(stylePresetID, forKey: .stylePresetID)
+    }
+
+    /// Opening a legacy project is read-only. Write paths call this helper so
+    /// the first real save performs the v2 migration without downgrading a
+    /// document created by a newer OpenRecord version.
+    public func upgradedForSave() -> ProjectDocument {
+        var value = self
+        value.formatVersion = max(value.formatVersion, Self.currentFormatVersion)
+        value.keyboardOverlay = value.keyboardOverlay.normalized
+        if value.stylePresetID == nil {
+            value.stylePresetID = CanvasPreset.matching(value.canvas)?.id
+        }
+        return value
     }
 }
 

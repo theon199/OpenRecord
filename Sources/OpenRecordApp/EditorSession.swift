@@ -24,6 +24,7 @@ private actor ProjectSaveCoordinator {
 struct EditorTelemetryLoadIssue: Error, LocalizedError, Sendable {
     let mouse: [CursorSample]
     let clicks: [ClickSample]
+    let keys: [KeySample]
     let messages: [String]
 
     var errorDescription: String? {
@@ -41,8 +42,10 @@ final class EditorSession {
     var document: ProjectDocument
     var samples: [CursorSample]
     var clicks: [ClickSample]
+    var keys: [KeySample]
     var targetGeometry: [TargetGeometrySample]
     var engine: ZoomEngine
+    var keyboardTimeline: KeyboardOverlayTimeline
 
     var duration: TimeInterval
     var playhead: TimeInterval = 0
@@ -126,6 +129,10 @@ final class EditorSession {
             ClickSample.self,
             from: ProjectLayout.clicksURL(in: opened.url)
         ) }
+        let keysResult = Result { try ProjectJSON.decodeJSONL(
+            KeySample.self,
+            from: ProjectLayout.keysURL(in: opened.url)
+        ) }
         let targetGeometryResult = Result { try ProjectJSON.decodeJSONL(
             TargetGeometrySample.self,
             from: ProjectLayout.targetGeometryURL(in: opened.url)
@@ -133,6 +140,7 @@ final class EditorSession {
         var messages: [String] = []
         let mouse = (try? mouseResult.get()) ?? []
         let clicks = (try? clicksResult.get()) ?? []
+        let keys = (try? keysResult.get()) ?? []
         let targetGeometry = (try? targetGeometryResult.get()) ?? []
         if case .failure(let error) = mouseResult {
             messages.append("Mouse telemetry: \(error.localizedDescription)")
@@ -140,11 +148,19 @@ final class EditorSession {
         if case .failure(let error) = clicksResult {
             messages.append("Click telemetry: \(error.localizedDescription)")
         }
+        if case .failure(let error) = keysResult {
+            messages.append("Keyboard telemetry: \(error.localizedDescription)")
+        }
         if case .failure(let error) = targetGeometryResult {
             messages.append("Target geometry: \(error.localizedDescription)")
         }
         if !messages.isEmpty, !allowDegradedTelemetry {
-            throw EditorTelemetryLoadIssue(mouse: mouse, clicks: clicks, messages: messages)
+            throw EditorTelemetryLoadIssue(
+                mouse: mouse,
+                clicks: clicks,
+                keys: keys,
+                messages: messages
+            )
         }
 
         let videoURL = ProjectLayout.displayVideoURL(in: opened.url)
@@ -153,6 +169,7 @@ final class EditorSession {
             videoURL: videoURL,
             samples: mouse,
             clicks: clicks,
+            keys: keys,
             fallbackWidth: max(Int((opened.meta.displayBounds.width * opened.meta.scale).rounded()), 1),
             fallbackHeight: max(Int((opened.meta.displayBounds.height * opened.meta.scale).rounded()), 1)
         )
@@ -180,6 +197,7 @@ final class EditorSession {
             document: opened.document,
             samples: mouse,
             clicks: clicks,
+            keys: keys,
             targetGeometry: targetGeometry,
             engine: engine,
             duration: media.duration,
@@ -210,6 +228,7 @@ final class EditorSession {
         document: ProjectDocument,
         samples: [CursorSample],
         clicks: [ClickSample],
+        keys: [KeySample],
         targetGeometry: [TargetGeometrySample],
         engine: ZoomEngine,
         duration: TimeInterval,
@@ -224,8 +243,10 @@ final class EditorSession {
         self.document = document
         self.samples = samples
         self.clicks = clicks
+        self.keys = keys
         self.targetGeometry = targetGeometry
         self.engine = engine
+        self.keyboardTimeline = KeyboardOverlayTimeline(samples: keys)
         self.duration = duration
         self.hasVideo = hasVideo
         self.sourceWidth = sourceWidth
@@ -411,6 +432,24 @@ final class EditorSession {
     ) {
         let before = document
         body(&document.canvas)
+        document.stylePresetID = CanvasPreset.matching(document.canvas)?.id
+        documentDidChange(from: before, actionName: actionName)
+    }
+
+    func applyCanvasPreset(_ preset: CanvasPreset) {
+        let before = document
+        preset.apply(to: &document.canvas)
+        document.stylePresetID = preset.id
+        documentDidChange(from: before, actionName: "Apply \(preset.name) Style")
+    }
+
+    func updateKeyboardOverlay(
+        actionName: String,
+        _ body: (inout KeyboardOverlaySettings) -> Void
+    ) {
+        let before = document
+        body(&document.keyboardOverlay)
+        document.keyboardOverlay = document.keyboardOverlay.normalized
         documentDidChange(from: before, actionName: actionName)
     }
 
@@ -499,9 +538,10 @@ final class EditorSession {
     func flushSave() async throws {
         saveTask?.cancel()
         let revision = editRevision
-        let snapshot = document
+        let snapshot = document.upgradedForSave()
         try await saveCoordinator.save(document: snapshot)
         guard revision == editRevision else { return }
+        document = snapshot
         markSaved()
         lastError = nil
     }
@@ -510,7 +550,7 @@ final class EditorSession {
     /// are flushed first so the copy never contains an older project.json.
     @discardableResult
     func saveCopy(to destinationURL: URL) async throws -> URL {
-        let snapshot = document
+        let snapshot = document.upgradedForSave()
         let library = library
         let projectURL = projectURL
         return try await Task.detached(priority: .utility) {
@@ -523,7 +563,7 @@ final class EditorSession {
     func discardUnsavedChanges() async {
         guard hasUnsavedChanges else { return }
         saveTask?.cancel()
-        let snapshot = savedDocument
+        let snapshot = savedDocument.upgradedForSave()
         document = snapshot
         editRevision &+= 1
         selectedZoomID = nil
@@ -532,6 +572,7 @@ final class EditorSession {
         // Serialize behind any save already in flight, then restore the last
         // known-good bytes so a stale autosave cannot win after Discard.
         try? await saveCoordinator.save(document: snapshot)
+        savedDocument = snapshot
         savedRevision = editRevision
     }
 
@@ -655,6 +696,7 @@ final class EditorSession {
     }
 
     private func markDirty() {
+        document = document.upgradedForSave()
         editRevision &+= 1
     }
 
@@ -734,10 +776,15 @@ final class EditorSession {
         videoURL: URL,
         samples: [CursorSample],
         clicks: [ClickSample],
+        keys: [KeySample],
         fallbackWidth: Int,
         fallbackHeight: Int
     ) async -> (duration: TimeInterval, width: Int, height: Int) {
-        var duration = max(samples.map(\.t).max() ?? 0, clicks.map(\.t).max() ?? 0)
+        var duration = max(
+            samples.map(\.t).max() ?? 0,
+            clicks.map(\.t).max() ?? 0,
+            keys.map(\.t).max() ?? 0
+        )
         var width = fallbackWidth
         var height = fallbackHeight
         if FileManager.default.fileExists(atPath: videoURL.path) {

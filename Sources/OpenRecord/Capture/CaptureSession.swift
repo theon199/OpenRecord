@@ -29,7 +29,7 @@ public final class CaptureSession: @unchecked Sendable {
 
     deinit { eventContinuation.finish() }
 
-    public func start(target: CaptureTarget, projectURL: URL) async throws {
+    public func start(target: CaptureTarget, projectURL: URL, capturesKeyboardShortcuts: Bool = true) async throws {
         try await CapturePermissions.ensureGranted()
         let reserved = unfairLock.withLock { () -> Bool in
             guard sessionState == .idle || sessionState == .finalized else { return false }
@@ -51,7 +51,7 @@ public final class CaptureSession: @unchecked Sendable {
             }
         }
         do {
-            try await pipeline.start(target: target, projectURL: projectURL)
+            try await pipeline.start(target: target, projectURL: projectURL, capturesKeyboardShortcuts: capturesKeyboardShortcuts)
         } catch {
             unfairLock.withLock {
                 if stopTask == nil {
