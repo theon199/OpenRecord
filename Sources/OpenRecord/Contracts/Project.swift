@@ -643,7 +643,7 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {
-    public static let currentFormatVersion = 2
+    public static let currentFormatVersion = 3
 
     public var formatVersion: Int
     public var trimIn: TimeInterval
@@ -659,6 +659,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var speedSegments: [SpeedSegment]
     public var muteAudioWhenSpedUp: Bool
     public var audioCleanup: AudioCleanupSettings
+    public var captions: [CaptionCue]
+    public var annotations: [Annotation]
+    public var videoExportSettings: VideoExportSettings
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -674,7 +677,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         zoomEasing: ZoomEasingPreset = .smooth,
         speedSegments: [SpeedSegment] = [],
         muteAudioWhenSpedUp: Bool = false,
-        audioCleanup: AudioCleanupSettings = .default
+        audioCleanup: AudioCleanupSettings = .default,
+        captions: [CaptionCue] = [],
+        annotations: [Annotation] = [],
+        videoExportSettings: VideoExportSettings = .default
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -690,6 +696,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.speedSegments = speedSegments
         self.muteAudioWhenSpedUp = muteAudioWhenSpedUp
         self.audioCleanup = audioCleanup
+        self.captions = captions
+        self.annotations = annotations
+        self.videoExportSettings = videoExportSettings
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -707,11 +716,19 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case speedSegments
         case muteAudioWhenSpedUp
         case audioCleanup
+        case captions
+        case annotations
+        case videoExportSettings
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         formatVersion = try container.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
+        guard formatVersion <= Self.currentFormatVersion else {
+            throw OpenRecordError.io(
+                "This project uses format version \(formatVersion), but this version of OpenRecord supports up to version \(Self.currentFormatVersion). Update OpenRecord before opening it."
+            )
+        }
         trimIn = try container.decodeIfPresent(TimeInterval.self, forKey: .trimIn) ?? 0
         trimOut = try container.decodeIfPresent(TimeInterval.self, forKey: .trimOut)
         zoomRanges = try container.decodeIfPresent([ZoomRange].self, forKey: .zoomRanges) ?? []
@@ -741,6 +758,12 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             AudioCleanupSettings.self,
             forKey: .audioCleanup
         )) ?? .default
+        captions = (try? container.decode([CaptionCue].self, forKey: .captions)) ?? []
+        annotations = (try? container.decode([Annotation].self, forKey: .annotations)) ?? []
+        videoExportSettings = (try? container.decode(
+            VideoExportSettings.self,
+            forKey: .videoExportSettings
+        )) ?? .default
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -759,11 +782,14 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encode(speedSegments, forKey: .speedSegments)
         try container.encode(muteAudioWhenSpedUp, forKey: .muteAudioWhenSpedUp)
         try container.encode(audioCleanup, forKey: .audioCleanup)
+        try container.encode(captions, forKey: .captions)
+        try container.encode(annotations, forKey: .annotations)
+        try container.encode(videoExportSettings, forKey: .videoExportSettings)
     }
 
-    /// Opening a legacy project is read-only. Write paths call this helper so
-    /// the first real save performs the v2 migration without downgrading a
-    /// document created by a newer OpenRecord version.
+    /// Opening a legacy project is read-only. Supported write paths call this
+    /// helper so the first real save performs the latest migration. They must
+    /// call `validatedForSave()` before encoding to reject newer schemas.
     public func upgradedForSave() -> ProjectDocument {
         var value = self
         value.formatVersion = max(value.formatVersion, Self.currentFormatVersion)
@@ -772,10 +798,23 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         value.canvas.cursorMotionBlur = value.canvas.cursorMotionBlur.normalized
         value.speedSegments = SpeedTimeline.normalizedSegments(value.speedSegments)
         value.audioCleanup = value.audioCleanup.normalized
+        value.captions = value.captions.map(\.normalized).sorted { $0.start < $1.start }
+        value.annotations = value.annotations.map(\.normalized).sorted { $0.start < $1.start }
         if value.stylePresetID == nil {
             value.stylePresetID = CanvasPreset.matching(value.canvas)?.id
         }
         return value
+    }
+
+    /// Write paths reject documents created by newer OpenRecord versions so
+    /// unknown future fields can never be silently discarded by this schema.
+    public func validatedForSave() throws -> ProjectDocument {
+        guard formatVersion <= Self.currentFormatVersion else {
+            throw OpenRecordError.io(
+                "Project format version \(formatVersion) is newer than the supported version \(Self.currentFormatVersion). Update OpenRecord before saving this project."
+            )
+        }
+        return upgradedForSave()
     }
 }
 

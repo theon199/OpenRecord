@@ -55,6 +55,11 @@ struct OpenRecordApp: App {
                 }
                 .keyboardShortcut("e")
                 .disabled(model.editor == nil)
+                Button("Export Snapshot…") {
+                    model.editor?.presentExportPanel(kind: .snapshot)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(model.editor == nil)
             }
         }
 

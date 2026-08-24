@@ -8,6 +8,9 @@ struct PreviewCanvas: View {
     @State private var anchorDrag: ZoomAnchorDrag?
     @State private var webcamDrag: WebcamOverlayDrag?
     @State private var webcamResize: WebcamOverlayResize?
+    @State private var annotationDrag: AnnotationDrag?
+    @State private var annotationResize: AnnotationResize?
+    @State private var arrowEndpointDrag: ArrowEndpointDrag?
 
     var body: some View {
         GeometryReader { geo in
@@ -23,10 +26,13 @@ struct PreviewCanvas: View {
                 canvas: canvas,
                 sourceWidth: sourceWidth,
                 sourceHeight: sourceHeight,
-                cropUV: crop
+                cropUV: crop,
+                resolution: session.document.videoExportSettings.resolution
             )
             let outer = ExportLayout.aspectFit(layout.size, in: CGRect(origin: .zero, size: geo.size))
             let viewScale = outer.width / CGFloat(max(layout.width, 1))
+            let authoredViewScale = viewScale
+                * ExportLayout.authoredContentScale(for: layout.size)
             let cursorMotionBlur = CursorMotionBlurEffect.state(
                 velocity: cursorVelocity,
                 canvasSize: layout.size,
@@ -85,6 +91,14 @@ struct PreviewCanvas: View {
                     viewScale: viewScale
                 )
 
+                ForEach(session.document.captions.filter { $0.isActive(at: session.playhead) }) { caption in
+                    captionOverlay(caption, outer: outer, viewScale: authoredViewScale)
+                }
+
+                ForEach(session.document.annotations.filter { $0.isActive(at: session.playhead) }) { annotation in
+                    annotationOverlay(annotation, outer: outer, viewScale: authoredViewScale)
+                }
+
                 if let zoom = session.selectedZoom {
                     zoomAnchorOverlay(
                         zoom: zoom,
@@ -97,6 +111,306 @@ struct PreviewCanvas: View {
             .clipped()
         }
         .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func captionOverlay(_ caption: CaptionCue, outer: CGRect, viewScale: CGFloat) -> some View {
+        let style = caption.style
+        let x = outer.minX + CGFloat(caption.style.position.defaultAnchor.x) * outer.width
+        let y = outer.minY + CGFloat(caption.style.position.defaultAnchor.y) * outer.height
+        let maxWidth = outer.width * CGFloat(style.maxWidth)
+        let horizontalPadding = 18 * viewScale
+        let verticalPadding = 12 * viewScale
+        let textMaxWidth = max(maxWidth - horizontalPadding * 2, 1)
+        return Text(caption.text)
+            .font(.custom("SF Pro Display", size: style.fontSize * Double(viewScale)))
+            .foregroundStyle(style.foreground.swiftUIColor)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: textMaxWidth)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .background(style.background.swiftUIColor, in: RoundedRectangle(cornerRadius: 6 * viewScale, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6 * viewScale, style: .continuous)
+                    .stroke(caption.id == session.selectedCaptionID ? .white : .clear, lineWidth: 1)
+            )
+            .position(x: x, y: y)
+            .contentShape(Rectangle())
+            .onTapGesture { session.selectCaption(caption.id) }
+            .accessibilityLabel("Caption \(caption.text)")
+    }
+
+    @ViewBuilder
+    private func annotationOverlay(_ annotation: Annotation, outer: CGRect, viewScale: CGFloat) -> some View {
+        let selected = annotation.id == session.selectedAnnotationID
+        switch annotation.kind {
+        case .text:
+            let horizontalPadding = 16 * viewScale
+            let verticalPadding = 12 * viewScale
+            let maxWidth = outer.width * 0.7
+            Text(annotation.text.isEmpty ? "Annotation" : annotation.text)
+                .font(.custom("SF Pro Display", size: annotation.fontSize * Double(viewScale)))
+                .foregroundStyle(annotation.color.swiftUIColor)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: max(maxWidth - horizontalPadding * 2, 1))
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, verticalPadding)
+                .background(annotation.background.swiftUIColor, in: RoundedRectangle(cornerRadius: 5 * viewScale, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 5 * viewScale).stroke(selected ? .white : .clear, lineWidth: 1))
+                .position(canvasPoint(annotation.position, in: outer))
+                .gesture(annotationMoveGesture(annotation, outer: outer))
+                .onTapGesture { session.selectAnnotation(annotation.id) }
+        case .arrow:
+            let start = canvasPoint(annotation.position, in: outer)
+            let end = canvasPoint(annotation.endPosition, in: outer)
+            arrowOverlay(
+                annotation,
+                start: start,
+                end: end,
+                selected: selected,
+                outer: outer,
+                viewScale: viewScale
+            )
+        case .spotlight:
+            let rect = canvasRect(annotation.rect, in: outer)
+            spotlightOverlay(
+                annotation,
+                rect: rect,
+                selected: selected,
+                outer: outer,
+                viewScale: viewScale
+            )
+        }
+    }
+
+    private func arrowOverlay(
+        _ annotation: Annotation,
+        start: CGPoint,
+        end: CGPoint,
+        selected: Bool,
+        outer: CGRect,
+        viewScale: CGFloat
+    ) -> some View {
+        let inset = max(16 * viewScale, 10)
+        let box = CGRect(
+            x: min(start.x, end.x) - inset,
+            y: min(start.y, end.y) - inset,
+            width: max(abs(end.x - start.x) + inset * 2, inset * 2),
+            height: max(abs(end.y - start.y) + inset * 2, inset * 2)
+        )
+        let localStart = CGPoint(x: start.x - box.minX, y: start.y - box.minY)
+        let localEnd = CGPoint(x: end.x - box.minX, y: end.y - box.minY)
+        let lineWidth = max(2 * viewScale, annotation.fontSize * viewScale / 18)
+        let angle = atan2(localEnd.y - localStart.y, localEnd.x - localStart.x)
+        let head = max(12 * viewScale, annotation.fontSize * viewScale * 0.55)
+        let left = CGPoint(
+            x: localEnd.x - head * cos(angle - .pi / 6),
+            y: localEnd.y - head * sin(angle - .pi / 6)
+        )
+        let right = CGPoint(
+            x: localEnd.x - head * cos(angle + .pi / 6),
+            y: localEnd.y - head * sin(angle + .pi / 6)
+        )
+
+        return ZStack(alignment: .topLeading) {
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(annotationMoveGesture(annotation, outer: outer))
+                .onTapGesture { session.selectAnnotation(annotation.id) }
+
+            Path { path in
+                path.move(to: localStart)
+                path.addLine(to: localEnd)
+                path.move(to: localEnd)
+                path.addLine(to: left)
+                path.move(to: localEnd)
+                path.addLine(to: right)
+            }
+            .stroke(
+                annotation.color.swiftUIColor,
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+            )
+            .allowsHitTesting(false)
+
+            if selected {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 10, height: 10)
+                    .position(localStart)
+                    .contentShape(Circle().inset(by: -7))
+                    .highPriorityGesture(
+                        arrowEndpointGesture(
+                            annotation,
+                            endpoint: .start,
+                            outer: outer
+                        )
+                    )
+                    .help("Drag to move the arrow start")
+                    .accessibilityLabel("Arrow start point")
+                Circle()
+                    .fill(annotation.color.swiftUIColor)
+                    .frame(width: 12, height: 12)
+                    .position(localEnd)
+                    .contentShape(Circle().inset(by: -7))
+                    .highPriorityGesture(
+                        arrowEndpointGesture(
+                            annotation,
+                            endpoint: .end,
+                            outer: outer
+                        )
+                    )
+                    .help("Drag to point the arrow")
+                    .accessibilityLabel("Arrow end point")
+            }
+        }
+        .frame(width: box.width, height: box.height)
+        .position(x: box.midX, y: box.midY)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Arrow annotation")
+    }
+
+    private func spotlightOverlay(
+        _ annotation: Annotation,
+        rect: CGRect,
+        selected: Bool,
+        outer: CGRect,
+        viewScale: CGFloat
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            Path { path in
+                path.addRect(outer)
+                path.addRoundedRect(
+                    in: rect,
+                    cornerSize: CGSize(width: 12 * viewScale, height: 12 * viewScale)
+                )
+            }
+            .fill(
+                .black.opacity(annotation.dimAmount),
+                style: FillStyle(eoFill: true)
+            )
+            .allowsHitTesting(false)
+
+            RoundedRectangle(cornerRadius: 12 * viewScale, style: .continuous)
+                .fill(.clear)
+                .stroke(
+                    annotation.color.swiftUIColor,
+                    lineWidth: max(2 * viewScale, annotation.fontSize * viewScale / 18)
+                )
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .contentShape(Rectangle())
+                .gesture(annotationMoveGesture(annotation, outer: outer))
+                .onTapGesture { session.selectAnnotation(annotation.id) }
+
+            if selected {
+                Circle()
+                    .fill(.white)
+                    .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
+                    .frame(width: 14, height: 14)
+                    .position(x: rect.maxX, y: rect.maxY)
+                    .gesture(annotationResizeGesture(annotation, outer: outer))
+            }
+        }
+    }
+
+    private func canvasPoint(_ point: Point2D, in outer: CGRect) -> CGPoint {
+        CGPoint(x: outer.minX + CGFloat(point.x) * outer.width, y: outer.minY + CGFloat(point.y) * outer.height)
+    }
+
+    private func canvasRect(_ rect: Rect2D, in outer: CGRect) -> CGRect {
+        CGRect(x: outer.minX + CGFloat(rect.x) * outer.width, y: outer.minY + CGFloat(rect.y) * outer.height, width: CGFloat(rect.width) * outer.width, height: CGFloat(rect.height) * outer.height)
+    }
+
+    private func annotationMoveGesture(_ annotation: Annotation, outer: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if annotationDrag == nil {
+                    session.pause()
+                    session.beginDocumentEdit(actionName: "Move Annotation")
+                    annotationDrag = AnnotationDrag(id: annotation.id, originalPosition: annotation.position, originalEndPosition: annotation.endPosition, originalRect: annotation.rect)
+                    session.selectAnnotation(annotation.id)
+                }
+                guard let drag = annotationDrag else { return }
+                let dx = Double(value.translation.width / max(outer.width, 1))
+                let dy = Double(value.translation.height / max(outer.height, 1))
+                session.updateSelectedAnnotation {
+                    $0.position = Point2D(x: drag.originalPosition.x + dx, y: drag.originalPosition.y + dy)
+                    $0.endPosition = Point2D(x: drag.originalEndPosition.x + dx, y: drag.originalEndPosition.y + dy)
+                    $0.rect = Rect2D(x: drag.originalRect.x + dx, y: drag.originalRect.y + dy, width: drag.originalRect.width, height: drag.originalRect.height)
+                }
+            }
+            .onEnded { _ in
+                session.endDocumentEdit()
+                annotationDrag = nil
+            }
+    }
+
+    private func annotationResizeGesture(_ annotation: Annotation, outer: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if annotationResize == nil {
+                    session.pause()
+                    session.beginDocumentEdit(actionName: "Resize Annotation")
+                    annotationResize = AnnotationResize(id: annotation.id, originalRect: annotation.rect)
+                    session.selectAnnotation(annotation.id)
+                }
+                guard let resize = annotationResize else { return }
+                let width = resize.originalRect.width + Double(value.translation.width / max(outer.width, 1))
+                let height = resize.originalRect.height + Double(value.translation.height / max(outer.height, 1))
+                session.updateSelectedAnnotation {
+                    $0.rect = Rect2D(x: resize.originalRect.x, y: resize.originalRect.y, width: width, height: height)
+                }
+            }
+            .onEnded { _ in
+                session.endDocumentEdit()
+                annotationResize = nil
+            }
+    }
+
+    private func arrowEndpointGesture(
+        _ annotation: Annotation,
+        endpoint: ArrowEndpoint,
+        outer: CGRect
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if arrowEndpointDrag == nil {
+                    session.pause()
+                    session.beginDocumentEdit(
+                        actionName: endpoint == .start ? "Move Arrow Start" : "Point Arrow"
+                    )
+                    arrowEndpointDrag = ArrowEndpointDrag(
+                        id: annotation.id,
+                        endpoint: endpoint,
+                        originalPosition: annotation.position,
+                        originalEndPosition: annotation.endPosition
+                    )
+                    session.selectAnnotation(annotation.id)
+                }
+                guard let drag = arrowEndpointDrag,
+                      drag.id == annotation.id,
+                      drag.endpoint == endpoint
+                else { return }
+                let dx = Double(value.translation.width / max(outer.width, 1))
+                let dy = Double(value.translation.height / max(outer.height, 1))
+                session.updateSelectedAnnotation {
+                    switch endpoint {
+                    case .start:
+                        $0.position = Point2D(
+                            x: drag.originalPosition.x + dx,
+                            y: drag.originalPosition.y + dy
+                        )
+                    case .end:
+                        $0.endPosition = Point2D(
+                            x: drag.originalEndPosition.x + dx,
+                            y: drag.originalEndPosition.y + dy
+                        )
+                    }
+                }
+            }
+            .onEnded { _ in
+                session.endDocumentEdit()
+                arrowEndpointDrag = nil
+            }
     }
 
     @ViewBuilder
@@ -520,6 +834,30 @@ private struct WebcamOverlayDrag {
 
 private struct WebcamOverlayResize {
     var originalSize: Double
+}
+
+private struct AnnotationDrag {
+    var id: UUID
+    var originalPosition: Point2D
+    var originalEndPosition: Point2D
+    var originalRect: Rect2D
+}
+
+private struct AnnotationResize {
+    var id: UUID
+    var originalRect: Rect2D
+}
+
+private enum ArrowEndpoint {
+    case start
+    case end
+}
+
+private struct ArrowEndpointDrag {
+    var id: UUID
+    var endpoint: ArrowEndpoint
+    var originalPosition: Point2D
+    var originalEndPosition: Point2D
 }
 
 private struct WebcamPreviewShape: Shape {

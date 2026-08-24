@@ -9,6 +9,8 @@ enum ExportLayoutSuite {
     static func run() throws {
         try outputSizePreservesAspectInside1080p()
         try aspectPresetsMapToExpectedOutputSizes()
+        try resolutionPresetsAndSourceSizing()
+        try authoredContentScaling()
         try evenDimensions()
         try frameRateSelection()
         try uvCropToPixelAndCIRects()
@@ -68,6 +70,64 @@ enum ExportLayoutSuite {
                 throw OpenRecordError.io("Could not match the \(preset.rawValue) aspect preset")
             }
         }
+    }
+
+    static func resolutionPresetsAndSourceSizing() throws {
+        let p720 = ExportLayout.outputPixelSize(
+            aspectWidth: 16,
+            aspectHeight: 9,
+            resolution: .p720,
+            sourceWidth: 3024,
+            sourceHeight: 1964
+        )
+        try expectEqual(p720.width, 1280, "720p width")
+        try expectEqual(p720.height, 720, "720p height")
+
+        let p2160Portrait = ExportLayout.outputPixelSize(
+            aspectWidth: 9,
+            aspectHeight: 16,
+            resolution: .p2160,
+            sourceWidth: 3024,
+            sourceHeight: 1964
+        )
+        try expectEqual(p2160Portrait.width, 2160, "portrait 4K width")
+        try expectEqual(p2160Portrait.height, 3840, "portrait 4K height")
+
+        let sourceWidescreen = ExportLayout.outputPixelSize(
+            aspectWidth: 16,
+            aspectHeight: 9,
+            resolution: .source,
+            sourceWidth: 3024,
+            sourceHeight: 1964
+        )
+        try expectEqual(sourceWidescreen.width, 3024, "source-sized canvas width")
+        try expectEqual(sourceWidescreen.height, 1700, "source-sized canvas preserves canvas aspect")
+
+        let sourceSquare = ExportLayout.outputPixelSize(
+            aspectWidth: 1,
+            aspectHeight: 1,
+            resolution: .source,
+            sourceWidth: 3024,
+            sourceHeight: 1964
+        )
+        try expectEqual(sourceSquare.width, 1964, "source-sized square width")
+        try expectEqual(sourceSquare.height, 1964, "source-sized square height")
+    }
+
+    static func authoredContentScaling() throws {
+        try expectClose(
+            Double(ExportLayout.authoredContentScale(for: CGSize(width: 1920, height: 1080))),
+            1,
+            "1080p authored scale"
+        )
+        try expectClose(
+            Double(ExportLayout.authoredContentScale(for: CGSize(width: 3840, height: 2160))),
+            2,
+            "4K authored scale"
+        )
+        let padding = ExportLayout.captionPadding(for: CGSize(width: 1280, height: 720))
+        try expectClose(Double(padding.width), 12, "720p caption horizontal padding")
+        try expectClose(Double(padding.height), 8, "720p caption vertical padding")
     }
 
     static func evenDimensions() throws {

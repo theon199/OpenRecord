@@ -2,9 +2,10 @@ import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import CoreVideo
+import CoreText
 import Foundation
 
-/// Core Image compositor: background + source + webcam + cursor/keyboard overlays.
+/// Core Image compositor: background, media, cursor/keyboard, captions, and annotations.
 final class ExportCompositor {
     private let context: CIContext
     private let colorSpace: CGColorSpace
@@ -20,6 +21,8 @@ final class ExportCompositor {
     private let displayScale: Double
     private let sourceWidth: Int
     private let sourceHeight: Int
+    private let captions: [CaptionCue]
+    private let annotations: [Annotation]
 
     init(
         context: CIContext,
@@ -33,7 +36,9 @@ final class ExportCompositor {
         sourceHeight: Int,
         displayScale: Double,
         cursorImage: CIImage?,
-        cursorSprite: CursorSprite?
+        cursorSprite: CursorSprite?,
+        captions: [CaptionCue] = [],
+        annotations: [Annotation] = []
     ) {
         self.context = context
         self.colorSpace = colorSpace
@@ -47,6 +52,8 @@ final class ExportCompositor {
         self.displayScale = displayScale
         self.cursorImage = cursorImage
         self.cursorSprite = cursorSprite
+        self.captions = captions.map(\.normalized)
+        self.annotations = annotations.map(\.normalized)
         self.canvasExtent = CGRect(x: 0, y: 0, width: layout.width, height: layout.height)
         self.background = Self.makeBackground(canvas: canvas, extent: canvasExtent)
     }
@@ -60,6 +67,7 @@ final class ExportCompositor {
         clicking: Bool,
         clickAge: TimeInterval?,
         keyboardState: KeyboardOverlayState,
+        sourceTime: TimeInterval = 0,
         into pixelBuffer: CVPixelBuffer
     ) {
         let videoRect = ExportLayout.videoRect(
@@ -133,12 +141,170 @@ final class ExportCompositor {
             output = keyboard.composited(over: output)
         }
 
+        // Captions and annotations intentionally sit above keyboard overlays so
+        // authored content is legible in both preview and every export format.
+        if let authored = authoredOverlay(at: sourceTime, canvasSize: layout.size) {
+            output = authored.composited(over: output)
+        }
+
         context.render(
             output.cropped(to: canvasExtent),
             to: pixelBuffer,
             bounds: canvasExtent,
             colorSpace: colorSpace
         )
+    }
+
+    private func authoredOverlay(at time: TimeInterval, canvasSize: CGSize) -> CIImage? {
+        let activeCaptions = captions.filter { $0.isActive(at: time) }
+        let activeAnnotations = annotations.filter { $0.isActive(at: time) }
+        guard !activeCaptions.isEmpty || !activeAnnotations.isEmpty else { return nil }
+
+        let width = max(Int(canvasSize.width.rounded()), 2)
+        let height = max(Int(canvasSize.height.rounded()), 2)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        // CGContext uses a bottom-left origin. The authored model remains
+        // top-left, so draw helpers convert coordinates at the edge.
+        for caption in activeCaptions {
+            draw(caption, in: context, canvasSize: canvasSize)
+        }
+        for annotation in activeAnnotations {
+            draw(annotation, in: context, canvasSize: canvasSize)
+        }
+        guard let image = context.makeImage() else { return nil }
+        return CIImage(cgImage: image)
+    }
+
+    private func draw(_ caption: CaptionCue, in context: CGContext, canvasSize: CGSize) {
+        let style = caption.style.normalized
+        let maxWidth = CGFloat(style.maxWidth) * canvasSize.width
+        let scale = ExportLayout.authoredContentScale(for: canvasSize)
+        let fontSize = CGFloat(style.fontSize) * scale
+        let padding = ExportLayout.captionPadding(for: canvasSize)
+        let textMaxWidth = max(maxWidth - padding.width * 2, 1)
+        let font = CTFontCreateWithName("SF Pro Display" as CFString, fontSize, nil)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: cgColor(style.foreground),
+        ]
+        let attributed = NSAttributedString(string: caption.text, attributes: attrs)
+        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+        let size = CTFramesetterSuggestFrameSizeWithConstraints(
+            framesetter,
+            CFRange(location: 0, length: attributed.length),
+            nil,
+            CGSize(width: textMaxWidth, height: canvasSize.height),
+            nil
+        )
+        let horizontalPadding = padding.width
+        let verticalPadding = padding.height
+        let width = min(maxWidth, max(size.width + horizontalPadding * 2, 40 * scale))
+        let height = max(size.height + verticalPadding * 2, fontSize + verticalPadding * 2)
+        let x = (canvasSize.width - width) / 2
+        let anchorY = CGFloat(style.position.defaultAnchor.y) * canvasSize.height
+        let top = min(max(anchorY - height / 2, 0), max(canvasSize.height - height, 0))
+        let rect = CGRect(x: x, y: canvasSize.height - top - height, width: width, height: height)
+        context.setFillColor(cgColor(style.background))
+        let radius = min(16 * scale, height / 3)
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        context.fillPath()
+        let path = CGPath(
+            rect: rect.insetBy(dx: horizontalPadding, dy: verticalPadding),
+            transform: nil
+        )
+        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: attributed.length), path, nil)
+        CTFrameDraw(frame, context)
+    }
+
+    private func draw(_ annotation: Annotation, in context: CGContext, canvasSize: CGSize) {
+        let value = annotation.normalized
+        let scale = ExportLayout.authoredContentScale(for: canvasSize)
+        context.setStrokeColor(cgColor(value.color))
+        context.setFillColor(cgColor(value.background))
+        context.setLineWidth(max(2 * scale, CGFloat(value.fontSize) * scale / 18))
+        switch value.kind {
+        case .arrow:
+            let start = CGPoint(x: value.position.x * canvasSize.width, y: (1 - value.position.y) * canvasSize.height)
+            let end = CGPoint(x: value.endPosition.x * canvasSize.width, y: (1 - value.endPosition.y) * canvasSize.height)
+            context.move(to: start); context.addLine(to: end); context.strokePath()
+            let angle = atan2(end.y - start.y, end.x - start.x)
+            let head = max(12 * scale, CGFloat(value.fontSize) * scale * 0.55)
+            let left = CGPoint(x: end.x - head * cos(angle - .pi / 6), y: end.y - head * sin(angle - .pi / 6))
+            let right = CGPoint(x: end.x - head * cos(angle + .pi / 6), y: end.y - head * sin(angle + .pi / 6))
+            context.move(to: end); context.addLine(to: left); context.move(to: end); context.addLine(to: right); context.strokePath()
+        case .spotlight:
+            let r = CGRect(x: value.rect.x * canvasSize.width, y: (1 - value.rect.y - value.rect.height) * canvasSize.height, width: value.rect.width * canvasSize.width, height: value.rect.height * canvasSize.height)
+            context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: value.dimAmount))
+            let dimPath = CGMutablePath()
+            dimPath.addRect(CGRect(origin: .zero, size: canvasSize))
+            dimPath.addRoundedRect(
+                in: r,
+                cornerWidth: 12 * scale,
+                cornerHeight: 12 * scale
+            )
+            context.addPath(dimPath)
+            context.drawPath(using: .eoFill)
+            context.setStrokeColor(cgColor(value.color))
+            context.addPath(
+                CGPath(
+                    roundedRect: r,
+                    cornerWidth: 12 * scale,
+                    cornerHeight: 12 * scale,
+                    transform: nil
+                )
+            )
+            context.strokePath()
+        case .text:
+            let fontSize = CGFloat(value.fontSize) * scale
+            let font = CTFontCreateWithName("SF Pro Display" as CFString, fontSize, nil)
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: cgColor(value.color)]
+            let text = NSAttributedString(string: value.text, attributes: attrs)
+            let framesetter = CTFramesetterCreateWithAttributedString(text)
+            let maxWidth = canvasSize.width * 0.7
+            let horizontalPadding = 16 * scale
+            let verticalPadding = 12 * scale
+            let textMaxWidth = max(maxWidth - horizontalPadding * 2, 1)
+            let size = CTFramesetterSuggestFrameSizeWithConstraints(
+                framesetter,
+                CFRange(location: 0, length: text.length),
+                nil,
+                CGSize(width: textMaxWidth, height: canvasSize.height),
+                nil
+            )
+            let width = min(maxWidth, size.width + horizontalPadding * 2)
+            let height = size.height + verticalPadding * 2
+            let centerX = value.position.x * canvasSize.width
+            let centerY = value.position.y * canvasSize.height
+            let top = min(max(centerY - height / 2, 0), max(canvasSize.height - height, 0))
+            let left = min(max(centerX - width / 2, 0), max(canvasSize.width - width, 0))
+            let rect = CGRect(
+                x: left,
+                y: canvasSize.height - top - height,
+                width: width,
+                height: height
+            )
+            let radius = 12 * scale
+            context.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            context.fillPath()
+            let path = CGPath(
+                rect: rect.insetBy(dx: horizontalPadding, dy: verticalPadding),
+                transform: nil
+            )
+            CTFrameDraw(CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: text.length), path, nil), context)
+        }
+    }
+
+    private func cgColor(_ color: RGBAColor) -> CGColor {
+        CGColor(red: color.r, green: color.g, blue: color.b, alpha: color.a)
     }
 
     private func placeSource(_ source: CIImage, cropUV: CGRect, videoRect: CGRect) -> CIImage {

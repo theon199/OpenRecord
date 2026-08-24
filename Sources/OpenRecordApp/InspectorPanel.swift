@@ -45,6 +45,68 @@ struct InspectorPanel: View {
                 }
             }
 
+            Section("Captions") {
+                HStack {
+                    Button("Add") { session.addCaptionAtPlayhead() }
+                    Button("Import…") { session.importCaptionsPanel() }
+                    Spacer()
+                }
+                if let caption = session.selectedCaption {
+                    TextField("Caption text", text: captionText)
+                        .textFieldStyle(.roundedBorder)
+                    Picker("Position", selection: captionPosition) {
+                        ForEach(CaptionPosition.allCases, id: \.self) { position in
+                            Text(position.rawValue.capitalized).tag(position)
+                        }
+                    }
+                    labeledSlider("Font size", value: captionFontSize, range: CaptionStyle.fontSizeRange, format: "%.0f pt", actionName: "Change Caption Font Size", step: 1)
+                    labeledSlider("Max width", value: captionMaxWidth, range: CaptionStyle.maxWidthRange, format: "%.0f%%", actionName: "Change Caption Width", step: 0.01, displayScale: 100)
+                    ColorPicker("Text color", selection: captionForeground)
+                    ColorPicker("Background", selection: captionBackground)
+                    LabeledContent("Range") {
+                        Text("\(Timecode.string(caption.start)) – \(Timecode.string(caption.end))")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Delete Caption", role: .destructive) { session.deleteSelectedCaption() }
+                } else {
+                    Text("Add or import timed captions, then edit their style here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Annotations") {
+                HStack {
+                    Button("Text") { session.addAnnotationAtPlayhead(kind: .text) }
+                    Button("Arrow") { session.addAnnotationAtPlayhead(kind: .arrow) }
+                    Button("Spotlight") { session.addAnnotationAtPlayhead(kind: .spotlight) }
+                }
+                if let annotation = session.selectedAnnotation {
+                    Picker("Type", selection: annotationKind) {
+                        ForEach(AnnotationKind.allCases, id: \.self) { kind in
+                            Text(kind.rawValue.capitalized).tag(kind)
+                        }
+                    }
+                    if annotation.kind == .text {
+                        TextField("Annotation text", text: annotationText)
+                    }
+                    labeledSlider("Font size", value: annotationFontSize, range: Annotation.fontSizeRange, format: "%.0f pt", actionName: "Change Annotation Font Size", step: 1)
+                    if annotation.kind == .spotlight {
+                        labeledSlider("Dim amount", value: annotationDimAmount, range: Annotation.dimAmountRange, format: "%.0f%%", actionName: "Change Spotlight Dim", step: 0.01, displayScale: 100)
+                    }
+                    ColorPicker("Color", selection: annotationColor)
+                    Button("Delete Annotation", role: .destructive) { session.deleteSelectedAnnotation() }
+                    Text("Drag active annotations in the preview to position them.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Add a text, arrow, or spotlight annotation at the playhead.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Canvas") {
                 Picker("Style", selection: canvasPresetID) {
                     ForEach(CanvasPreset.builtIns) { preset in
@@ -258,7 +320,7 @@ struct InspectorPanel: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Cleanup is local, non-destructive, and applied when the MP4 is exported.")
+                    Text("Cleanup is local, non-destructive, and applied when video or audio is exported.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -274,11 +336,28 @@ struct InspectorPanel: View {
 
             Section("Export") {
                 Toggle("Copy into library folder", isOn: $session.copyExportToLibrary)
-                Button("Export MP4…") {
-                    session.presentExportPanel()
+                Picker("Codec", selection: exportCodec) {
+                    Text("H.264").tag(VideoExportCodec.h264)
+                    Text("HEVC").tag(VideoExportCodec.hevc)
+                    Text("ProRes 422").tag(VideoExportCodec.proRes422)
+                }
+                Picker("Resolution", selection: exportResolution) {
+                    Text("Source").tag(ExportResolutionPreset.source)
+                    Text("720p").tag(ExportResolutionPreset.p720)
+                    Text("1080p").tag(ExportResolutionPreset.p1080)
+                    Text("4K").tag(ExportResolutionPreset.p2160)
+                }
+                Button("Export Video…") {
+                    session.presentExportPanel(kind: .video)
                 }
                 .disabled(session.exportProgress != nil)
-                Text("Renders the live trim, zooms, canvas, webcam, and keyboard overlays to an H.264 MP4 (1080p-capped). Mic and system audio are mixed when present.")
+                HStack {
+                    Button("GIF…") { session.presentExportPanel(kind: .gif) }
+                    Button("Audio…") { session.presentExportPanel(kind: .audio) }
+                    Button("Snapshot…") { session.presentExportPanel(kind: .snapshot) }
+                }
+                .disabled(session.exportProgress != nil)
+                Text("Video uses the selected codec and resolution. GIF, mixed M4A audio, and a PNG of the current playhead are available separately.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -338,6 +417,97 @@ struct InspectorPanel: View {
             set: { value in
                 session.updateSelectedZoom { $0.amount = value }
             }
+        )
+    }
+
+    private var captionText: Binding<String> {
+        Binding(
+            get: { session.selectedCaption?.text ?? "" },
+            set: { value in session.updateSelectedCaption { $0.text = value } }
+        )
+    }
+
+    private var captionPosition: Binding<CaptionPosition> {
+        Binding(
+            get: { session.selectedCaption?.style.position ?? .bottom },
+            set: { value in session.updateSelectedCaption { $0.style.position = value } }
+        )
+    }
+
+    private var captionFontSize: Binding<Double> {
+        Binding(
+            get: { session.selectedCaption?.style.fontSize ?? CaptionStyle.default.fontSize },
+            set: { value in session.updateSelectedCaption { $0.style.fontSize = value } }
+        )
+    }
+
+    private var captionMaxWidth: Binding<Double> {
+        Binding(
+            get: { session.selectedCaption?.style.maxWidth ?? CaptionStyle.default.maxWidth },
+            set: { value in session.updateSelectedCaption { $0.style.maxWidth = value } }
+        )
+    }
+
+    private var captionForeground: Binding<Color> {
+        Binding(
+            get: { session.selectedCaption?.style.foreground.swiftUIColor ?? .white },
+            set: { value in session.updateSelectedCaption { $0.style.foreground = RGBAColor(value) } }
+        )
+    }
+
+    private var captionBackground: Binding<Color> {
+        Binding(
+            get: { session.selectedCaption?.style.background.swiftUIColor ?? .black },
+            set: { value in session.updateSelectedCaption { $0.style.background = RGBAColor(value) } }
+        )
+    }
+
+    private var annotationKind: Binding<AnnotationKind> {
+        Binding(
+            get: { session.selectedAnnotation?.kind ?? .text },
+            set: { value in session.updateSelectedAnnotation { $0.kind = value } }
+        )
+    }
+
+    private var annotationText: Binding<String> {
+        Binding(
+            get: { session.selectedAnnotation?.text ?? "" },
+            set: { value in session.updateSelectedAnnotation { $0.text = value } }
+        )
+    }
+
+    private var annotationFontSize: Binding<Double> {
+        Binding(
+            get: { session.selectedAnnotation?.fontSize ?? 42 },
+            set: { value in session.updateSelectedAnnotation { $0.fontSize = value } }
+        )
+    }
+
+    private var annotationDimAmount: Binding<Double> {
+        Binding(
+            get: { session.selectedAnnotation?.dimAmount ?? 0.58 },
+            set: { value in session.updateSelectedAnnotation { $0.dimAmount = value } }
+        )
+    }
+
+    private var annotationColor: Binding<Color> {
+        Binding(
+            get: { session.selectedAnnotation?.color.swiftUIColor ?? .red },
+            set: { value in session.updateSelectedAnnotation { $0.color = RGBAColor(value) } }
+        )
+    }
+
+    private var exportCodec: Binding<VideoExportCodec> {
+        Binding(
+            get: { session.document.videoExportSettings.codec },
+            set: { value in session.updateVideoExportSettings { $0.codec = value } }
+        )
+    }
+
+    private var exportResolution: Binding<ExportResolutionPreset> {
+        Binding(
+            get: { session.document.videoExportSettings.resolution },
+            set: { value in session.updateVideoExportSettings { $0.resolution = value } }
         )
     }
 

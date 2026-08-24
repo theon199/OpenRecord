@@ -6,7 +6,7 @@ import Testing
 enum StabilizationContractSuite {
     static func run() throws {
         try legacyOptionalFieldsDecode()
-        try captureMetadataRoundTripsAtFormatVersionOne()
+        try captureMetadataRoundTripsAtCurrentFormat()
         try cursorSpritePlacementUsesBitmapPixels()
         try cursorAssetResolverRejectsEscapes()
         try targetVisibilityDoesNotBridgeActivity()
@@ -35,7 +35,7 @@ enum StabilizationContractSuite {
         }
     }
 
-    static func captureMetadataRoundTripsAtFormatVersionOne() throws {
+    static func captureMetadataRoundTripsAtCurrentFormat() throws {
         let meta = ProjectMeta(
             createdAt: Date(timeIntervalSince1970: 1_700_000_000),
             displayBounds: Rect2D(x: 10, y: 20, width: 300, height: 200),
@@ -56,8 +56,8 @@ enum StabilizationContractSuite {
             ProjectMeta.self,
             from: ProjectJSON.encoder.encode(meta)
         )
-        guard decoded == meta, ProjectDocument.currentFormatVersion == 2 else {
-            throw OpenRecordError.io("capture metadata did not round-trip at project format v2")
+        guard decoded == meta, ProjectDocument.currentFormatVersion == 3 else {
+            throw OpenRecordError.io("capture metadata did not round-trip at project format v3")
         }
     }
 
@@ -285,7 +285,7 @@ func stabilizationLegacyContractsDecode() throws {
 
 @Test
 func stabilizationCaptureMetadataRoundTrip() throws {
-    try StabilizationContractSuite.captureMetadataRoundTripsAtFormatVersionOne()
+    try StabilizationContractSuite.captureMetadataRoundTripsAtCurrentFormat()
 }
 
 @Test

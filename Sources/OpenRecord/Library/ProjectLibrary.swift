@@ -386,7 +386,7 @@ public struct ProjectLibrary: Sendable {
         try withAccess(to: projectURL) {
             try validateProjectBundleURL(projectURL, fileManager: .default)
             try AtomicFileWrite.writeJSON(
-                document.upgradedForSave(),
+                document.validatedForSave(),
                 to: ProjectLayout.documentURL(in: projectURL)
             )
         }
@@ -441,7 +441,7 @@ public struct ProjectLibrary: Sendable {
             do {
                 try fm.copyItem(at: source, to: staging)
                 try AtomicFileWrite.writeJSON(
-                    document.upgradedForSave(),
+                    document.validatedForSave(),
                     to: ProjectLayout.documentURL(in: staging)
                 )
                 if fm.fileExists(atPath: destination.path) {

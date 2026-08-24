@@ -90,7 +90,11 @@ struct EditorView: View {
             return .handled
         }
         .onKeyPress(.delete) {
-            if session.selectedSpeedID != nil {
+            if session.selectedCaptionID != nil {
+                session.deleteSelectedCaption()
+            } else if session.selectedAnnotationID != nil {
+                session.deleteSelectedAnnotation()
+            } else if session.selectedSpeedID != nil {
                 session.deleteSelectedSpeedSegment()
             } else {
                 session.deleteSelectedZoom()

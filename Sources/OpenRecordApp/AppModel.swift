@@ -58,6 +58,8 @@ final class AppModel {
     var recordedDuration: TimeInterval = 0
     var isProcessingCapture = false
     var isLoadingSources = false
+    var batchExportProgress: Double?
+    private var batchExportTask: Task<Void, Never>?
     var degradedOpenMessage: String?
     var saveFailureMessage: String?
     var capturesKeyboardShortcuts = true {
@@ -219,6 +221,56 @@ final class AppModel {
         ProjectLibrary.clearPersistedRootURL()
         library = .resolved()
         refreshProjects()
+    }
+
+    func presentBatchExportPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        panel.message = "Choose a folder for MP4 exports of every project in the library."
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        batchExportTask?.cancel()
+        batchExportTask = Task { @MainActor in
+            await batchExport(to: destination)
+        }
+    }
+
+    func cancelBatchExport() {
+        batchExportTask?.cancel()
+        batchExportProgress = nil
+    }
+
+    private func batchExport(to destination: URL) async {
+        let items = projects
+        guard !items.isEmpty else { return }
+        batchExportProgress = 0
+        var failures: [String] = []
+        for (index, item) in items.enumerated() {
+            if Task.isCancelled { break }
+            do {
+                let opened = try library.open(url: item.url)
+                let output = destination.appendingPathComponent("\(item.name).mp4")
+                let exporter = Exporter(projectBundleURL: item.url)
+                var document = opened.document
+                document.videoExportSettings.codec = .h264
+                try await exporter.export(project: document, url: output) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.batchExportProgress != nil else { return }
+                        self.batchExportProgress = (Double(index) + progress) / Double(items.count)
+                    }
+                }
+            } catch {
+                failures.append("\(item.name): \(error.localizedDescription)")
+            }
+            batchExportProgress = Double(index + 1) / Double(items.count)
+        }
+        if !failures.isEmpty {
+            errorMessage = "Batch export finished with errors: " + failures.joined(separator: " ")
+        }
+        batchExportProgress = nil
     }
 
     func openProject(_ url: URL, generateAutoZooms: Bool = false) async {

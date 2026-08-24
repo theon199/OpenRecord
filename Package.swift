@@ -5,6 +5,7 @@ import PackageDescription
 let developerDir = Context.environment["DEVELOPER_DIR"] ?? "/Library/Developer/CommandLineTools"
 let testingFrameworksPath = "\(developerDir)/Library/Developer/Frameworks"
 let testingInteropLibPath = "\(developerDir)/Library/Developer/usr/lib"
+let testingMacrosPath = "\(developerDir)/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
 
 let appleFrameworks: [LinkerSetting] = [
     .linkedFramework("SwiftUI"),
@@ -58,6 +59,8 @@ let package = Package(
             swiftSettings: [
                 .unsafeFlags([
                     "-F", testingFrameworksPath,
+                    "-Xfrontend", "-load-plugin-library",
+                    "-Xfrontend", testingMacrosPath,
                 ])
             ],
             linkerSettings: [

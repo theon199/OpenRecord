@@ -52,6 +52,8 @@ final class EditorSession {
     var isPlaying = false
     var selectedZoomID: UUID?
     var selectedSpeedID: UUID?
+    var selectedCaptionID: UUID?
+    var selectedAnnotationID: UUID?
     var copyExportToLibrary = false
     var exportProgress: Double?
     var lastError: String?
@@ -123,6 +125,16 @@ final class EditorSession {
     var selectedSpeedSegment: SpeedSegment? {
         guard let selectedSpeedID else { return nil }
         return document.speedSegments.first { $0.id == selectedSpeedID }
+    }
+
+    var selectedCaption: CaptionCue? {
+        guard let selectedCaptionID else { return nil }
+        return document.captions.first { $0.id == selectedCaptionID }
+    }
+
+    var selectedAnnotation: Annotation? {
+        guard let selectedAnnotationID else { return nil }
+        return document.annotations.first { $0.id == selectedAnnotationID }
     }
 
     var currentPlaybackRate: Double {
@@ -423,8 +435,7 @@ final class EditorSession {
         )
         switch proposal {
         case .select(let id):
-            selectedZoomID = id
-            selectedSpeedID = nil
+            selectZoom(id)
             return
         case .unavailable:
             return
@@ -438,8 +449,7 @@ final class EditorSession {
             )
             document.zoomRanges.append(zoom)
             document.zoomRanges.sort { $0.start < $1.start }
-            selectedZoomID = zoom.id
-            selectedSpeedID = nil
+            selectZoom(zoom.id)
             documentDidChange(
                 from: before,
                 actionName: "Add Zoom",
@@ -464,8 +474,7 @@ final class EditorSession {
         if let existing = document.speedSegments.first(where: {
             playhead >= $0.start && playhead < $0.end
         }) {
-            selectedSpeedID = existing.id
-            selectedZoomID = nil
+            selectSpeed(existing.id)
             return
         }
 
@@ -483,8 +492,7 @@ final class EditorSession {
             document.speedSegments,
             sourceDuration: timelineDuration
         )
-        selectedSpeedID = segment.id
-        selectedZoomID = nil
+        selectSpeed(segment.id)
         documentDidChange(from: before, actionName: "Add Speed Region")
     }
 
@@ -665,7 +673,7 @@ final class EditorSession {
         restoreHistorySnapshot(snapshot)
     }
 
-    private func documentDidChange(
+    func documentDidChange(
         from before: ProjectDocument,
         actionName: String,
         rebuildZoomEngine: Bool = false
@@ -681,6 +689,8 @@ final class EditorSession {
 
     private func restoreHistorySnapshot(_ snapshot: ProjectDocument) {
         let previousZoomIDs = Set(document.zoomRanges.map(\.id))
+        let previousCaptionIDs = Set(document.captions.map(\.id))
+        let previousAnnotationIDs = Set(document.annotations.map(\.id))
         document = snapshot
         if let selectedZoomID,
            !document.zoomRanges.contains(where: { $0.id == selectedZoomID })
@@ -698,6 +708,24 @@ final class EditorSession {
         {
             self.selectedSpeedID = nil
         }
+        if let selectedCaptionID,
+           !document.captions.contains(where: { $0.id == selectedCaptionID })
+        {
+            self.selectedCaptionID = nil
+        }
+        if let selectedAnnotationID,
+           !document.annotations.contains(where: { $0.id == selectedAnnotationID })
+        {
+            self.selectedAnnotationID = nil
+        }
+        if selectedCaptionID == nil {
+            let restoredIDs = Set(document.captions.map(\.id)).subtracting(previousCaptionIDs)
+            if restoredIDs.count == 1 { selectedCaptionID = restoredIDs.first }
+        }
+        if selectedAnnotationID == nil {
+            let restoredIDs = Set(document.annotations.map(\.id)).subtracting(previousAnnotationIDs)
+            if restoredIDs.count == 1 { selectedAnnotationID = restoredIDs.first }
+        }
         let clampedPlayhead = min(max(playhead, document.trimIn), effectiveTrimOut)
         if abs(clampedPlayhead - playhead) > 0.000_001 {
             seek(to: clampedPlayhead)
@@ -709,17 +737,26 @@ final class EditorSession {
     }
 
     func presentExportPanel() {
+        presentExportPanel(kind: .video)
+    }
+
+    func presentExportPanel(kind: EditorExportKind) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie]
+        let isProRes = kind == .video && document.videoExportSettings.codec == .proRes422
+        let contentType: UTType = isProRes ? .quickTimeMovie : kind.contentType
+        let fileExtension = isProRes ? "mov" : kind.fileExtension
+        panel.allowedContentTypes = [contentType]
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
-        panel.nameFieldStringValue = "\(title).mp4"
-        panel.title = "Export Video"
+        panel.nameFieldStringValue = "\(title).\(fileExtension)"
+        panel.title = kind.panelTitle
         panel.prompt = "Export"
-        panel.message = "Renders the current trim, zooms, and canvas into an MP4."
+        panel.message = isProRes
+            ? "Renders the current trim, overlays, and canvas into a ProRes 422 QuickTime movie."
+            : kind.message
         guard panel.runModal() == .OK, let url = panel.url else { return }
         exportTask?.cancel()
-        exportTask = Task { await export(to: url) }
+        exportTask = Task { await export(to: url, kind: kind) }
     }
 
     func cancelExport() {
@@ -764,6 +801,8 @@ final class EditorSession {
         editRevision &+= 1
         selectedZoomID = nil
         selectedSpeedID = nil
+        selectedCaptionID = nil
+        selectedAnnotationID = nil
         documentHistory.removeAll()
         rebuildEngine()
         // Serialize behind any save already in flight, then restore the last
@@ -774,15 +813,39 @@ final class EditorSession {
     }
 
     func export(to url: URL) async {
+        await export(to: url, kind: .video)
+    }
+
+    func export(to url: URL, kind: EditorExportKind) async {
         exportProgress = 0
         lastError = nil
         let exporter = Exporter(projectBundleURL: projectURL)
         do {
-            try await exporter.export(project: document, url: url) { [weak self] progress in
-                Task { @MainActor in
-                    guard let self, self.exportProgress != nil else { return }
-                    self.exportProgress = progress
+            switch kind {
+            case .video:
+                try await exporter.export(project: document, url: url) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.exportProgress != nil else { return }
+                        self.exportProgress = progress
+                    }
                 }
+            case .gif:
+                try await exporter.exportGIF(project: document, url: url) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.exportProgress != nil else { return }
+                        self.exportProgress = progress
+                    }
+                }
+            case .audio:
+                try await exporter.exportAudio(project: document, url: url) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.exportProgress != nil else { return }
+                        self.exportProgress = progress
+                    }
+                }
+            case .snapshot:
+                try await exporter.exportSnapshot(project: document, at: playhead, url: url)
+                exportProgress = 1
             }
             if Task.isCancelled { return }
             if copyExportToLibrary {

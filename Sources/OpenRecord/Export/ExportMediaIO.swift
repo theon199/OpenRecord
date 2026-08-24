@@ -441,7 +441,8 @@ enum ExportWriterFactory {
         url: URL,
         width: Int,
         height: Int,
-        fps: Int32
+        fps: Int32,
+        codec: VideoExportCodec = .h264
     ) throws -> (AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor) {
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
@@ -449,36 +450,51 @@ enum ExportWriterFactory {
 
         let writer: AVAssetWriter
         do {
-            writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+            writer = try AVAssetWriter(
+                outputURL: url,
+                fileType: codec == .proRes422 ? .mov : .mp4
+            )
         } catch {
             throw OpenRecordError.io("Could not create the export file: \(error.localizedDescription)")
         }
-        writer.shouldOptimizeForNetworkUse = true
+        writer.shouldOptimizeForNetworkUse = codec != .proRes422
 
         let bitRate = min(50_000_000, max(6_000_000, width * height * (fps >= 60 ? 12 : 8)))
-        let compression: [String: Any] = [
-            AVVideoAverageBitRateKey: bitRate,
+        var compression: [String: Any] = [
             AVVideoExpectedSourceFrameRateKey: fps,
             AVVideoMaxKeyFrameIntervalDurationKey: 2,
-            AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-            AVVideoH264EntropyModeKey: AVVideoH264EntropyModeCABAC,
             AVVideoAllowFrameReorderingKey: false,
         ]
+        if codec != .proRes422 {
+            compression[AVVideoAverageBitRateKey] = codec == .hevc
+                ? max(4_000_000, bitRate * 2 / 3)
+                : bitRate
+            if codec == .h264 {
+                compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel
+            }
+            if codec == .h264 {
+                compression[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
+            }
+        }
         let encoderSpec: [String: Any] = [
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: true,
         ]
-        let settings: [String: Any] = [
-            AVVideoCodecKey: CaptureMediaFormat.videoCodec,
+        var settings: [String: Any] = [
+            AVVideoCodecKey: codec == .h264
+                ? AVVideoCodecType.h264
+                : (codec == .hevc ? AVVideoCodecType.hevc : AVVideoCodecType.proRes422),
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: compression,
             AVVideoColorPropertiesKey: [
                 AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
                 AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
                 AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
             ],
-            AVVideoEncoderSpecificationKey: encoderSpec,
         ]
+        if codec != .proRes422 {
+            settings[AVVideoCompressionPropertiesKey] = compression
+            settings[AVVideoEncoderSpecificationKey] = encoderSpec
+        }
 
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         videoInput.expectsMediaDataInRealTime = false

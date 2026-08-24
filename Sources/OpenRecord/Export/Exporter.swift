@@ -5,7 +5,7 @@ import Foundation
 
 public typealias ExportProgressHandler = @Sendable (Double) -> Void
 
-/// Renders a project document to an H.264 MP4 at `url`.
+/// Renders a project document to the configured video codec and resolution at `url`.
 ///
 /// Call with the **in-memory** `ProjectDocument` (trims, zooms, canvas, sprites) plus
 /// the `.openrecord` bundle that holds `meta.json`, `recording/display.mp4`, telemetry,
@@ -13,14 +13,15 @@ public typealias ExportProgressHandler = @Sendable (Double) -> Void
 ///
 /// ```
 /// let exporter = Exporter(projectBundleURL: opened.url)
-/// try await exporter.export(project: opened.document, url: outputMP4) { progress in
+/// try await exporter.export(project: opened.document, url: outputVideo) { progress in
 ///     // 0...1, may be called off the main actor
 /// }
 /// ```
 ///
-/// Output: H.264 High Rec.709, 1080p-capped canvas (long ≤ 1920, short ≤ 1080, even),
-/// 60 fps if the source average is ≥ 45, else 30. Mic + system audio are mixed into
-/// one stereo AAC 48 kHz track when present; missing audio files are skipped.
+/// Output: H.264/HEVC MP4 or ProRes 422 MOV in Rec.709 at the document's 720p,
+/// 1080p, 4K, or source-sized preset. Frame rate is 60 fps if the source average
+/// is ≥ 45, otherwise 30. Mic + system audio are mixed into one stereo AAC
+/// 48 kHz track when present; missing audio files are skipped.
 public struct Exporter: Sendable {
     public var projectBundleURL: URL
 
@@ -162,7 +163,7 @@ private enum ExportSession {
         let parent = outputURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
         let tempURL = parent.appendingPathComponent(
-            ".\(outputURL.lastPathComponent).export-\(UUID().uuidString).mp4",
+            ".\(outputURL.lastPathComponent).export-\(UUID().uuidString).\(project.videoExportSettings.codec == .proRes422 ? "mov" : "mp4")",
             isDirectory: false
         )
 
@@ -252,7 +253,8 @@ private enum ExportSession {
         let layout = ExportLayout.canvasLayout(
             canvas: project.canvas,
             sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight
+            sourceHeight: sourceHeight,
+            resolution: project.videoExportSettings.resolution
         )
         let cursor = ExportCursorImage.load(document: project, bundleURL: bundleURL)
         let compositor = ExportCompositor(
@@ -267,14 +269,17 @@ private enum ExportSession {
             sourceHeight: sourceHeight,
             displayScale: meta.scale,
             cursorImage: cursor?.image,
-            cursorSprite: cursor?.sprite
+            cursorSprite: cursor?.sprite,
+            captions: project.captions,
+            annotations: project.annotations
         )
 
         let (writer, videoInput, adaptor) = try ExportWriterFactory.makeVideoWriter(
             url: tempURL,
             width: layout.width,
             height: layout.height,
-            fps: fps
+            fps: fps,
+            codec: project.videoExportSettings.codec
         )
 
         var audioInput: AVAssetWriterInput?
@@ -382,6 +387,7 @@ private enum ExportSession {
                     clicking: clicking,
                     clickAge: clickAge,
                     keyboardState: keyboardState,
+                    sourceTime: t,
                     into: pixelBuffer
                 )
 

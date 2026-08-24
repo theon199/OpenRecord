@@ -112,6 +112,30 @@ struct LibrarySidebar: View {
                     Label("Settings", systemImage: "folder")
                 }
                 .help("Library folder")
+                Button {
+                    model.presentBatchExportPanel()
+                } label: {
+                    Label("Batch Export", systemImage: "square.and.arrow.up.on.square")
+                }
+                .disabled(model.batchExportProgress != nil || model.projects.isEmpty)
+                .help("Export every project as an MP4")
+            }
+        }
+        .overlay {
+            if let progress = model.batchExportProgress {
+                VStack(spacing: 8) {
+                    ProgressView(value: progress)
+                    HStack {
+                        Text("Batch exporting…")
+                        Spacer()
+                        Button("Cancel") { model.cancelBatchExport() }
+                    }
+                    .font(.caption)
+                }
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {

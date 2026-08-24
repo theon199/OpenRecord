@@ -16,7 +16,7 @@ A roadmap to close the gap with Screen Studio while staying true to what makes O
 2. **No accounts or proprietary cloud** — sharing happens via exported files or the user's existing sync folder (Dropbox, iCloud, Drive).
 3. **Preview ≈ export** — new visual effects must render through the same `ExportLayout` + compositor path preview uses.
 4. **Timestamp-based, VFR-safe** — all new tracks (keyboard, webcam, captions) use `{ t, … }` JSONL or time-ranged document fields, never frame indexes.
-5. **Incremental format migration** — bump `formatVersion` with forward-compatible readers; never break v1 projects.
+5. **Incremental format migration** — bump `formatVersion`, keep older projects readable, and reject newer schemas rather than dropping unknown data.
 
 ---
 
@@ -87,7 +87,16 @@ pitch preservation and can be muted in sped-up regions. Non-destructive
 microphone normalization, a configurable noise gate, light de-clicking, and
 independent microphone/system gains run locally during export.
 
-Next: v2.2 captions, annotations, and export expansion.
+**v2.2 is complete.** SRT and WebVTT files import into structured caption
+cues in project format version 3, with timeline timing edits, inspector styling,
+and matching preview/export rendering. Timed text callouts, arrows, and
+spotlights share the same non-destructive document and undo stack, and can be
+positioned directly in the preview.
+
+Video export now supports H.264, HEVC, and ProRes 422 at 720p, 1080p, 4K, or
+source-sized resolution. The editor can also export a 30-second animated GIF,
+mixed-audio M4A, or playhead PNG, while the library provides cancellable batch
+H.264 export. Automatic transcription and device frames remain future work.
 
 ---
 
@@ -318,6 +327,9 @@ Long recordings choke on the CPU frame loop today.
 - Render: styled subtitle bar (font, background pill, position)
 - Editor: caption track on timeline; click to edit text and timing
 
+Implemented with a structured `captions` array in format-version-3
+`project.json`; older projects decode with an empty caption track.
+
 **Phase B — On-device transcription (optional)**
 
 - macOS 26+ `SpeechAnalyzer` / `SFSpeechRecognizer` on `mic.m4a` + `system.m4a` mix
@@ -340,7 +352,7 @@ Start minimal — Screen Studio's full annotation suite is huge.
 **Editor**
 
 - New "Annotations" track below zoom track
-- Add at playhead; drag to move/resize in preview
+- Add at playhead; drag text to position it, repoint arrows, and move/resize spotlights in preview
 - Undo/redo via same stack as v2.0
 
 **Defer**: freehand drawing, blur regions, animated stickers
@@ -353,7 +365,11 @@ Start minimal — Screen Studio's full annotation suite is huge.
 | **ProRes / HEVC** | Power-user preset; larger files |
 | **Separate audio** | Export `.m4a` sidecar |
 | **Frame snapshot** | PNG at playhead (⌘⇧E) |
-| **Batch export** | Select multiple projects in library → export queue |
+| **Batch export** | Export the current library to a selected folder |
+
+Implemented. The current library action exports every project to a selected
+folder and reports aggregate progress; individual editor exports retain the
+project's selected codec and resolution.
 
 ### 13. Device frames (stretch)
 
@@ -481,8 +497,8 @@ Parallel workstreams (if multiple contributors): **Capture** (keyboard, webcam),
 
 1. **Keyboard logging without Accessibility?** CGEvent tap already requires Accessibility; key logging uses the same tap — no new permission, but UX copy must mention it.
 2. **Webcam A/V sync** — drift between ScreenCaptureKit and AVCaptureSession over long recordings; may need post-hoc alignment pass using cross-correlation on audio.
-3. **On-device STT quality** — good enough for captions, or import-only for v2.2?
-4. **GIF length limits** — cap at 30s / 50 MB to avoid accidental 500 MB exports?
+3. **On-device STT quality** — deferred; v2.2 is import-only.
+4. **GIF length limits** — v2.2 caps GIF output at 30 seconds.
 5. **Intel / macOS 14 support** — expand TAM or stay Apple Silicon + macOS 15+ for velocity?
 
 ---

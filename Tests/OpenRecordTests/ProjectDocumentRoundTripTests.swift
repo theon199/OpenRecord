@@ -81,7 +81,36 @@ enum ProjectDocumentJSONRoundTrip {
                 noiseGateThresholdDB: -38,
                 normalizeEnabled: true,
                 deClickEnabled: true
-            )
+            ),
+            captions: [
+                CaptionCue(
+                    id: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+                    start: 2,
+                    end: 4.5,
+                    text: "Welcome, 世界",
+                    style: CaptionStyle(
+                        fontSize: 52,
+                        foreground: RGBAColor(r: 0.95, g: 1, b: 0.8),
+                        background: RGBAColor(r: 0.1, g: 0.2, b: 0.3, a: 0.75),
+                        position: .top,
+                        maxWidth: 0.7
+                    )
+                )
+            ],
+            annotations: [
+                Annotation(
+                    id: UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")!,
+                    start: 5,
+                    end: 7,
+                    kind: .arrow,
+                    position: Point2D(x: 0.15, y: 0.2),
+                    endPosition: Point2D(x: 0.8, y: 0.7),
+                    color: RGBAColor(r: 1, g: 0.5, b: 0.1),
+                    fontSize: 64,
+                    dimAmount: 0.2
+                )
+            ],
+            videoExportSettings: VideoExportSettings(codec: .hevc, resolution: .p2160)
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -92,6 +121,7 @@ enum ProjectDocumentJSONRoundTrip {
 
         try assertLegacyV1Migration()
         try assertCanvasPresetsPreserveFormatAndCursorChoices()
+        try assertV22ContentNormalization()
         try assertUndoHistoryCoalescesContinuousEdits()
     }
 
@@ -109,7 +139,10 @@ enum ProjectDocumentJSONRoundTrip {
               legacy.webcamOverlay == .disabled,
               legacy.speedSegments.isEmpty,
               legacy.muteAudioWhenSpedUp == false,
-              legacy.audioCleanup == .default
+              legacy.audioCleanup == .default,
+              legacy.captions.isEmpty,
+              legacy.annotations.isEmpty,
+              legacy.videoExportSettings == .default
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
         }
@@ -126,18 +159,47 @@ enum ProjectDocumentJSONRoundTrip {
         }
 
         let upgraded = legacy.upgradedForSave()
-        guard upgraded.formatVersion == 2,
+        guard upgraded.formatVersion == ProjectDocument.currentFormatVersion,
               upgraded.keyboardOverlay == .disabled,
               upgraded.stylePresetID == CanvasPreset.defaultStyle.id,
-              upgraded.canvas.cursorMotionBlur == .disabled
+              upgraded.canvas.cursorMotionBlur == .disabled,
+              upgraded.captions.isEmpty,
+              upgraded.annotations.isEmpty
         else {
-            throw OpenRecordError.io("The first-save migration did not produce the v2 defaults")
+            throw OpenRecordError.io("The first-save migration did not produce the v3 defaults")
+        }
+
+        let futureJSON = Data(
+            #"{"formatVersion":7,"futureOverlay":{"preserveMe":true}}"#.utf8
+        )
+        do {
+            _ = try ProjectJSON.decoder.decode(ProjectDocument.self, from: futureJSON)
+            throw OpenRecordError.io("A future project format was opened unsafely")
+        } catch let error as OpenRecordError {
+            guard error.errorDescription?.contains("supports up to") == true else { throw error }
+            // Expected: refusing to open is safer than dropping unknown keys on save.
         }
 
         var future = upgraded
         future.formatVersion = 7
-        guard future.upgradedForSave().formatVersion == 7 else {
-            throw OpenRecordError.io("Saving attempted to downgrade a future project format")
+        do {
+            _ = try future.validatedForSave()
+            throw OpenRecordError.io("A future project format was allowed to save")
+        } catch let error as OpenRecordError {
+            guard error.errorDescription?.contains("newer") == true else { throw error }
+            // Expected for programmatically-created future documents as well.
+        }
+
+        let versionTwo = try ProjectJSON.decoder.decode(
+            ProjectDocument.self,
+            from: Data(#"{"formatVersion":2,"trimIn":1.5,"zoomRanges":[]}"#.utf8)
+        )
+        guard versionTwo.formatVersion == 2,
+              versionTwo.captions.isEmpty,
+              versionTwo.annotations.isEmpty,
+              versionTwo.upgradedForSave().formatVersion == ProjectDocument.currentFormatVersion
+        else {
+            throw OpenRecordError.io("A v2 project did not decode or migrate with v3 caption defaults")
         }
 
         let unknownPresetJSON = Data(
@@ -230,6 +292,51 @@ enum ProjectDocumentJSONRoundTrip {
         }
     }
 
+    private static func assertV22ContentNormalization() throws {
+        var document = ProjectDocument(
+            captions: [
+                CaptionCue(
+                    start: -.infinity,
+                    end: .nan,
+                    text: "  caption  ",
+                    style: CaptionStyle(fontSize: 1000, maxWidth: -1)
+                )
+            ],
+            annotations: [
+                Annotation(
+                    start: 8,
+                    end: 2,
+                    kind: .spotlight,
+                    position: Point2D(x: -1, y: 2),
+                    endPosition: Point2D(x: 2, y: -1),
+                    rect: Rect2D(x: -1, y: 2, width: 4, height: -3),
+                    fontSize: .infinity,
+                    dimAmount: -1
+                ),
+                Annotation.textCallout(start: 1, end: 3, text: " callout ")
+            ]
+        )
+        document.formatVersion = 2
+        let normalized = document.upgradedForSave()
+        guard normalized.formatVersion == ProjectDocument.currentFormatVersion,
+              normalized.captions.count == 1,
+              normalized.captions[0].start == 0,
+              normalized.captions[0].end == 0.05,
+              normalized.captions[0].text == "caption",
+              normalized.captions[0].style.fontSize == CaptionStyle.fontSizeRange.upperBound,
+              normalized.captions[0].style.maxWidth == CaptionStyle.maxWidthRange.lowerBound,
+              normalized.annotations.map(\.start) == [1, 8],
+              normalized.annotations[0].text == "callout",
+              normalized.annotations[1].position == Point2D(x: 0, y: 1),
+              normalized.annotations[1].endPosition == Point2D(x: 1, y: 0),
+              normalized.annotations[1].rect == Rect2D(x: 0, y: 0.98, width: 1, height: 0.02),
+              normalized.annotations[1].fontSize == 42,
+              normalized.annotations[1].dimAmount == 0
+        else {
+            throw OpenRecordError.io("v2.2 caption or annotation values were not normalized on save")
+        }
+    }
+
     private static func assertUndoHistoryCoalescesContinuousEdits() throws {
         let original = ProjectDocument(trimIn: 0, trimOut: 12)
         var intermediate = original
@@ -288,7 +395,10 @@ func OpenRecordRunProjectDocumentJSONRoundTrip() {
         fputs("OpenRecordTests: ProjectDocument JSON round-trip passed\n", stderr)
         fflush(stderr)
     } catch {
-        fputs("OpenRecordTests: ProjectDocument JSON round-trip failed\n", stderr)
+        fputs(
+            "OpenRecordTests: ProjectDocument JSON round-trip failed: \(error.localizedDescription)\n",
+            stderr
+        )
         abort()
     }
 }

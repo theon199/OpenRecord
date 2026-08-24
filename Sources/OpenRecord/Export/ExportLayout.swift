@@ -7,14 +7,14 @@ import Foundation
 /// - **Top-left** pixel space matches capture (`displayBounds` origin, y down).
 /// - **Core Image** space is bottom-left (y up); use `ciRect` / `ciPoint` at render time.
 ///
-/// Canvas `padding` and `cornerRadius` are **output pixels** at the 1080p-capped size.
+/// Canvas `padding` and `cornerRadius` are **output pixels** at the selected resolution.
 /// Gradient `startPoint` / `endPoint` are canvas UV (0...1, origin top-left).
 public enum ExportLayout: Sendable {
     public static let maxLongEdge = 1920
     public static let maxShortEdge = 1080
     public static let highFrameRateThreshold = 45.0
 
-    /// Fit `aspectWidth:aspectHeight` into 1080p (long ≤ 1920, short ≤ 1080). Even H.264 dims.
+    /// Fit `aspectWidth:aspectHeight` inside the supplied edge limits using even codec-safe dimensions.
     public static func outputPixelSize(
         aspectWidth: Double,
         aspectHeight: Double,
@@ -51,6 +51,37 @@ public enum ExportLayout: Sendable {
         )
     }
 
+    /// Resolves a document export preset into output pixels. The source preset
+    /// preserves the captured frame dimensions (rounded down to even values
+    /// for codec compatibility); other presets constrain the canvas aspect.
+    public static func outputPixelSize(
+        aspectWidth: Double,
+        aspectHeight: Double,
+        resolution: ExportResolutionPreset,
+        sourceWidth: Int,
+        sourceHeight: Int
+    ) -> (width: Int, height: Int) {
+        let edges: (long: Int, short: Int)
+        if resolution == .source {
+            // Preserve the project's canvas aspect while keeping the captured
+            // video's long/short-edge resolution. Returning the raw source
+            // dimensions here would silently change portrait/square canvases
+            // back to the source aspect ratio.
+            edges = (
+                max(max(sourceWidth, sourceHeight), 2),
+                max(min(sourceWidth, sourceHeight), 2)
+            )
+        } else {
+            edges = resolution.maxEdges ?? (maxLongEdge, maxShortEdge)
+        }
+        return outputPixelSize(
+            aspectWidth: aspectWidth,
+            aspectHeight: aspectHeight,
+            maxLongEdge: edges.long,
+            maxShortEdge: edges.short
+        )
+    }
+
     public static func evenDimension(_ value: Int) -> Int {
         max(2, value - (value % 2))
     }
@@ -58,6 +89,18 @@ public enum ExportLayout: Sendable {
     /// 60 fps when the source average is high, otherwise 30.
     public static func outputFrameRate(sourceAverageFPS: Double) -> Int32 {
         sourceAverageFPS >= highFrameRateThreshold ? 60 : 30
+    }
+
+    /// Scales authored overlay measurements from their 1080p design size to
+    /// the selected output canvas. Preview multiplies this by its view scale,
+    /// keeping typography and annotation geometry aligned with export.
+    public static func authoredContentScale(for canvasSize: CGSize) -> CGFloat {
+        max(min(canvasSize.width, canvasSize.height) / 1080, 0.25)
+    }
+
+    public static func captionPadding(for canvasSize: CGSize) -> CGSize {
+        let scale = authoredContentScale(for: canvasSize)
+        return CGSize(width: 18 * scale, height: 12 * scale)
     }
 
     public static func clampedTrim(
@@ -187,11 +230,15 @@ public enum ExportLayout: Sendable {
         canvas: CanvasSettings,
         sourceWidth: Int,
         sourceHeight: Int,
-        cropUV: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+        cropUV: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1),
+        resolution: ExportResolutionPreset = .p1080
     ) -> ExportCanvasLayout {
         let size = outputPixelSize(
             aspectWidth: canvas.aspectWidth,
-            aspectHeight: canvas.aspectHeight
+            aspectHeight: canvas.aspectHeight,
+            resolution: resolution,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight
         )
         let canvasSize = CGSize(width: size.width, height: size.height)
         let video = videoRect(

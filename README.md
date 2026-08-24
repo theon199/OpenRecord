@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim, restyle, and retime the recording, adds velocity-based cursor motion blur and a movable picture-in-picture overlay, cleans up audio locally, and exports an H.264 MP4.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim, restyle, and retime the recording, adds captions, callouts, cursor motion blur, and a movable picture-in-picture overlay, cleans up audio locally, and exports polished video, GIF, audio, or still-image deliverables.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -57,17 +57,19 @@ Default: **`~/Movies/OpenRecord/Projects`**.
 
 Settings (folder button in the library) → **Choose Folder…** to use a Dropbox, Google Drive, or iCloud Drive directory. The app writes `.openrecord` bundles **directly in that folder** (no extra `Projects` subdirectory is added). The cloud client uploads them; OpenRecord never talks to those APIs.
 
-Sidebar context menu → **Reveal in Finder**. Export can optionally copy the MP4 into the same library folder.
+Sidebar context menu → **Reveal in Finder**. An editor export can optionally be copied into the same library folder.
 
 ## Editor and export
 
 Open a project from the sidebar.
 
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
-- **Timeline**: playhead, trim handles, zoom blocks, and color-coded 0.25×–4× speed regions (drag blocks or their edges to move/resize). Space plays/pauses; Delete removes the selected zoom or speed region.
-- **Inspector**: zoom amount, auto-zoom sensitivity, camera easing, canvas/cursor styling, webcam and keyboard overlays, speed controls, microphone normalization/noise gate/de-click, microphone/system balance, and export.
+- **Timeline**: playhead, trim handles, zoom blocks, color-coded 0.25×–4× speed regions, caption cues, and annotation ranges. Drag a block or either edge to move or resize it. Space plays/pauses; Delete removes the selected timeline item.
+- **Inspector**: zoom amount, auto-zoom sensitivity, camera easing, canvas/cursor styling, webcam and keyboard overlays, speed controls, captions, text/arrow/spotlight annotations, microphone normalization/noise gate/de-click, microphone/system balance, and export.
 
-**Export…** (⌘E) renders the **in-memory** document — not a stale re-read from disk. Output is H.264 High, Rec.709, **1080p-capped** (long edge ≤ 1920, short ≤ 1080), 60 fps if the source averages ≥ 45 fps else 30. Speed regions remap every visual/telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
+**Export Video…** (⌘E) renders the **in-memory** document — not a stale re-read from disk. Choose H.264 or HEVC in MP4, or ProRes 422 in MOV, at 720p, 1080p, 4K, or source-sized resolution. Output is Rec.709 and 60 fps if the source averages ≥ 45 fps, otherwise 30 fps. Speed regions remap every visual and telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
+
+The Export inspector also creates animated GIFs (up to 30 seconds), mixed-audio M4A files, and a PNG of the current playhead frame (⌘⇧E). **Batch Export** in the library exports every project in the current library as H.264 MP4.
 
 ## Project format
 
@@ -76,7 +78,7 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # capture target/timing/health and optional webcam device metadata
-  project.json              # v2: trims, zooms, speed/audio, canvas/effects, webcam + keyboard overlays
+  project.json              # v3: edits, captions, annotations, overlays, and export settings
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     webcam.mp4              # optional H.264 face-camera track
@@ -96,4 +98,4 @@ Coordinates are **points** (Quartz, origin top-left of the main display). Cursor
 
 ## Out of scope
 
-No captions, annotations, GIF, iPhone capture, shareable links, advanced voice isolation, or in-app OAuth yet.
+No automatic speech-to-text, freehand drawing, blur regions, animated stickers, device frames, iPhone capture, shareable links, advanced voice isolation, or in-app OAuth yet.

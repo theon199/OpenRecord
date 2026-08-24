@@ -35,28 +35,45 @@ struct TimelineView: View {
 
                 Spacer()
 
-                Button("Add Zoom") {
-                    session.addZoomAtPlayhead()
+                Menu("Add") {
+                    Button("Zoom") { session.addZoomAtPlayhead() }
+                        .disabled(!session.canAddZoomAtPlayhead)
+                    Button("Speed Region") { session.addSpeedAtPlayhead() }
+                        .disabled(!session.canAddSpeedAtPlayhead)
+                    Button("Caption") { session.addCaptionAtPlayhead() }
+                    Menu("Annotation") {
+                        Button("Text Callout") { session.addAnnotationAtPlayhead(kind: .text) }
+                        Button("Arrow") { session.addAnnotationAtPlayhead(kind: .arrow) }
+                        Button("Spotlight") { session.addAnnotationAtPlayhead(kind: .spotlight) }
+                    }
+                    Divider()
+                    Button("Import Captions…") { session.importCaptionsPanel() }
                 }
-                .disabled(!session.canAddZoomAtPlayhead)
-                .help("Add a zoom at the playhead")
-                Button("Delete Zoom") {
-                    session.deleteSelectedZoom()
+                Button("Delete") {
+                    if session.selectedCaptionID != nil {
+                        session.deleteSelectedCaption()
+                    } else if session.selectedAnnotationID != nil {
+                        session.deleteSelectedAnnotation()
+                    } else if session.selectedSpeedID != nil {
+                        session.deleteSelectedSpeedSegment()
+                    } else {
+                        session.deleteSelectedZoom()
+                    }
                 }
-                .disabled(session.selectedZoomID == nil)
+                .disabled(
+                    session.selectedZoomID == nil
+                        && session.selectedSpeedID == nil
+                        && session.selectedCaptionID == nil
+                        && session.selectedAnnotationID == nil
+                )
                 .help("Delete  ⌫")
-                Button("Add Speed") {
-                    session.addSpeedAtPlayhead()
-                }
-                .disabled(!session.canAddSpeedAtPlayhead)
-                .help("Add a 2× speed region at the playhead")
             }
             .controlSize(.small)
 
             GeometryReader { geo in
                 timeline(size: geo.size)
             }
-            .frame(height: 76)
+            .frame(height: 104)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
@@ -81,6 +98,14 @@ struct TimelineView: View {
 
             ForEach(session.document.speedSegments) { segment in
                 speedBlock(segment, width: size.width, height: size.height)
+            }
+
+            ForEach(session.document.captions) { cue in
+                captionBlock(cue, width: size.width)
+            }
+
+            ForEach(session.document.annotations) { annotation in
+                annotationBlock(annotation, width: size.width)
             }
 
             playhead(width: size.width, height: size.height)
@@ -137,8 +162,8 @@ struct TimelineView: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
             }
-            .frame(width: max(x1 - x0, 8), height: 24)
-            .offset(x: x0, y: 25)
+            .frame(width: max(x1 - x0, 8), height: 20)
+            .offset(x: x0, y: 61)
     }
 
     private func speedBlock(_ segment: SpeedSegment, width: CGFloat, height: CGFloat) -> some View {
@@ -166,8 +191,40 @@ struct TimelineView: View {
                         .stroke(.white.opacity(0.85), lineWidth: 1)
                 }
             }
+            .frame(width: max(x1 - x0, 8), height: 14)
+            .offset(x: x0, y: height - 18)
+    }
+
+    private func captionBlock(_ cue: CaptionCue, width: CGFloat) -> some View {
+        let x0 = xPosition(cue.start, width: width)
+        let x1 = xPosition(cue.end, width: width)
+        let selected = cue.id == session.selectedCaptionID
+        return RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.purple.opacity(selected ? 0.88 : 0.52))
+            .overlay {
+                Text(cue.text.replacingOccurrences(of: "\n", with: " "))
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 3)
+            }
             .frame(width: max(x1 - x0, 8), height: 16)
-            .offset(x: x0, y: height - 19)
+            .offset(x: x0, y: 22)
+    }
+
+    private func annotationBlock(_ annotation: Annotation, width: CGFloat) -> some View {
+        let x0 = xPosition(annotation.start, width: width)
+        let x1 = xPosition(annotation.end, width: width)
+        let selected = annotation.id == session.selectedAnnotationID
+        return RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.green.opacity(selected ? 0.88 : 0.52))
+            .overlay {
+                Text(annotation.kind.rawValue.capitalized)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: max(x1 - x0, 8), height: 16)
+            .offset(x: x0, y: 42)
     }
 
     private func playhead(width: CGFloat, height: CGFloat) -> some View {
@@ -222,28 +279,32 @@ struct TimelineView: View {
                         session.beginDocumentEdit(actionName: actionName)
                     }
                     if case .zoomBody(let id, _, _, _) = drag {
-                        session.selectedZoomID = id
-                        session.selectedSpeedID = nil
+                        session.selectZoom(id)
                     }
                     if case .zoomStart(let id) = drag {
-                        session.selectedZoomID = id
-                        session.selectedSpeedID = nil
+                        session.selectZoom(id)
                     }
                     if case .zoomEnd(let id) = drag {
-                        session.selectedZoomID = id
-                        session.selectedSpeedID = nil
+                        session.selectZoom(id)
                     }
                     if case .speedBody(let id, _, _, _) = drag {
-                        session.selectedSpeedID = id
-                        session.selectedZoomID = nil
+                        session.selectSpeed(id)
                     }
+                    if case .captionBody(let id, _, _, _) = drag {
+                        session.selectCaption(id)
+                    }
+                    if case .captionStart(let id) = drag { session.selectCaption(id) }
+                    if case .captionEnd(let id) = drag { session.selectCaption(id) }
+                    if case .annotationBody(let id, _, _, _) = drag {
+                        session.selectAnnotation(id)
+                    }
+                    if case .annotationStart(let id) = drag { session.selectAnnotation(id) }
+                    if case .annotationEnd(let id) = drag { session.selectAnnotation(id) }
                     if case .speedStart(let id) = drag {
-                        session.selectedSpeedID = id
-                        session.selectedZoomID = nil
+                        session.selectSpeed(id)
                     }
                     if case .speedEnd(let id) = drag {
-                        session.selectedSpeedID = id
-                        session.selectedZoomID = nil
+                        session.selectSpeed(id)
                     }
                 }
                 apply(drag: drag, time: time)
@@ -317,6 +378,36 @@ struct TimelineView: View {
             segment.start = start
             segment.end = start + span
             session.replaceSpeedSegment(segment)
+        case .captionStart(let id):
+            guard var cue = session.document.captions.first(where: { $0.id == id }) else { return }
+            cue.start = min(time, cue.end - 0.05)
+            session.replaceCaption(cue)
+        case .captionEnd(let id):
+            guard var cue = session.document.captions.first(where: { $0.id == id }) else { return }
+            cue.end = max(time, cue.start + 0.05)
+            session.replaceCaption(cue)
+        case .captionBody(let id, let originalStart, let originalEnd, let grab):
+            let span = originalEnd - originalStart
+            guard var cue = session.document.captions.first(where: { $0.id == id }) else { return }
+            let start = min(max(time - grab, 0), max(0, session.timelineDuration - span))
+            cue.start = start
+            cue.end = start + span
+            session.replaceCaption(cue)
+        case .annotationStart(let id):
+            guard var annotation = session.document.annotations.first(where: { $0.id == id }) else { return }
+            annotation.start = min(time, annotation.end - 0.05)
+            session.replaceAnnotation(annotation)
+        case .annotationEnd(let id):
+            guard var annotation = session.document.annotations.first(where: { $0.id == id }) else { return }
+            annotation.end = max(time, annotation.start + 0.05)
+            session.replaceAnnotation(annotation)
+        case .annotationBody(let id, let originalStart, let originalEnd, let grab):
+            let span = originalEnd - originalStart
+            guard var annotation = session.document.annotations.first(where: { $0.id == id }) else { return }
+            let start = min(max(time - grab, 0), max(0, session.timelineDuration - span))
+            annotation.start = start
+            annotation.end = start + span
+            session.replaceAnnotation(annotation)
         }
     }
 
@@ -351,14 +442,45 @@ struct TimelineView: View {
             }
         }
 
-        for range in session.document.zoomRanges.reversed() {
-            let x0 = xPosition(range.start, width: width)
-            let x1 = xPosition(range.end, width: width)
-            if abs(x - x0) <= handle { return .zoomStart(range.id) }
-            if abs(x - x1) <= handle { return .zoomEnd(range.id) }
-            if x >= x0, x <= x1 {
-                let t = timeAt(x, width: width, duration: duration)
-                return .zoomBody(range.id, start: range.start, end: range.end, grab: t - range.start)
+        if point.y >= 40, point.y < 60 {
+            for annotation in session.document.annotations.reversed() {
+                let x0 = xPosition(annotation.start, width: width)
+                let x1 = xPosition(annotation.end, width: width)
+                if abs(x - x0) <= handle { return .annotationStart(annotation.id) }
+                if abs(x - x1) <= handle { return .annotationEnd(annotation.id) }
+                if x >= x0, x <= x1 {
+                    return .annotationBody(annotation.id, start: annotation.start, end: annotation.end, grab: timeAt(x, width: width, duration: duration) - annotation.start)
+                }
+            }
+        }
+
+        if point.y >= 18, point.y < 38 {
+            for cue in session.document.captions.reversed() {
+                let x0 = xPosition(cue.start, width: width)
+                let x1 = xPosition(cue.end, width: width)
+                if abs(x - x0) <= handle { return .captionStart(cue.id) }
+                if abs(x - x1) <= handle { return .captionEnd(cue.id) }
+                if x >= x0, x <= x1 {
+                    return .captionBody(cue.id, start: cue.start, end: cue.end, grab: timeAt(x, width: width, duration: duration) - cue.start)
+                }
+            }
+        }
+
+        if point.y >= 58, point.y < 84 {
+            for range in session.document.zoomRanges.reversed() {
+                let x0 = xPosition(range.start, width: width)
+                let x1 = xPosition(range.end, width: width)
+                if abs(x - x0) <= handle { return .zoomStart(range.id) }
+                if abs(x - x1) <= handle { return .zoomEnd(range.id) }
+                if x >= x0, x <= x1 {
+                    let t = timeAt(x, width: width, duration: duration)
+                    return .zoomBody(
+                        range.id,
+                        start: range.start,
+                        end: range.end,
+                        grab: t - range.start
+                    )
+                }
             }
         }
         return .playhead
@@ -383,6 +505,12 @@ private enum TimelineDrag {
     case speedStart(UUID)
     case speedEnd(UUID)
     case speedBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
+    case captionStart(UUID)
+    case captionEnd(UUID)
+    case captionBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
+    case annotationStart(UUID)
+    case annotationEnd(UUID)
+    case annotationBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
 
     var undoActionName: String? {
         switch self {
@@ -394,6 +522,10 @@ private enum TimelineDrag {
             "Adjust Zoom"
         case .speedStart, .speedEnd, .speedBody:
             "Adjust Speed Region"
+        case .captionStart, .captionEnd, .captionBody:
+            "Adjust Caption"
+        case .annotationStart, .annotationEnd, .annotationBody:
+            "Adjust Annotation"
         }
     }
 }
