@@ -20,6 +20,19 @@ struct OpenRecordApp: App {
         .defaultLaunchBehavior(.presented)
         .restorationBehavior(.disabled)
         .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button(model.editor?.undoMenuTitle ?? "Undo") {
+                    model.editor?.undo()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(model.editor?.canUndo != true)
+
+                Button(model.editor?.redoMenuTitle ?? "Redo") {
+                    model.editor?.redo()
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(model.editor?.canRedo != true)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Recording…") {
                     Task { await model.presentRecorder(autoStart: false) }

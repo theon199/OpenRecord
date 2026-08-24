@@ -22,6 +22,8 @@ public enum CanvasBackground: Codable, Sendable, Hashable {
 }
 
 public struct CanvasSettings: Codable, Sendable, Hashable {
+    public static let cursorScaleRange = 0.1...3.0
+
     public var background: CanvasBackground
     public var padding: Double
     public var cornerRadius: Double
@@ -33,7 +35,7 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
         background: CanvasBackground = .solid(.canvasDefault),
         padding: Double = 48,
         cornerRadius: Double = 16,
-        cursorScale: Double = 1,
+        cursorScale: Double = 0.5,
         aspectWidth: Double = 16,
         aspectHeight: Double = 9
     ) {

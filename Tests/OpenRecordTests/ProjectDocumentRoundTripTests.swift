@@ -5,6 +5,12 @@ import OpenRecord
 
 enum ProjectDocumentJSONRoundTrip {
     static func run() throws {
+        guard CanvasSettings.default.cursorScale == 0.5,
+              CanvasSettings.cursorScaleRange.lowerBound == 0.1
+        else {
+            throw OpenRecordError.io("Cursor scale should default to 0.5× and allow adjustment down to 0.1×")
+        }
+
         let sprite = CursorSprite(
             id: "arrow",
             hotspot: Point2D(x: 4, y: 2),
@@ -38,6 +44,43 @@ enum ProjectDocumentJSONRoundTrip {
         let decoded = try ProjectJSON.decoder.decode(ProjectDocument.self, from: data)
         guard decoded == original else {
             throw OpenRecordError.io("ProjectDocument JSON round-trip produced a different value")
+        }
+
+        try assertUndoHistoryCoalescesContinuousEdits()
+    }
+
+    private static func assertUndoHistoryCoalescesContinuousEdits() throws {
+        let original = ProjectDocument(trimIn: 0, trimOut: 12)
+        var intermediate = original
+        intermediate.trimIn = 1
+        var edited = original
+        edited.trimIn = 2
+
+        var history = ProjectDocumentHistory()
+        history.begin(document: original, actionName: "Adjust Trim")
+        history.record(before: original, after: intermediate, actionName: "Adjust Trim")
+        history.record(before: intermediate, after: edited, actionName: "Adjust Trim")
+        history.commit(currentDocument: edited)
+
+        guard history.canUndo,
+              !history.canRedo,
+              history.undoActionName == "Adjust Trim",
+              history.undo(currentDocument: edited) == original,
+              !history.canUndo,
+              history.canRedo,
+              history.redo(currentDocument: original) == edited
+        else {
+            throw OpenRecordError.io("Continuous document edits did not coalesce into one undo step")
+        }
+
+        guard history.undo(currentDocument: edited) == original else {
+            throw OpenRecordError.io("Undo history could not restore the original document")
+        }
+        var divergent = original
+        divergent.canvas.padding = 8
+        history.record(before: original, after: divergent, actionName: "Change Padding")
+        guard !history.canRedo, history.undoActionName == "Change Padding" else {
+            throw OpenRecordError.io("A divergent edit did not clear the redo stack")
         }
     }
 }

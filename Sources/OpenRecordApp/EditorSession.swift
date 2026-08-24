@@ -66,8 +66,17 @@ final class EditorSession {
     private(set) var editRevision: UInt64 = 0
     private(set) var savedRevision: UInt64 = 0
     private var savedDocument: ProjectDocument
+    private var documentHistory = ProjectDocumentHistory()
 
     var hasUnsavedChanges: Bool { editRevision != savedRevision }
+    var canUndo: Bool { documentHistory.canUndo }
+    var canRedo: Bool { documentHistory.canRedo }
+    var undoMenuTitle: String {
+        documentHistory.undoActionName.map { "Undo \($0)" } ?? "Undo"
+    }
+    var redoMenuTitle: String {
+        documentHistory.redoActionName.map { "Redo \($0)" } ?? "Redo"
+    }
 
     var title: String {
         projectURL.deletingPathExtension().lastPathComponent
@@ -253,10 +262,20 @@ final class EditorSession {
 
     func regenerateAutoZooms() {
         Task { @MainActor in
+            let before = document
+            let previousSelection = selectedZoomID
             selectedZoomID = nil
             do {
                 try await applyAutoZoomsAndSave()
+                documentHistory.record(
+                    before: before,
+                    after: document,
+                    actionName: "Regenerate Auto-Zooms"
+                )
             } catch {
+                document = before
+                selectedZoomID = previousSelection
+                rebuildEngine()
                 lastError = error.localizedDescription
             }
         }
@@ -310,6 +329,7 @@ final class EditorSession {
         case .unavailable:
             return
         case .create(let start, let end):
+            let before = document
             let zoom = ZoomRange(
                 start: start,
                 end: end,
@@ -319,52 +339,126 @@ final class EditorSession {
             document.zoomRanges.append(zoom)
             document.zoomRanges.sort { $0.start < $1.start }
             selectedZoomID = zoom.id
-            zoomRangesDidChange()
+            documentDidChange(
+                from: before,
+                actionName: "Add Zoom",
+                rebuildZoomEngine: true
+            )
         }
     }
 
     func deleteSelectedZoom() {
         guard let selectedZoomID else { return }
+        let before = document
         document.zoomRanges.removeAll { $0.id == selectedZoomID }
         self.selectedZoomID = nil
-        zoomRangesDidChange()
+        documentDidChange(
+            from: before,
+            actionName: "Delete Zoom",
+            rebuildZoomEngine: true
+        )
     }
 
     func updateSelectedZoom(_ body: (inout ZoomRange) -> Void) {
         guard let selectedZoomID,
               let index = document.zoomRanges.firstIndex(where: { $0.id == selectedZoomID })
         else { return }
+        let before = document
         body(&document.zoomRanges[index])
         clampZoom(&document.zoomRanges[index])
-        zoomRangesDidChange()
+        documentDidChange(
+            from: before,
+            actionName: "Adjust Zoom",
+            rebuildZoomEngine: true
+        )
     }
 
     func replaceZoom(_ range: ZoomRange) {
         guard let index = document.zoomRanges.firstIndex(where: { $0.id == range.id }) else { return }
+        let before = document
         var next = range
         clampZoom(&next)
         document.zoomRanges[index] = next
-        zoomRangesDidChange()
+        documentDidChange(
+            from: before,
+            actionName: "Adjust Zoom",
+            rebuildZoomEngine: true
+        )
     }
 
     func setTrimIn(_ time: TimeInterval) {
+        let before = document
         let maxIn = max(0, effectiveTrimOut - 0.1)
         document.trimIn = min(max(time, 0), maxIn)
-        canvasDidChange()
+        documentDidChange(from: before, actionName: "Adjust Trim")
     }
 
     func setTrimOut(_ time: TimeInterval) {
+        let before = document
         let minOut = document.trimIn + 0.1
         document.trimOut = min(max(time, minOut), timelineDuration)
-        canvasDidChange()
+        documentDidChange(from: before, actionName: "Adjust Trim")
     }
 
-    func canvasDidChange() {
+    func updateCanvas(
+        actionName: String,
+        _ body: (inout CanvasSettings) -> Void
+    ) {
+        let before = document
+        body(&document.canvas)
+        documentDidChange(from: before, actionName: actionName)
+    }
+
+    func beginDocumentEdit(actionName: String) {
+        documentHistory.begin(document: document, actionName: actionName)
+    }
+
+    func endDocumentEdit() {
+        documentHistory.commit(currentDocument: document)
+    }
+
+    func undo() {
+        guard let snapshot = documentHistory.undo(currentDocument: document) else { return }
+        restoreHistorySnapshot(snapshot)
+    }
+
+    func redo() {
+        guard let snapshot = documentHistory.redo(currentDocument: document) else { return }
+        restoreHistorySnapshot(snapshot)
+    }
+
+    private func documentDidChange(
+        from before: ProjectDocument,
+        actionName: String,
+        rebuildZoomEngine: Bool = false
+    ) {
+        guard before != document else { return }
+        documentHistory.record(before: before, after: document, actionName: actionName)
         markDirty()
+        if rebuildZoomEngine {
+            scheduleEngineRebuild()
+        }
         scheduleSave()
     }
 
-    func zoomRangesDidChange() {
+    private func restoreHistorySnapshot(_ snapshot: ProjectDocument) {
+        let previousZoomIDs = Set(document.zoomRanges.map(\.id))
+        document = snapshot
+        if let selectedZoomID,
+           !document.zoomRanges.contains(where: { $0.id == selectedZoomID })
+        {
+            self.selectedZoomID = nil
+        }
+        if selectedZoomID == nil {
+            let restoredZoomIDs = Set(document.zoomRanges.map(\.id)).subtracting(previousZoomIDs)
+            if restoredZoomIDs.count == 1 {
+                selectedZoomID = restoredZoomIDs.first
+            }
+        }
+        let clampedPlayhead = min(max(playhead, document.trimIn), effectiveTrimOut)
+        if abs(clampedPlayhead - playhead) > 0.000_001 {
+            seek(to: clampedPlayhead)
+        }
         markDirty()
         scheduleEngineRebuild()
         scheduleSave()
@@ -415,15 +509,21 @@ final class EditorSession {
         }.value
     }
 
-    /// Revert the in-memory document to the latest successfully persisted
-    /// revision. This is intentionally explicit so a close prompt can offer
-    /// Discard without touching the on-disk bundle.
-    func discardUnsavedChanges() {
+    /// Revert to the latest successfully persisted revision. The snapshot is
+    /// written again behind any save already in flight so Discard wins races.
+    func discardUnsavedChanges() async {
         guard hasUnsavedChanges else { return }
-        document = savedDocument
-        editRevision = savedRevision
+        saveTask?.cancel()
+        let snapshot = savedDocument
+        document = snapshot
+        editRevision &+= 1
         selectedZoomID = nil
+        documentHistory.removeAll()
         rebuildEngine()
+        // Serialize behind any save already in flight, then restore the last
+        // known-good bytes so a stale autosave cannot win after Discard.
+        try? await saveCoordinator.save(document: snapshot)
+        savedRevision = editRevision
     }
 
     func export(to url: URL) async {

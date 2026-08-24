@@ -283,7 +283,7 @@ final class AppModel {
         Task {
             do {
                 _ = try await editor.saveCopy(to: destination)
-                editor.discardUnsavedChanges()
+                await editor.discardUnsavedChanges()
                 pendingEditorTransition = nil
                 saveFailureMessage = nil
                 await performEditorTransition(transition)
@@ -295,10 +295,13 @@ final class AppModel {
 
     func discardChangesAndContinue() {
         guard let transition = pendingEditorTransition else { return }
-        editor?.discardUnsavedChanges()
+        let editor = editor
         pendingEditorTransition = nil
         saveFailureMessage = nil
-        Task { await performEditorTransition(transition) }
+        Task {
+            await editor?.discardUnsavedChanges()
+            await performEditorTransition(transition)
+        }
     }
 
     func cancelPendingEditorTransition() {
@@ -512,11 +515,11 @@ final class AppModel {
                     continue
                 case .alertSecondButtonReturn:
                     if await saveCopyForTermination(editor) {
-                        editor.discardUnsavedChanges()
+                        await editor.discardUnsavedChanges()
                         return true
                     }
                 case .alertThirdButtonReturn:
-                    editor.discardUnsavedChanges()
+                    await editor.discardUnsavedChanges()
                     return true
                 default:
                     return false

@@ -163,6 +163,9 @@ struct TimelineView: View {
                 let time = timeAt(value.location.x, width: width, duration: duration)
                 if drag == nil {
                     drag = hit(at: value.location.x, width: width, duration: duration)
+                    if let actionName = drag?.undoActionName {
+                        session.beginDocumentEdit(actionName: actionName)
+                    }
                     if case .zoomBody(let id, _, _, _) = drag {
                         session.selectedZoomID = id
                     }
@@ -176,6 +179,7 @@ struct TimelineView: View {
                 apply(drag: drag, time: time)
             }
             .onEnded { _ in
+                session.endDocumentEdit()
                 drag = nil
                 NSCursor.arrow.set()
             }
@@ -251,4 +255,15 @@ private enum TimelineDrag {
     case zoomStart(UUID)
     case zoomEnd(UUID)
     case zoomBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
+
+    var undoActionName: String? {
+        switch self {
+        case .playhead:
+            nil
+        case .trimIn, .trimOut:
+            "Adjust Trim"
+        case .zoomStart, .zoomEnd, .zoomBody:
+            "Adjust Zoom"
+        }
+    }
 }

@@ -63,16 +63,24 @@ enum StabilizationContractSuite {
             pngRelativePath: "recording/cursors/arrow.png",
             standardSize: Size2D(width: 16, height: 16)
         )
-        let placement = CursorSpriteLayout.placement(
-            sprite: sprite,
-            imagePixelSize: Size2D(width: 32, height: 32),
-            cursorScale: 1,
-            pixelsPerPoint: 2
-        )
-        guard placement.drawSize == Size2D(width: 32, height: 32),
-              placement.hotspot == Point2D(x: 4, y: 6)
-        else {
-            throw OpenRecordError.io("Retina cursor placement used point dimensions for a pixel hotspot")
+        for scale in [0.1, 0.5, 1.0] {
+            let placement = CursorSpriteLayout.placement(
+                sprite: sprite,
+                imagePixelSize: Size2D(width: 32, height: 32),
+                cursorScale: scale,
+                pixelsPerPoint: 2
+            )
+            let expectedSize = 32 * scale
+            let expectedHotspot = Point2D(x: 4 * scale, y: 6 * scale)
+            guard abs(placement.drawSize.width - expectedSize) < 0.000_001,
+                  abs(placement.drawSize.height - expectedSize) < 0.000_001,
+                  abs(placement.hotspot.x - expectedHotspot.x) < 0.000_001,
+                  abs(placement.hotspot.y - expectedHotspot.y) < 0.000_001
+            else {
+                throw OpenRecordError.io(
+                    "Cursor placement did not preserve the \(scale)× scale in preview/export layout"
+                )
+            }
         }
     }
 

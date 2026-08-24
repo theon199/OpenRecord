@@ -14,7 +14,14 @@ struct InspectorPanel: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
-                    Slider(value: zoomAmount, in: 1...4, step: 0.05)
+                    Slider(
+                        value: zoomAmount,
+                        in: 1...4,
+                        step: 0.05,
+                        onEditingChanged: { editing in
+                            setEditing(editing, actionName: "Adjust Zoom")
+                        }
+                    )
                     LabeledContent("Start", value: Timecode.string(session.selectedZoom?.start ?? 0))
                     LabeledContent("End", value: Timecode.string(session.selectedZoom?.end ?? 0))
                     Button("Delete Zoom", role: .destructive) {
@@ -37,9 +44,28 @@ struct InspectorPanel: View {
 
             Section("Canvas") {
                 ColorPicker("Background", selection: backgroundColor, supportsOpacity: false)
-                labeledSlider("Padding", value: padding, range: 0...120, format: "%.0f")
-                labeledSlider("Corner radius", value: cornerRadius, range: 0...48, format: "%.0f")
-                labeledSlider("Cursor scale", value: cursorScale, range: 0.5...3, format: "%.2f")
+                labeledSlider(
+                    "Padding",
+                    value: padding,
+                    range: 0...120,
+                    format: "%.0f",
+                    actionName: "Change Padding"
+                )
+                labeledSlider(
+                    "Corner radius",
+                    value: cornerRadius,
+                    range: 0...48,
+                    format: "%.0f",
+                    actionName: "Change Corner Radius"
+                )
+                labeledSlider(
+                    "Cursor scale",
+                    value: cursorScale,
+                    range: CanvasSettings.cursorScaleRange,
+                    format: "%.2f×",
+                    actionName: "Change Cursor Scale",
+                    step: 0.05
+                )
             }
 
             Section("Trim") {
@@ -107,8 +133,9 @@ struct InspectorPanel: View {
                 }
             },
             set: { color in
-                session.document.canvas.background = .solid(RGBAColor(color))
-                session.canvasDidChange()
+                session.updateCanvas(actionName: "Change Background") {
+                    $0.background = .solid(RGBAColor(color))
+                }
             }
         )
     }
@@ -117,8 +144,9 @@ struct InspectorPanel: View {
         Binding(
             get: { session.document.canvas.padding },
             set: { value in
-                session.document.canvas.padding = value
-                session.canvasDidChange()
+                session.updateCanvas(actionName: "Change Padding") {
+                    $0.padding = value
+                }
             }
         )
     }
@@ -127,8 +155,9 @@ struct InspectorPanel: View {
         Binding(
             get: { session.document.canvas.cornerRadius },
             set: { value in
-                session.document.canvas.cornerRadius = value
-                session.canvasDidChange()
+                session.updateCanvas(actionName: "Change Corner Radius") {
+                    $0.cornerRadius = value
+                }
             }
         )
     }
@@ -137,8 +166,9 @@ struct InspectorPanel: View {
         Binding(
             get: { session.document.canvas.cursorScale },
             set: { value in
-                session.document.canvas.cursorScale = value
-                session.canvasDidChange()
+                session.updateCanvas(actionName: "Change Cursor Scale") {
+                    $0.cursorScale = value
+                }
             }
         )
     }
@@ -147,7 +177,9 @@ struct InspectorPanel: View {
         _ title: String,
         value: Binding<Double>,
         range: ClosedRange<Double>,
-        format: String
+        format: String,
+        actionName: String,
+        step: Double? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -157,7 +189,32 @@ struct InspectorPanel: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
-            Slider(value: value, in: range)
+            if let step {
+                Slider(
+                    value: value,
+                    in: range,
+                    step: step,
+                    onEditingChanged: { editing in
+                        setEditing(editing, actionName: actionName)
+                    }
+                )
+            } else {
+                Slider(
+                    value: value,
+                    in: range,
+                    onEditingChanged: { editing in
+                        setEditing(editing, actionName: actionName)
+                    }
+                )
+            }
+        }
+    }
+
+    private func setEditing(_ editing: Bool, actionName: String) {
+        if editing {
+            session.beginDocumentEdit(actionName: actionName)
+        } else {
+            session.endDocumentEdit()
         }
     }
 }
