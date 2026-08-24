@@ -295,6 +295,7 @@ func exportMissingDisplayThrows() throws {
     try ExportLayoutSuite.missingDisplayThrows()
 }
 
+#if compiler(>=6.2)
 @section("__DATA,__mod_init_func")
 @used
 let openRecordExportTestsModInit: @convention(c) () -> Void = {
@@ -312,3 +313,4 @@ func OpenRecordRunExportLayoutTests() {
         abort()
     }
 }
+#endif

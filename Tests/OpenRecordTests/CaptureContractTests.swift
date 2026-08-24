@@ -61,6 +61,7 @@ func capturePermissionSettingsURLs() throws {
     try CaptureContractTests.runPermissionSettingsURLs()
 }
 
+#if compiler(>=6.2)
 @section("__DATA,__mod_init_func")
 @used
 let openRecordCaptureTestsModInit: @convention(c) () -> Void = {
@@ -79,3 +80,4 @@ func OpenRecordRunCaptureContractTests() {
         abort()
     }
 }
+#endif

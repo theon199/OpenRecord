@@ -334,6 +334,7 @@ func projectLibraryCreateOpenListSaveRoundTrip() throws {
 
 /// Mach-O constructor: CLT `swift test` dlopens the bundle without reliably
 /// running Swift Testing's `@main`, so the library I/O test must run at load.
+#if compiler(>=6.2)
 @section("__DATA,__mod_init_func")
 @used
 let openRecordLibraryTestsModInit: @convention(c) () -> Void = {
@@ -351,3 +352,4 @@ func OpenRecordRunProjectLibraryBundleRoundTrip() {
         abort()
     }
 }
+#endif

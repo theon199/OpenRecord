@@ -92,6 +92,7 @@ func projectDocumentJSONRoundTrip() throws {
 
 /// Mach-O constructor: CLT `swift test` dlopens the bundle without reliably
 /// running Swift Testing's `@main`, so the round-trip must run at load.
+#if compiler(>=6.2)
 @section("__DATA,__mod_init_func")
 @used
 let openRecordTestsModInit: @convention(c) () -> Void = {
@@ -110,3 +111,4 @@ func OpenRecordRunProjectDocumentJSONRoundTrip() {
         abort()
     }
 }
+#endif

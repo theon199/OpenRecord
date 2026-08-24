@@ -313,6 +313,7 @@ func stabilizationCaptureStateMachineStartsIdle() throws {
     try StabilizationContractSuite.captureSessionStartsIdle()
 }
 
+#if compiler(>=6.2)
 @section("__DATA,__mod_init_func")
 @used
 let openRecordStabilizationTestsModInit: @convention(c) () -> Void = {
@@ -330,3 +331,4 @@ func OpenRecordRunStabilizationContractTests() {
         abort()
     }
 }
+#endif

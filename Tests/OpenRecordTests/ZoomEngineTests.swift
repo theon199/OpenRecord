@@ -487,6 +487,7 @@ func movementIslandOpensNearStartCursor() throws {
     try ZoomEngineSuite.movementIslandOpensNearStartCursor()
 }
 
+#if compiler(>=6.2)
 @section("__DATA,__mod_init_func")
 @used
 let openRecordZoomEngineTestsModInit: @convention(c) () -> Void = {
@@ -504,3 +505,4 @@ func OpenRecordRunZoomEngineTests() {
         abort()
     }
 }
+#endif
