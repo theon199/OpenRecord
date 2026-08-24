@@ -5,10 +5,12 @@ import SwiftUI
 
 struct PreviewCanvas: View {
     @Bindable var session: EditorSession
+    @State private var anchorDrag: ZoomAnchorDrag?
 
     var body: some View {
         GeometryReader { geo in
-            let crop = session.engine.crop(at: session.playhead)
+            let liveCrop = session.engine.crop(at: session.playhead)
+            let crop = anchorDrag?.cropUV ?? liveCrop
             let cursor = session.engine.interpolateCursor(at: session.playhead)
             let clicking = session.engine.isClicking(at: session.playhead)
             let canvas = session.document.canvas
@@ -49,11 +51,107 @@ struct PreviewCanvas: View {
                         sourceWidth: sourceWidth
                     )
                 }
+
+                if let zoom = session.selectedZoom {
+                    zoomAnchorOverlay(
+                        zoom: zoom,
+                        crop: crop,
+                        video: video
+                    )
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
         }
         .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func zoomAnchorOverlay(
+        zoom: ZoomRange,
+        crop: CGRect,
+        video: CGRect
+    ) -> some View {
+        let point = ExportLayout.mapSourceUVToCanvas(
+            zoom.anchor,
+            cropUV: crop,
+            videoRect: video
+        )
+
+        return ZStack {
+            Circle()
+                .fill(.black.opacity(0.7))
+                .frame(width: 28, height: 28)
+            Circle()
+                .stroke(.white, lineWidth: 2)
+                .frame(width: 18, height: 18)
+            Circle()
+                .fill(.white)
+                .frame(width: 4, height: 4)
+        }
+        .frame(width: 38, height: 38)
+        .contentShape(Circle())
+        .position(x: point.x, y: point.y)
+        .gesture(anchorGesture(zoom: zoom, crop: crop, video: video))
+        .onHover { hovering in
+            if anchorDrag != nil {
+                NSCursor.closedHand.set()
+            } else if hovering {
+                NSCursor.openHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+        .help("Drag to move this zoom's focal point")
+        .accessibilityLabel("Zoom focal point")
+        .accessibilityValue(
+            "\(Int((zoom.anchor.x * 100).rounded())) percent horizontal, "
+                + "\(Int((zoom.anchor.y * 100).rounded())) percent vertical"
+        )
+        .accessibilityHint("Drag to change the selected zoom's focal point")
+    }
+
+    private func anchorGesture(
+        zoom: ZoomRange,
+        crop: CGRect,
+        video: CGRect
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if anchorDrag == nil {
+                    session.pause()
+                    session.beginDocumentEdit(actionName: "Move Zoom Anchor")
+                    anchorDrag = ZoomAnchorDrag(
+                        zoomID: zoom.id,
+                        originalAnchor: zoom.anchor,
+                        cropUV: crop,
+                        videoRect: video
+                    )
+                }
+                guard let anchorDrag,
+                      session.selectedZoomID == anchorDrag.zoomID
+                else { return }
+                let originalPoint = ExportLayout.mapSourceUVToCanvas(
+                    anchorDrag.originalAnchor,
+                    cropUV: anchorDrag.cropUV,
+                    videoRect: anchorDrag.videoRect
+                )
+                let draggedPoint = CGPoint(
+                    x: originalPoint.x + value.translation.width,
+                    y: originalPoint.y + value.translation.height
+                )
+                let anchor = ExportLayout.mapCanvasPointToSourceUV(
+                    draggedPoint,
+                    cropUV: anchorDrag.cropUV,
+                    videoRect: anchorDrag.videoRect
+                )
+                session.updateSelectedZoom { $0.anchor = anchor }
+                NSCursor.closedHand.set()
+            }
+            .onEnded { _ in
+                session.endDocumentEdit(rebuildZoomEngine: true)
+                anchorDrag = nil
+                NSCursor.openHand.set()
+            }
     }
 
     @ViewBuilder
@@ -200,6 +298,13 @@ struct PreviewCanvas: View {
             height: rect.height * sy
         )
     }
+}
+
+private struct ZoomAnchorDrag {
+    var zoomID: UUID
+    var originalAnchor: Point2D
+    var cropUV: CGRect
+    var videoRect: CGRect
 }
 
 private struct CursorPointerShape: Shape {

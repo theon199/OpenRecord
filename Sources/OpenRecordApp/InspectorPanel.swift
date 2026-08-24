@@ -22,6 +22,9 @@ struct InspectorPanel: View {
                             setEditing(editing, actionName: "Adjust Zoom")
                         }
                     )
+                    Text("Drag the focal-point handle in the preview to reframe this zoom.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     LabeledContent("Start", value: Timecode.string(session.selectedZoom?.start ?? 0))
                     LabeledContent("End", value: Timecode.string(session.selectedZoom?.end ?? 0))
                     Button("Delete Zoom", role: .destructive) {

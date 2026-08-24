@@ -364,8 +364,13 @@ final class EditorSession {
               let index = document.zoomRanges.firstIndex(where: { $0.id == selectedZoomID })
         else { return }
         let before = document
-        body(&document.zoomRanges[index])
-        clampZoom(&document.zoomRanges[index])
+        // Mutate a local value before assigning it back. `clampZoom` reads
+        // neighboring ranges from `document`; passing the array element as
+        // `inout` while doing that violates Swift's runtime exclusivity rules.
+        var next = document.zoomRanges[index]
+        body(&next)
+        clampZoom(&next)
+        document.zoomRanges[index] = next
         documentDidChange(
             from: before,
             actionName: "Adjust Zoom",
@@ -413,8 +418,12 @@ final class EditorSession {
         documentHistory.begin(document: document, actionName: actionName)
     }
 
-    func endDocumentEdit() {
+    func endDocumentEdit(rebuildZoomEngine: Bool = false) {
         documentHistory.commit(currentDocument: document)
+        if rebuildZoomEngine {
+            engineTask?.cancel()
+            rebuildEngine()
+        }
     }
 
     func undo() {

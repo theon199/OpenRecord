@@ -12,6 +12,7 @@ enum ExportLayoutSuite {
         try uvCropToPixelAndCIRects()
         try paddingBoxAndAspectFit()
         try cursorMapsThroughCrop()
+        try canvasPointMapsBackToSourceUV()
         try trimClamping()
         try clickAgeAndRipple()
         try jsonlMissingIsEmpty()
@@ -116,6 +117,32 @@ enum ExportLayoutSuite {
             videoRect: video
         )
         try expectPoint(corner, CGPoint(x: 10, y: 20), "crop origin")
+    }
+
+    static func canvasPointMapsBackToSourceUV() throws {
+        let crop = CGRect(x: 0.2, y: 0.1, width: 0.6, height: 0.8)
+        let video = CGRect(x: 10, y: 20, width: 300, height: 200)
+        let source = Point2D(x: 0.65, y: 0.42)
+        let canvas = ExportLayout.mapSourceUVToCanvas(
+            source,
+            cropUV: crop,
+            videoRect: video
+        )
+        let roundTrip = ExportLayout.mapCanvasPointToSourceUV(
+            canvas,
+            cropUV: crop,
+            videoRect: video
+        )
+        try expectClose(roundTrip.x, source.x, "inverse UV x")
+        try expectClose(roundTrip.y, source.y, "inverse UV y")
+
+        let clamped = ExportLayout.mapCanvasPointToSourceUV(
+            CGPoint(x: -1_000, y: 1_000),
+            cropUV: crop,
+            videoRect: video
+        )
+        try expectClose(clamped.x, 0, "inverse UV clamps left edge")
+        try expectClose(clamped.y, 1, "inverse UV clamps bottom edge")
     }
 
     static func trimClamping() throws {
@@ -288,6 +315,11 @@ func exportUVCropToPixelAndCIRects() throws {
 @Test
 func exportPaddingBoxAndAspectFit() throws {
     try ExportLayoutSuite.paddingBoxAndAspectFit()
+}
+
+@Test
+func exportCanvasPointMapsBackToSourceUV() throws {
+    try ExportLayoutSuite.canvasPointMapsBackToSourceUV()
 }
 
 @Test

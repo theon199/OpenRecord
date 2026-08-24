@@ -231,6 +231,29 @@ public enum ExportLayout: Sendable {
         )
     }
 
+    /// Map a point in the canvas video rect back into source UV space.
+    ///
+    /// This is the inverse of `mapSourceUVToCanvas` and is shared by preview
+    /// editing gestures so their coordinates match export exactly.
+    public static func mapCanvasPointToSourceUV(
+        _ point: CGPoint,
+        cropUV: CGRect,
+        videoRect: CGRect,
+        clampToSource: Bool = true
+    ) -> Point2D {
+        let width = max(abs(videoRect.width), 1e-12)
+        let height = max(abs(videoRect.height), 1e-12)
+        let localX = (point.x - videoRect.origin.x) / width
+        let localY = (point.y - videoRect.origin.y) / height
+        var x = cropUV.origin.x + localX * cropUV.width
+        var y = cropUV.origin.y + localY * cropUV.height
+        if clampToSource {
+            x = min(max(x, 0), 1)
+            y = min(max(y, 0), 1)
+        }
+        return Point2D(x: x, y: y)
+    }
+
     /// Seconds since the primary button went down, if it is still down at `time`.
     public static func primaryClickAge(
         at time: TimeInterval,
