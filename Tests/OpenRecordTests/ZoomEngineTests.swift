@@ -13,6 +13,7 @@ enum ZoomEngineSuite {
         try cropMidZoomIsSmallerAndNearAnchor()
         try autoZoomSegmentsAroundActivityNotPauses()
         try springAndCropAreDeterministic()
+        try smoothedCursorVelocityIsDeterministic()
         try nearbyClicksStayInOneZoomedRange()
         try isolatedClickIslandHoldsMinZoom()
         try longPauseZoomsOutAndIsSilence()
@@ -171,6 +172,36 @@ enum ZoomEngineSuite {
         let p2 = engineA.interpolateCursor(at: 2.5)
         guard let p1, let p2, p1 == p2 else {
             throw OpenRecordError.io("cursor interpolation is not deterministic")
+        }
+    }
+
+    static func smoothedCursorVelocityIsDeterministic() throws {
+        let samples = move(
+            from: Point2D(x: 200, y: 400),
+            to: Point2D(x: 1_600, y: 400),
+            start: 0,
+            end: 1
+        )
+        let smoother = CursorSmoother(samples: samples, displayBounds: bounds)
+        let first = smoother.velocityIfVisible(at: 0.5)
+        let second = smoother.velocityIfVisible(at: 0.5)
+        guard let first,
+              first == second,
+              first.x > 0,
+              abs(first.y) < 0.000_001
+        else {
+            throw OpenRecordError.io("smoothed cursor velocity was missing or nondeterministic")
+        }
+
+        let hidden = CursorSmoother(
+            samples: [
+                CursorSample(t: 0, x: 200, y: 400, visible: false),
+                CursorSample(t: 1, x: 1_600, y: 400, visible: false),
+            ],
+            displayBounds: bounds
+        )
+        guard hidden.velocityIfVisible(at: 0.5) == nil else {
+            throw OpenRecordError.io("hidden cursor telemetry produced motion blur velocity")
         }
     }
 
@@ -557,6 +588,11 @@ func autoZoomSegmentsAroundActivityNotPauses() throws {
 @Test
 func springAndCropAreDeterministic() throws {
     try ZoomEngineSuite.springAndCropAreDeterministic()
+}
+
+@Test
+func smoothedCursorVelocityIsDeterministic() throws {
+    try ZoomEngineSuite.smoothedCursorVelocityIsDeterministic()
 }
 
 @Test

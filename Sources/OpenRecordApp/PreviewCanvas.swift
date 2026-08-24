@@ -12,6 +12,7 @@ struct PreviewCanvas: View {
             let liveCrop = session.engine.crop(at: session.playhead)
             let crop = anchorDrag?.cropUV ?? liveCrop
             let cursor = session.engine.interpolateCursor(at: session.playhead)
+            let cursorVelocity = session.engine.cursorVelocity(at: session.playhead)
             let clicking = session.engine.isClicking(at: session.playhead)
             let canvas = session.document.canvas
             let sourceWidth = session.sourceWidth
@@ -24,6 +25,11 @@ struct PreviewCanvas: View {
             )
             let outer = ExportLayout.aspectFit(layout.size, in: CGRect(origin: .zero, size: geo.size))
             let viewScale = outer.width / CGFloat(max(layout.width, 1))
+            let cursorMotionBlur = CursorMotionBlurEffect.state(
+                velocity: cursorVelocity,
+                canvasSize: layout.size,
+                settings: canvas.cursorMotionBlur
+            )
             let video = mapRect(layout.videoRect, from: layout.size, into: outer)
             let corner = layout.cornerRadius * Double(viewScale)
             let clickAge = clicking
@@ -52,7 +58,8 @@ struct PreviewCanvas: View {
                         viewVideo: video,
                         viewScale: viewScale,
                         canvas: canvas,
-                        sourceWidth: sourceWidth
+                        sourceWidth: sourceWidth,
+                        motionBlur: cursorMotionBlur
                     )
                 }
 
@@ -258,7 +265,8 @@ struct PreviewCanvas: View {
         viewVideo: CGRect,
         viewScale: CGFloat,
         canvas: CanvasSettings,
-        sourceWidth: Int
+        sourceWidth: Int,
+        motionBlur: CursorMotionBlurState
     ) -> some View {
         let point = ExportLayout.mapSourceUVToCanvas(
             cursor,
@@ -287,37 +295,40 @@ struct PreviewCanvas: View {
                         height: ripple.radius * 2 * Double(viewScale)
                     )
             }
-            if let image = session.cursorImage {
-                let sprite = session.cursorSprite
-                let pixelSize = cursorPixelSize(image)
-                let placement = sprite.map {
-                    CursorSpriteLayout.placement(
-                        sprite: $0,
-                        imagePixelSize: pixelSize,
-                        cursorScale: canvas.cursorScale,
-                        pixelsPerPoint: viewPixelsPerPoint
-                    )
+            Group {
+                if let image = session.cursorImage {
+                    let sprite = session.cursorSprite
+                    let pixelSize = cursorPixelSize(image)
+                    let placement = sprite.map {
+                        CursorSpriteLayout.placement(
+                            sprite: $0,
+                            imagePixelSize: pixelSize,
+                            cursorScale: canvas.cursorScale,
+                            pixelsPerPoint: viewPixelsPerPoint
+                        )
+                    }
+                    let width = placement?.drawSize.width
+                        ?? image.size.width * canvas.cursorScale * viewPixelsPerPoint
+                    let height = placement?.drawSize.height
+                        ?? image.size.height * canvas.cursorScale * viewPixelsPerPoint
+                    let hotspot = placement?.hotspot ?? Point2D(x: 1, y: 1)
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: width, height: height)
+                        .offset(
+                            x: width / 2 - hotspot.x,
+                            y: height / 2 - hotspot.y
+                        )
+                } else {
+                    CursorPointerShape()
+                        .fill(.white)
+                        .overlay(CursorPointerShape().stroke(.black, lineWidth: 1))
+                        .frame(width: 14 * canvas.cursorScale, height: 20 * canvas.cursorScale)
+                        .offset(x: 7 * canvas.cursorScale, y: 10 * canvas.cursorScale)
                 }
-                let width = placement?.drawSize.width
-                    ?? image.size.width * canvas.cursorScale * viewPixelsPerPoint
-                let height = placement?.drawSize.height
-                    ?? image.size.height * canvas.cursorScale * viewPixelsPerPoint
-                let hotspot = placement?.hotspot ?? Point2D(x: 1, y: 1)
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: width, height: height)
-                    .offset(
-                        x: width / 2 - hotspot.x,
-                        y: height / 2 - hotspot.y
-                    )
-            } else {
-                CursorPointerShape()
-                    .fill(.white)
-                    .overlay(CursorPointerShape().stroke(.black, lineWidth: 1))
-                    .frame(width: 14 * canvas.cursorScale, height: 20 * canvas.cursorScale)
-                    .offset(x: 7 * canvas.cursorScale, y: 10 * canvas.cursorScale)
             }
+            .blur(radius: CGFloat(motionBlur.previewRadius) * viewScale)
         }
         .position(x: point.x, y: point.y)
         .allowsHitTesting(false)

@@ -49,6 +49,7 @@ final class ExportCompositor {
         source: CIImage,
         cropUV: CGRect,
         cursorUV: Point2D?,
+        cursorVelocity: Point2D?,
         clicking: Bool,
         clickAge: TimeInterval?,
         keyboardState: KeyboardOverlayState,
@@ -83,6 +84,11 @@ final class ExportCompositor {
                 cropUV: cropUV,
                 videoRect: videoRect
             )
+            let motionBlur = CursorMotionBlurEffect.state(
+                velocity: cursorVelocity,
+                canvasSize: layout.size,
+                settings: canvas.cursorMotionBlur
+            )
             if clicking, let clickAge {
                 let ripple = ExportLayout.clickRipple(
                     age: clickAge,
@@ -91,7 +97,11 @@ final class ExportCompositor {
                 )
                 output = makeRipple(at: hotspot, ripple: ripple).composited(over: output)
             }
-            if let cursor = makeCursor(hotspot: hotspot, pixelsPerPoint: pxPerPoint) {
+            if let cursor = makeCursor(
+                hotspot: hotspot,
+                pixelsPerPoint: pxPerPoint,
+                motionBlur: motionBlur
+            ) {
                 output = cursor.composited(over: output)
             }
         }
@@ -149,7 +159,11 @@ final class ExportCompositor {
         )
     }
 
-    private func makeCursor(hotspot: CGPoint, pixelsPerPoint: Double) -> CIImage? {
+    private func makeCursor(
+        hotspot: CGPoint,
+        pixelsPerPoint: Double,
+        motionBlur: CursorMotionBlurState
+    ) -> CIImage? {
         guard let cursorImage, let sprite = cursorSprite else { return nil }
         let extent = cursorImage.extent
         guard extent.width > 0, extent.height > 0 else { return nil }
@@ -178,7 +192,8 @@ final class ExportCompositor {
         transform = transform.concatenating(
             CGAffineTransform(translationX: ciOrigin.x, y: ciOrigin.y)
         )
-        return cursorImage.transformed(by: transform)
+        let placed = cursorImage.transformed(by: transform)
+        return CursorMotionBlurRenderer.image(placed, state: motionBlur)
     }
 
     private func makeRipple(at hotspot: CGPoint, ripple: ExportClickRipple) -> CIImage {

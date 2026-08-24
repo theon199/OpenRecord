@@ -62,6 +62,44 @@ public enum CanvasAspectPreset: String, CaseIterable, Sendable, Hashable {
     }
 }
 
+public struct CursorMotionBlurSettings: Codable, Sendable, Hashable {
+    public static let amountRange = 0.0...1.0
+
+    public var enabled: Bool
+    public var amount: Double
+
+    public init(enabled: Bool = true, amount: Double = 0.6) {
+        self.enabled = enabled
+        self.amount = amount
+    }
+
+    public static let `default` = CursorMotionBlurSettings()
+    public static let disabled = CursorMotionBlurSettings(enabled: false)
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case amount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = (try? container.decode(Bool.self, forKey: .enabled)) ?? false
+        amount = (try? container.decode(Double.self, forKey: .amount)) ?? 0.6
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(amount, forKey: .amount)
+    }
+
+    public var normalized: CursorMotionBlurSettings {
+        var value = self
+        value.amount = min(max(value.amount, Self.amountRange.lowerBound), Self.amountRange.upperBound)
+        return value
+    }
+}
+
 public struct CanvasSettings: Codable, Sendable, Hashable {
     public static let cursorScaleRange = 0.1...3.0
 
@@ -71,6 +109,7 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
     public var cursorScale: Double
     public var aspectWidth: Double
     public var aspectHeight: Double
+    public var cursorMotionBlur: CursorMotionBlurSettings
 
     public init(
         background: CanvasBackground = .solid(.canvasDefault),
@@ -78,7 +117,8 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
         cornerRadius: Double = 16,
         cursorScale: Double = 0.5,
         aspectWidth: Double = 16,
-        aspectHeight: Double = 9
+        aspectHeight: Double = 9,
+        cursorMotionBlur: CursorMotionBlurSettings = .default
     ) {
         self.background = background
         self.padding = padding
@@ -86,14 +126,52 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
         self.cursorScale = cursorScale
         self.aspectWidth = aspectWidth
         self.aspectHeight = aspectHeight
+        self.cursorMotionBlur = cursorMotionBlur
     }
 
     public static let `default` = CanvasSettings()
+    public static let legacyDefault = CanvasSettings(cursorMotionBlur: .disabled)
+
+    private enum CodingKeys: String, CodingKey {
+        case background
+        case padding
+        case cornerRadius
+        case cursorScale
+        case aspectWidth
+        case aspectHeight
+        case cursorMotionBlur
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        background = try container.decodeIfPresent(CanvasBackground.self, forKey: .background)
+            ?? .solid(.canvasDefault)
+        padding = try container.decodeIfPresent(Double.self, forKey: .padding) ?? 48
+        cornerRadius = try container.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? 16
+        cursorScale = try container.decodeIfPresent(Double.self, forKey: .cursorScale) ?? 0.5
+        aspectWidth = try container.decodeIfPresent(Double.self, forKey: .aspectWidth) ?? 16
+        aspectHeight = try container.decodeIfPresent(Double.self, forKey: .aspectHeight) ?? 9
+        cursorMotionBlur = (try? container.decode(
+            CursorMotionBlurSettings.self,
+            forKey: .cursorMotionBlur
+        )) ?? .disabled
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(background, forKey: .background)
+        try container.encode(padding, forKey: .padding)
+        try container.encode(cornerRadius, forKey: .cornerRadius)
+        try container.encode(cursorScale, forKey: .cursorScale)
+        try container.encode(aspectWidth, forKey: .aspectWidth)
+        try container.encode(aspectHeight, forKey: .aspectHeight)
+        try container.encode(cursorMotionBlur, forKey: .cursorMotionBlur)
+    }
 }
 
 /// A reusable visual treatment for the canvas framing around a recording.
 /// Applying a preset intentionally preserves output aspect ratio and cursor
-/// scale because those are independent format and accessibility choices.
+/// scale/effects because those are independent format and accessibility choices.
 public struct CanvasPreset: Sendable, Hashable, Identifiable {
     public var id: String
     public var name: String
@@ -411,7 +489,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         trimIn = try container.decodeIfPresent(TimeInterval.self, forKey: .trimIn) ?? 0
         trimOut = try container.decodeIfPresent(TimeInterval.self, forKey: .trimOut)
         zoomRanges = try container.decodeIfPresent([ZoomRange].self, forKey: .zoomRanges) ?? []
-        canvas = try container.decodeIfPresent(CanvasSettings.self, forKey: .canvas) ?? .default
+        canvas = try container.decodeIfPresent(CanvasSettings.self, forKey: .canvas) ?? .legacyDefault
         cursorSprites = try container.decodeIfPresent([CursorSprite].self, forKey: .cursorSprites) ?? []
         keyboardOverlay = try container.decodeIfPresent(
             KeyboardOverlaySettings.self,
@@ -447,6 +525,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         var value = self
         value.formatVersion = max(value.formatVersion, Self.currentFormatVersion)
         value.keyboardOverlay = value.keyboardOverlay.normalized
+        value.canvas.cursorMotionBlur = value.canvas.cursorMotionBlur.normalized
         if value.stylePresetID == nil {
             value.stylePresetID = CanvasPreset.matching(value.canvas)?.id
         }

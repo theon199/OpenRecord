@@ -253,6 +253,7 @@ private enum ExportSession {
                 let source = try reader.image(at: t)
                 let crop = engine.crop(at: t)
                 let cursorUV = engine.interpolateCursor(at: t)
+                let cursorVelocity = engine.cursorVelocity(at: t)
                 let clicking = engine.isClicking(at: t)
                 let clickAge = clicking
                     ? (ExportLayout.primaryClickAge(at: t, clicks: engine.smoother.clicks) ?? 0)
@@ -281,6 +282,7 @@ private enum ExportSession {
                     source: source,
                     cropUV: crop,
                     cursorUV: cursorUV,
+                    cursorVelocity: cursorVelocity,
                     clicking: clicking,
                     clickAge: clickAge,
                     keyboardState: keyboardState,

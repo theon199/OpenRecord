@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import Darwin
 import Foundation
 import Testing
@@ -16,6 +17,7 @@ enum ExportLayoutSuite {
         try canvasPointMapsBackToSourceUV()
         try trimClamping()
         try clickAgeAndRipple()
+        try cursorMotionBlurMapping()
         try keyboardTimelineAndGeometry()
         try keyboardRendererProducesBoundedImage()
         try jsonlMissingIsEmpty()
@@ -212,6 +214,67 @@ enum ExportLayoutSuite {
         }
         guard later.opacity < start.opacity else {
             throw OpenRecordError.io("ripple should fade with age")
+        }
+    }
+
+    static func cursorMotionBlurMapping() throws {
+        let canvas = CGSize(width: 1920, height: 1080)
+        let disabled = CursorMotionBlurEffect.state(
+            velocity: Point2D(x: 1, y: 0),
+            canvasSize: canvas,
+            settings: .disabled
+        )
+        guard disabled == .none else {
+            throw OpenRecordError.io("disabled cursor motion blur produced an effect")
+        }
+
+        let slow = CursorMotionBlurEffect.state(
+            velocity: Point2D(x: 0.05, y: 0),
+            canvasSize: canvas,
+            settings: .default
+        )
+        guard slow.radius == 0, slow.speed < CursorMotionBlurEffect.speedThreshold else {
+            throw OpenRecordError.io("slow cursor motion should stay sharp")
+        }
+
+        let weak = CursorMotionBlurEffect.state(
+            velocity: Point2D(x: 0.5, y: 0),
+            canvasSize: canvas,
+            settings: CursorMotionBlurSettings(enabled: true, amount: 0.25)
+        )
+        let strong = CursorMotionBlurEffect.state(
+            velocity: Point2D(x: 0.5, y: 0),
+            canvasSize: canvas,
+            settings: CursorMotionBlurSettings(enabled: true, amount: 1)
+        )
+        guard weak.radius > 0,
+              strong.radius > weak.radius,
+              strong.radius <= CursorMotionBlurEffect.maximumRadius,
+              abs(strong.angle) < 1e-12,
+              strong.previewRadius <= 8
+        else {
+            throw OpenRecordError.io("horizontal cursor motion blur mapping was incorrect")
+        }
+
+        let vertical = CursorMotionBlurEffect.state(
+            velocity: Point2D(x: 0, y: 1),
+            canvasSize: canvas,
+            settings: .default
+        )
+        guard abs(vertical.angle + .pi / 2) < 1e-9 else {
+            throw OpenRecordError.io("top-left velocity was not converted to Core Image angle")
+        }
+
+        let source = CIImage(color: CIColor(red: 1, green: 1, blue: 1)).cropped(
+            to: CGRect(x: 0, y: 0, width: 24, height: 32)
+        )
+        let rendered = CursorMotionBlurRenderer.image(source, state: strong)
+        guard rendered.extent.width > source.extent.width,
+              rendered.extent.height > source.extent.height,
+              rendered.extent.width.isFinite,
+              rendered.extent.height.isFinite
+        else {
+            throw OpenRecordError.io("Core Image cursor motion blur did not produce bounded padding")
         }
     }
 
@@ -461,6 +524,11 @@ func exportPaddingBoxAndAspectFit() throws {
 @Test
 func exportCanvasPointMapsBackToSourceUV() throws {
     try ExportLayoutSuite.canvasPointMapsBackToSourceUV()
+}
+
+@Test
+func exportCursorMotionBlurMapping() throws {
+    try ExportLayoutSuite.cursorMotionBlurMapping()
 }
 
 @Test

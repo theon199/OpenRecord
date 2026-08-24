@@ -108,6 +108,14 @@ public struct CursorSmoother: Sendable {
         return interpolate(at: time)
     }
 
+    /// Spring-smoothed velocity in UV units per second. Returns nil whenever
+    /// the cursor itself is hidden so preview and export gate motion blur with
+    /// the same visibility rule.
+    public func velocityIfVisible(at time: TimeInterval) -> Point2D? {
+        guard isVisible(at: time) else { return nil }
+        return velocity(at: time)
+    }
+
     /// Whether a cursor overlay should be shown at time.
     public func isVisible(at time: TimeInterval) -> Bool {
         guard let raw = latestRawSample(at: time) else { return false }
@@ -209,6 +217,27 @@ public struct CursorSmoother: Sendable {
             x: Self.clamp01(state.posU),
             y: Self.clamp01(state.posV)
         )
+    }
+
+    /// Spring-smoothed cursor velocity in UV units per second.
+    public func velocity(at time: TimeInterval) -> Point2D {
+        guard !samples.isEmpty else { return Point2D(x: 0, y: 0) }
+        if time <= samples[0].time { return samples[0].velocity }
+
+        let sample = samples[Self.index(in: samples, at: time)]
+        let dt = time - sample.time
+        if dt <= 1e-12 { return sample.velocity }
+
+        var state = SpringState2D(
+            posU: sample.position.x,
+            posV: sample.position.y,
+            velU: sample.velocity.x,
+            velV: sample.velocity.y,
+            targetU: sample.target.x,
+            targetV: sample.target.y
+        )
+        SpringSolver.step(&state, dt: dt, config: .cursorDefault)
+        return Point2D(x: state.velU, y: state.velV)
     }
 
     /// Whether the primary button is down at `time` (last click event at or before `time`).

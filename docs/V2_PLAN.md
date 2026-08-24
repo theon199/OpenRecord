@@ -70,7 +70,12 @@ Auto-zoom generation now has Subtle, Normal, and Aggressive sensitivity
 presets, while the shared preview/export camera supports Fast, Smooth, and
 Cinematic easing. Normal + Smooth preserve the prior default behavior.
 
-Next: v2.1 motion, webcam, and audio work. v2.1 and v2.2 have not started.
+**v2.1 is now in progress.** Velocity-based cursor motion blur is implemented
+with a non-destructive canvas setting, a SwiftUI preview approximation, and a
+directional Core Image export effect. New captures enable it by default while
+legacy projects decode with it disabled, preserving their existing look.
+
+Next: webcam capture and overlay. v2.2 has not started.
 
 ---
 
@@ -186,6 +191,10 @@ Screen Studio blurs the cursor during fast movement.
 **Preview parity**
 
 - Approximate with SwiftUI `.blur(radius:)` scaled by velocity — good enough for scrubbing; export uses CI
+
+Implemented: `CursorSmoother` exposes its spring-smoothed velocity, both render
+paths use the same threshold/amount mapping, and the Canvas inspector provides
+an enable toggle plus a 0–100% amount control.
 
 ### 6. Webcam overlay
 

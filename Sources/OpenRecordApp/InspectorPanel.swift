@@ -104,6 +104,18 @@ struct InspectorPanel: View {
                     actionName: "Change Cursor Scale",
                     step: 0.05
                 )
+                Toggle("Cursor motion blur", isOn: cursorMotionBlurEnabled)
+                if session.document.canvas.cursorMotionBlur.enabled {
+                    labeledSlider(
+                        "Blur amount",
+                        value: cursorMotionBlurAmount,
+                        range: CursorMotionBlurSettings.amountRange,
+                        format: "%.0f%%",
+                        actionName: "Change Cursor Motion Blur",
+                        step: 0.05,
+                        displayScale: 100
+                    )
+                }
             }
 
             Section("Keyboard") {
@@ -224,6 +236,28 @@ struct InspectorPanel: View {
         Binding(
             get: { session.document.zoomEasing },
             set: { session.updateZoomEasing($0) }
+        )
+    }
+
+    private var cursorMotionBlurEnabled: Binding<Bool> {
+        Binding(
+            get: { session.document.canvas.cursorMotionBlur.enabled },
+            set: { enabled in
+                session.updateCanvas(actionName: "Toggle Cursor Motion Blur") {
+                    $0.cursorMotionBlur.enabled = enabled
+                }
+            }
+        )
+    }
+
+    private var cursorMotionBlurAmount: Binding<Double> {
+        Binding(
+            get: { session.document.canvas.cursorMotionBlur.amount },
+            set: { amount in
+                session.updateCanvas(actionName: "Change Cursor Motion Blur") {
+                    $0.cursorMotionBlur.amount = amount
+                }
+            }
         )
     }
 
@@ -458,13 +492,14 @@ struct InspectorPanel: View {
         range: ClosedRange<Double>,
         format: String,
         actionName: String,
-        step: Double? = nil
+        step: Double? = nil,
+        displayScale: Double = 1
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
                 Spacer()
-                Text(String(format: format, value.wrappedValue))
+                Text(String(format: format, value.wrappedValue * displayScale))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }

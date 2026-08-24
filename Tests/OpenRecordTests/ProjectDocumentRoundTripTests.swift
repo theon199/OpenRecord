@@ -6,9 +6,10 @@ import OpenRecord
 enum ProjectDocumentJSONRoundTrip {
     static func run() throws {
         guard CanvasSettings.default.cursorScale == 0.5,
-              CanvasSettings.cursorScaleRange.lowerBound == 0.1
+              CanvasSettings.cursorScaleRange.lowerBound == 0.1,
+              CanvasSettings.default.cursorMotionBlur == .default
         else {
-            throw OpenRecordError.io("Cursor scale should default to 0.5× and allow adjustment down to 0.1×")
+            throw OpenRecordError.io("Canvas cursor defaults are incorrect")
         }
 
         let sprite = CursorSprite(
@@ -40,7 +41,8 @@ enum ProjectDocumentJSONRoundTrip {
                 cornerRadius: 12,
                 cursorScale: 1.5,
                 aspectWidth: 16,
-                aspectHeight: 9
+                aspectHeight: 9,
+                cursorMotionBlur: CursorMotionBlurSettings(enabled: true, amount: 0.85)
             ),
             cursorSprites: [sprite],
             keyboardOverlay: KeyboardOverlaySettings(
@@ -74,15 +76,28 @@ enum ProjectDocumentJSONRoundTrip {
               legacy.keyboardOverlay == .disabled,
               legacy.stylePresetID == nil,
               legacy.autoZoomSensitivity == .normal,
-              legacy.zoomEasing == .smooth
+              legacy.zoomEasing == .smooth,
+              legacy.canvas.cursorMotionBlur == .disabled
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
+        }
+
+        let legacyCanvasJSON = Data(
+            #"{"formatVersion":1,"canvas":{}}"#.utf8
+        )
+        let legacyCanvas = try ProjectJSON.decoder.decode(
+            ProjectDocument.self,
+            from: legacyCanvasJSON
+        )
+        guard legacyCanvas.canvas.cursorMotionBlur == .disabled else {
+            throw OpenRecordError.io("A legacy canvas unexpectedly enabled cursor motion blur")
         }
 
         let upgraded = legacy.upgradedForSave()
         guard upgraded.formatVersion == 2,
               upgraded.keyboardOverlay == .disabled,
-              upgraded.stylePresetID == CanvasPreset.defaultStyle.id
+              upgraded.stylePresetID == CanvasPreset.defaultStyle.id,
+              upgraded.canvas.cursorMotionBlur == .disabled
         else {
             throw OpenRecordError.io("The first-save migration did not produce the v2 defaults")
         }
@@ -105,6 +120,12 @@ enum ProjectDocumentJSONRoundTrip {
         else {
             throw OpenRecordError.io("Unknown zoom presets did not fall back to safe defaults")
         }
+
+        var unboundedBlur = ProjectDocument()
+        unboundedBlur.canvas.cursorMotionBlur.amount = 3
+        guard unboundedBlur.upgradedForSave().canvas.cursorMotionBlur.amount == 1 else {
+            throw OpenRecordError.io("Cursor motion blur amount was not normalized on save")
+        }
     }
 
     private static func assertCanvasPresetsPreserveFormatAndCursorChoices() throws {
@@ -117,13 +138,15 @@ enum ProjectDocumentJSONRoundTrip {
             var canvas = CanvasSettings(
                 cursorScale: 0.35,
                 aspectWidth: 9,
-                aspectHeight: 16
+                aspectHeight: 16,
+                cursorMotionBlur: CursorMotionBlurSettings(enabled: true, amount: 0.9)
             )
             preset.apply(to: &canvas)
             guard canvas.background == preset.background,
                   canvas.padding == preset.padding,
                   canvas.cornerRadius == preset.cornerRadius,
                   canvas.cursorScale == 0.35,
+                  canvas.cursorMotionBlur == CursorMotionBlurSettings(enabled: true, amount: 0.9),
                   canvas.aspectWidth == 9,
                   canvas.aspectHeight == 16,
                   CanvasPreset.matching(canvas) == preset

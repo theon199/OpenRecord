@@ -112,6 +112,11 @@ public struct ZoomEngine: Sendable {
         smoother.interpolateIfVisible(at: time)
     }
 
+    /// Spring-smoothed cursor velocity in source UV units per second.
+    public func cursorVelocity(at time: TimeInterval) -> Point2D? {
+        smoother.velocityIfVisible(at: time)
+    }
+
     /// Primary-button down at `time`, from click telemetry captured with the engine.
     public func isClicking(at time: TimeInterval) -> Bool {
         guard smoother.isVisible(at: time) else { return false }
