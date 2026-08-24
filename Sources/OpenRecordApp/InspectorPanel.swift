@@ -46,6 +46,16 @@ struct InspectorPanel: View {
             }
 
             Section("Canvas") {
+                Picker("Style", selection: canvasPresetID) {
+                    ForEach(CanvasPreset.builtIns) { preset in
+                        Text(preset.name).tag(preset.id)
+                    }
+                    if CanvasPreset.matching(session.document.canvas) == nil {
+                        Divider()
+                        Text("Custom").tag(Self.customPresetID)
+                    }
+                }
+
                 Picker("Aspect ratio", selection: aspectPreset) {
                     ForEach(CanvasAspectPreset.allCases, id: \.self) { preset in
                         Text(preset.rawValue).tag(preset)
@@ -161,6 +171,21 @@ struct InspectorPanel: View {
             set: { preset in
                 session.updateCanvas(actionName: "Change Aspect Ratio") {
                     preset.apply(to: &$0)
+                }
+            }
+        )
+    }
+
+    private var canvasPresetID: Binding<String> {
+        Binding(
+            get: {
+                CanvasPreset.matching(session.document.canvas)?.id ?? Self.customPresetID
+            },
+            set: { presetID in
+                guard let preset = CanvasPreset.builtIns.first(where: { $0.id == presetID })
+                else { return }
+                session.updateCanvas(actionName: "Apply \(preset.name) Style") { canvas in
+                    preset.apply(to: &canvas)
                 }
             }
         )
@@ -371,6 +396,8 @@ struct InspectorPanel: View {
             a: color.a
         )
     }
+
+    private static let customPresetID = "custom"
 }
 
 private enum CanvasBackgroundMode: String, CaseIterable, Identifiable {

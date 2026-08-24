@@ -91,6 +91,91 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
     public static let `default` = CanvasSettings()
 }
 
+/// A reusable visual treatment for the canvas framing around a recording.
+/// Applying a preset intentionally preserves output aspect ratio and cursor
+/// scale because those are independent format and accessibility choices.
+public struct CanvasPreset: Sendable, Hashable, Identifiable {
+    public var id: String
+    public var name: String
+    public var background: CanvasBackground
+    public var padding: Double
+    public var cornerRadius: Double
+
+    public init(
+        id: String,
+        name: String,
+        background: CanvasBackground,
+        padding: Double,
+        cornerRadius: Double
+    ) {
+        self.id = id
+        self.name = name
+        self.background = background
+        self.padding = padding
+        self.cornerRadius = cornerRadius
+    }
+
+    public func apply(to canvas: inout CanvasSettings) {
+        canvas.background = background
+        canvas.padding = padding
+        canvas.cornerRadius = cornerRadius
+    }
+
+    public func matches(_ canvas: CanvasSettings, tolerance: Double = 0.000_001) -> Bool {
+        background == canvas.background
+            && abs(padding - canvas.padding) <= tolerance
+            && abs(cornerRadius - canvas.cornerRadius) <= tolerance
+    }
+
+    public static func matching(_ canvas: CanvasSettings) -> CanvasPreset? {
+        builtIns.first { $0.matches(canvas) }
+    }
+
+    public static let defaultStyle = CanvasPreset(
+        id: "default",
+        name: "Default",
+        background: .solid(.canvasDefault),
+        padding: 48,
+        cornerRadius: 16
+    )
+
+    public static let dark = CanvasPreset(
+        id: "dark",
+        name: "Dark",
+        background: .linearGradient(
+            start: RGBAColor(r: 0.055, g: 0.065, b: 0.095),
+            end: RGBAColor(r: 0.16, g: 0.20, b: 0.31),
+            startPoint: Point2D(x: 0, y: 0),
+            endPoint: Point2D(x: 1, y: 1)
+        ),
+        padding: 64,
+        cornerRadius: 20
+    )
+
+    public static let light = CanvasPreset(
+        id: "light",
+        name: "Light",
+        background: .linearGradient(
+            start: RGBAColor(r: 0.96, g: 0.97, b: 0.99),
+            end: RGBAColor(r: 0.78, g: 0.84, b: 0.94),
+            startPoint: Point2D(x: 0, y: 0),
+            endPoint: Point2D(x: 1, y: 1)
+        ),
+        padding: 64,
+        cornerRadius: 18
+    )
+
+    public static let minimal = CanvasPreset(
+        id: "minimal",
+        name: "Minimal",
+        background: .solid(RGBAColor(r: 0.04, g: 0.04, b: 0.045)),
+        padding: 16,
+        cornerRadius: 6
+    )
+
+    public static let builtIns: [CanvasPreset] = [defaultStyle, dark, light, minimal]
+}
+
 public struct ZoomRange: Codable, Sendable, Hashable, Identifiable {
     public var id: UUID
     public var start: TimeInterval

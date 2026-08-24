@@ -51,7 +51,36 @@ enum ProjectDocumentJSONRoundTrip {
             throw OpenRecordError.io("ProjectDocument JSON round-trip produced a different value")
         }
 
+        try assertCanvasPresetsPreserveFormatAndCursorChoices()
         try assertUndoHistoryCoalescesContinuousEdits()
+    }
+
+    private static func assertCanvasPresetsPreserveFormatAndCursorChoices() throws {
+        let expectedIDs = ["default", "dark", "light", "minimal"]
+        guard CanvasPreset.builtIns.map(\.id) == expectedIDs else {
+            throw OpenRecordError.io("Canvas presets are missing or out of order")
+        }
+
+        for preset in CanvasPreset.builtIns {
+            var canvas = CanvasSettings(
+                cursorScale: 0.35,
+                aspectWidth: 9,
+                aspectHeight: 16
+            )
+            preset.apply(to: &canvas)
+            guard canvas.background == preset.background,
+                  canvas.padding == preset.padding,
+                  canvas.cornerRadius == preset.cornerRadius,
+                  canvas.cursorScale == 0.35,
+                  canvas.aspectWidth == 9,
+                  canvas.aspectHeight == 16,
+                  CanvasPreset.matching(canvas) == preset
+            else {
+                throw OpenRecordError.io(
+                    "Canvas preset \(preset.name) did not apply cleanly or changed independent settings"
+                )
+            }
+        }
     }
 
     private static func assertUndoHistoryCoalescesContinuousEdits() throws {
