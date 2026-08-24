@@ -24,6 +24,14 @@ struct TimelineView: View {
                 Text(Timecode.string(session.timelineDuration))
                     .font(.system(.caption, design: .monospaced).monospacedDigit())
                     .foregroundStyle(.secondary)
+                Text(String(format: "%.2g×", session.currentPlaybackRate))
+                    .font(.system(.caption2, design: .rounded).weight(.semibold))
+                    .foregroundStyle(
+                        session.currentPlaybackRate == 1 ? Color.secondary : Color.orange
+                    )
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.primary.opacity(0.06), in: Capsule())
 
                 Spacer()
 
@@ -37,13 +45,18 @@ struct TimelineView: View {
                 }
                 .disabled(session.selectedZoomID == nil)
                 .help("Delete  ⌫")
+                Button("Add Speed") {
+                    session.addSpeedAtPlayhead()
+                }
+                .disabled(!session.canAddSpeedAtPlayhead)
+                .help("Add a 2× speed region at the playhead")
             }
             .controlSize(.small)
 
             GeometryReader { geo in
                 timeline(size: geo.size)
             }
-            .frame(height: 64)
+            .frame(height: 76)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
@@ -66,13 +79,17 @@ struct TimelineView: View {
                 zoomBlock(range, width: size.width, height: size.height)
             }
 
+            ForEach(session.document.speedSegments) { segment in
+                speedBlock(segment, width: size.width, height: size.height)
+            }
+
             playhead(width: size.width, height: size.height)
 
             trimHandle(time: trimIn, width: size.width, height: size.height)
             trimHandle(time: trimOut, width: size.width, height: size.height)
         }
         .contentShape(Rectangle())
-        .gesture(dragGesture(width: size.width, duration: duration))
+        .gesture(dragGesture(width: size.width, height: size.height, duration: duration))
         .onHover { hovering in
             if !hovering {
                 NSCursor.arrow.set()
@@ -120,8 +137,37 @@ struct TimelineView: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
             }
-            .frame(width: max(x1 - x0, 8), height: 28)
-            .offset(x: x0, y: (height - 28) / 2)
+            .frame(width: max(x1 - x0, 8), height: 24)
+            .offset(x: x0, y: 25)
+    }
+
+    private func speedBlock(_ segment: SpeedSegment, width: CGFloat, height: CGFloat) -> some View {
+        let x0 = xPosition(segment.start, width: width)
+        let x1 = xPosition(segment.end, width: width)
+        let selected = segment.id == session.selectedSpeedID
+        let color: Color = segment.rate < 1 ? .blue : .orange
+        return RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(color.opacity(selected ? 0.88 : 0.55))
+            .overlay(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.75)).frame(width: 2, height: 11)
+            }
+            .overlay(alignment: .trailing) {
+                Capsule().fill(.white.opacity(0.75)).frame(width: 2, height: 11)
+            }
+            .overlay {
+                Text(String(format: "%.2g×", segment.rate))
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            .overlay {
+                if selected {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(.white.opacity(0.85), lineWidth: 1)
+                }
+            }
+            .frame(width: max(x1 - x0, 8), height: 16)
+            .offset(x: x0, y: height - 19)
     }
 
     private func playhead(width: CGFloat, height: CGFloat) -> some View {
@@ -157,23 +203,47 @@ struct TimelineView: View {
             .allowsHitTesting(false)
     }
 
-    private func dragGesture(width: CGFloat, duration: TimeInterval) -> some Gesture {
+    private func dragGesture(
+        width: CGFloat,
+        height: CGFloat,
+        duration: TimeInterval
+    ) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 let time = timeAt(value.location.x, width: width, duration: duration)
                 if drag == nil {
-                    drag = hit(at: value.location.x, width: width, duration: duration)
+                    drag = hit(
+                        at: value.location,
+                        width: width,
+                        height: height,
+                        duration: duration
+                    )
                     if let actionName = drag?.undoActionName {
                         session.beginDocumentEdit(actionName: actionName)
                     }
                     if case .zoomBody(let id, _, _, _) = drag {
                         session.selectedZoomID = id
+                        session.selectedSpeedID = nil
                     }
                     if case .zoomStart(let id) = drag {
                         session.selectedZoomID = id
+                        session.selectedSpeedID = nil
                     }
                     if case .zoomEnd(let id) = drag {
                         session.selectedZoomID = id
+                        session.selectedSpeedID = nil
+                    }
+                    if case .speedBody(let id, _, _, _) = drag {
+                        session.selectedSpeedID = id
+                        session.selectedZoomID = nil
+                    }
+                    if case .speedStart(let id) = drag {
+                        session.selectedSpeedID = id
+                        session.selectedZoomID = nil
+                    }
+                    if case .speedEnd(let id) = drag {
+                        session.selectedSpeedID = id
+                        session.selectedZoomID = nil
                     }
                 }
                 apply(drag: drag, time: time)
@@ -216,15 +286,70 @@ struct TimelineView: View {
             range.start = start
             range.end = start + span
             session.replaceZoom(range)
+        case .speedStart(let id):
+            guard var segment = session.document.speedSegments.first(where: { $0.id == id })
+            else { return }
+            let (lower, _) = session.speedNeighborBounds(excluding: id)
+            segment.start = min(
+                max(time, lower),
+                segment.end - SpeedTimeline.minimumSegmentDuration
+            )
+            session.replaceSpeedSegment(segment)
+        case .speedEnd(let id):
+            guard var segment = session.document.speedSegments.first(where: { $0.id == id })
+            else { return }
+            let (_, upper) = session.speedNeighborBounds(excluding: id)
+            segment.end = max(
+                min(time, upper),
+                segment.start + SpeedTimeline.minimumSegmentDuration
+            )
+            session.replaceSpeedSegment(segment)
+        case .speedBody(let id, let originalStart, let originalEnd, let grab):
+            let span = originalEnd - originalStart
+            let (lower, upper) = session.speedNeighborBounds(
+                excluding: id,
+                referenceStart: originalStart
+            )
+            let maxStart = max(lower, min(upper, session.timelineDuration) - span)
+            let start = min(max(time - grab, lower), maxStart)
+            guard var segment = session.document.speedSegments.first(where: { $0.id == id })
+            else { return }
+            segment.start = start
+            segment.end = start + span
+            session.replaceSpeedSegment(segment)
         }
     }
 
-    private func hit(at x: CGFloat, width: CGFloat, duration: TimeInterval) -> TimelineDrag {
+    private func hit(
+        at point: CGPoint,
+        width: CGFloat,
+        height: CGFloat,
+        duration: TimeInterval
+    ) -> TimelineDrag {
+        let x = point.x
         let handle: CGFloat = 7
         let trimInX = xPosition(session.document.trimIn, width: width)
         let trimOutX = xPosition(session.effectiveTrimOut, width: width)
         if abs(x - trimInX) <= handle { return .trimIn }
         if abs(x - trimOutX) <= handle { return .trimOut }
+
+        if point.y >= height - 26 {
+            for segment in session.document.speedSegments.reversed() {
+                let x0 = xPosition(segment.start, width: width)
+                let x1 = xPosition(segment.end, width: width)
+                if abs(x - x0) <= handle { return .speedStart(segment.id) }
+                if abs(x - x1) <= handle { return .speedEnd(segment.id) }
+                if x >= x0, x <= x1 {
+                    let t = timeAt(x, width: width, duration: duration)
+                    return .speedBody(
+                        segment.id,
+                        start: segment.start,
+                        end: segment.end,
+                        grab: t - segment.start
+                    )
+                }
+            }
+        }
 
         for range in session.document.zoomRanges.reversed() {
             let x0 = xPosition(range.start, width: width)
@@ -255,6 +380,9 @@ private enum TimelineDrag {
     case zoomStart(UUID)
     case zoomEnd(UUID)
     case zoomBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
+    case speedStart(UUID)
+    case speedEnd(UUID)
+    case speedBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
 
     var undoActionName: String? {
         switch self {
@@ -264,6 +392,8 @@ private enum TimelineDrag {
             "Adjust Trim"
         case .zoomStart, .zoomEnd, .zoomBody:
             "Adjust Zoom"
+        case .speedStart, .speedEnd, .speedBody:
+            "Adjust Speed Region"
         }
     }
 }

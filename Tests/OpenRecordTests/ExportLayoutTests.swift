@@ -19,6 +19,7 @@ enum ExportLayoutSuite {
         try clickAgeAndRipple()
         try cursorMotionBlurMapping()
         try webcamOverlayGeometryAndRendering()
+        try speedTimelineMapping()
         try keyboardTimelineAndGeometry()
         try keyboardRendererProducesBoundedImage()
         try jsonlMissingIsEmpty()
@@ -192,6 +193,46 @@ enum ExportLayoutSuite {
             if case .io(let message) = error, message.contains("inverted trim should throw") {
                 throw error
             }
+        }
+    }
+
+    static func speedTimelineMapping() throws {
+        let firstID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let secondID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let timeline = SpeedTimeline(segments: [
+            SpeedSegment(id: secondID, start: 8, end: 10, rate: 0.5),
+            SpeedSegment(id: firstID, start: 2, end: 6, rate: 2),
+        ])
+
+        try expectClose(
+            timeline.outputDuration(sourceStart: 0, sourceEnd: 12),
+            12,
+            "piecewise speed duration"
+        )
+        try expectClose(
+            timeline.sourceTime(atOutputTime: 3, sourceStart: 0, sourceEnd: 12),
+            4,
+            "output-to-source mapping inside 2x segment"
+        )
+        try expectClose(
+            timeline.outputTime(forSourceTime: 9, sourceStart: 0, sourceEnd: 12),
+            8,
+            "source-to-output mapping inside 0.5x segment"
+        )
+        try expectClose(timeline.rate(at: 2.5), 2, "rate inside fast segment")
+        try expectClose(timeline.rate(at: 9), 0.5, "rate inside slow segment")
+        try expectClose(timeline.rate(at: 7), 1, "implicit normal-speed gap")
+
+        let overlapping = SpeedTimeline.normalizedSegments([
+            SpeedSegment(id: firstID, start: 1, end: 4, rate: 9),
+            SpeedSegment(id: secondID, start: 3, end: 5, rate: 0.1),
+        ])
+        guard overlapping.count == 2,
+              overlapping[0].rate == 4,
+              overlapping[1].start == 4,
+              overlapping[1].rate == 0.25
+        else {
+            throw OpenRecordError.io("Overlapping speed regions were not normalized deterministically")
         }
     }
 

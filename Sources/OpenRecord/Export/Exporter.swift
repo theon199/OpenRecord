@@ -151,9 +151,13 @@ private enum ExportSession {
         let fps = ExportLayout.outputFrameRate(
             sourceAverageFPS: await ExportMediaIO.sourceAverageFPS(track: videoTrack)
         )
-        let span = trimEnd - trimStart
-        let frameCount = max(1, Int((span * Double(fps)).rounded(.down)))
-        let exportDuration = Double(frameCount) / Double(fps)
+        let sourceSpan = trimEnd - trimStart
+        let speedTimeline = SpeedTimeline(segments: project.speedSegments)
+        let mappedSpan = speedTimeline.outputDuration(
+            sourceStart: trimStart,
+            sourceEnd: trimEnd
+        )
+        let frameCount = max(1, Int((mappedSpan * Double(fps)).rounded(.down)))
 
         let parent = outputURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
@@ -162,9 +166,37 @@ private enum ExportSession {
             isDirectory: false
         )
 
-        let micURL = await ExportMediaIO.usableAudioURL(
+        let rawMicURL = await ExportMediaIO.usableAudioURL(
             ProjectLayout.microphoneAudioURL(in: bundleURL)
         )
+        var cleanedMicrophoneURL: URL?
+        defer {
+            if let cleanedMicrophoneURL {
+                try? FileManager.default.removeItem(at: cleanedMicrophoneURL)
+            }
+        }
+        let micURL: URL?
+        if let rawMicURL,
+           project.audioCleanup.noiseGateEnabled
+                || project.audioCleanup.normalizeEnabled
+                || project.audioCleanup.deClickEnabled
+        {
+            let cleanupURL = parent.appendingPathComponent(
+                ".\(outputURL.lastPathComponent).mic-cleanup-\(UUID().uuidString).m4a",
+                isDirectory: false
+            )
+            let processed = try await AudioCleanupProcessor.prepareMicrophone(
+                sourceURL: rawMicURL,
+                settings: project.audioCleanup,
+                outputURL: cleanupURL
+            )
+            if processed == cleanupURL {
+                cleanedMicrophoneURL = cleanupURL
+            }
+            micURL = processed
+        } else {
+            micURL = rawMicURL
+        }
         let systemURL = await ExportMediaIO.usableAudioURL(
             ProjectLayout.systemAudioURL(in: bundleURL)
         )
@@ -173,7 +205,8 @@ private enum ExportSession {
             audioSources.append(
                 ExportAudioMux.Source(
                     url: micURL,
-                    offset: meta.captureTiming?.microphoneOffset ?? 0
+                    offset: meta.captureTiming?.microphoneOffset ?? 0,
+                    gain: project.audioCleanup.microphoneGain
                 )
             )
         }
@@ -181,14 +214,17 @@ private enum ExportSession {
             audioSources.append(
                 ExportAudioMux.Source(
                     url: systemURL,
-                    offset: meta.captureTiming?.systemAudioOffset ?? 0
+                    offset: meta.captureTiming?.systemAudioOffset ?? 0,
+                    gain: project.audioCleanup.systemGain
                 )
             )
         }
         let audioComposition = try await ExportAudioMux.makeComposition(
             sources: audioSources,
             start: trimStart,
-            duration: exportDuration
+            duration: sourceSpan,
+            speedTimeline: speedTimeline,
+            muteAudioWhenSpedUp: project.muteAudioWhenSpedUp
         )
 
         let (ciContext, colorSpace) = ExportMediaIO.makeCIContext()
@@ -290,7 +326,12 @@ private enum ExportSession {
             try Task.checkCancellation()
             try ExportAudioMux.waitUntilReady(videoInput, writer: writer)
 
-            let t = trimStart + Double(index) / Double(fps)
+            let outputTime = Double(index) / Double(fps)
+            let t = speedTimeline.sourceTime(
+                atOutputTime: outputTime,
+                sourceStart: trimStart,
+                sourceEnd: trimEnd
+            )
             let pts = CMTime(value: Int64(index), timescale: fps)
 
             try autoreleasepool {
@@ -436,23 +477,23 @@ private enum ExportSession {
 private final class ExportAudioTaskBox: @unchecked Sendable {
     let writer: AVAssetWriter
     let input: AVAssetWriterInput
-    let composition: AVMutableComposition
+    let prepared: ExportAudioMux.Prepared
 
     init(
         writer: AVAssetWriter,
         input: AVAssetWriterInput,
-        composition: AVMutableComposition
+        composition: ExportAudioMux.Prepared
     ) {
         self.writer = writer
         self.input = input
-        self.composition = composition
+        self.prepared = composition
     }
 
     func appendAndFinish() throws {
         try ExportAudioMux.append(
             to: writer,
             input: input,
-            composition: composition
+            prepared: prepared
         )
         input.markAsFinished()
     }

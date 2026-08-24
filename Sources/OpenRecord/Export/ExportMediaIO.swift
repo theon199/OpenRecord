@@ -229,10 +229,24 @@ enum ExportAudioMux {
         var url: URL
         /// Position of the first source sample relative to the first video frame.
         var offset: TimeInterval
+        var gain: Double
 
-        init(url: URL, offset: TimeInterval = 0) {
+        init(url: URL, offset: TimeInterval = 0, gain: Double = 1) {
             self.url = url
             self.offset = offset.isFinite ? offset : 0
+            self.gain = gain.isFinite ? min(max(gain, 0), 2) : 1
+        }
+    }
+
+    final class Prepared: @unchecked Sendable {
+        let composition: AVMutableComposition
+        let audioMix: AVAudioMix
+        let duration: TimeInterval
+
+        init(composition: AVMutableComposition, audioMix: AVAudioMix, duration: TimeInterval) {
+            self.composition = composition
+            self.audioMix = audioMix
+            self.duration = duration
         }
     }
 
@@ -240,22 +254,28 @@ enum ExportAudioMux {
         sources: [URL],
         start: TimeInterval,
         duration: TimeInterval
-    ) async throws -> AVMutableComposition? {
+    ) async throws -> Prepared? {
         try await makeComposition(
             sources: sources.map { Source(url: $0) },
             start: start,
-            duration: duration
+            duration: duration,
+            speedTimeline: SpeedTimeline(segments: []),
+            muteAudioWhenSpedUp: false
         )
     }
 
     static func makeComposition(
         sources: [Source],
         start: TimeInterval,
-        duration: TimeInterval
-    ) async throws -> AVMutableComposition? {
+        duration: TimeInterval,
+        speedTimeline: SpeedTimeline,
+        muteAudioWhenSpedUp: Bool
+    ) async throws -> Prepared? {
         guard !sources.isEmpty, duration > 0 else { return nil }
 
         let composition = AVMutableComposition()
+        let audioMix = AVMutableAudioMix()
+        var mixParameters: [AVAudioMixInputParameters] = []
         var inserted = false
         for source in sources {
             try Task.checkCancellation()
@@ -266,55 +286,84 @@ enum ExportAudioMux {
             let trackRange = (try? await sourceTrack.load(.timeRange)) ?? .zero
             guard trackRange.start.isNumeric, trackRange.duration.isNumeric else { continue }
 
-            let timescale = max(trackRange.duration.timescale, 48_000)
-            guard let placement = ExportLayout.audioPlacement(
-                trackOffset: source.offset,
-                trimStart: start,
-                exportDuration: duration,
-                sourceDuration: trackRange.duration.seconds
-            ) else { continue }
-            let relativeSourceStart = CMTime(
-                seconds: placement.sourceStart,
-                preferredTimescale: timescale
-            )
-            let sourceStart = CMTimeAdd(trackRange.start, relativeSourceStart)
-            let insertDuration = CMTime(
-                seconds: placement.duration,
-                preferredTimescale: timescale
-            )
-            guard insertDuration.seconds > 0.01 else { continue }
-            let destination = CMTime(
-                seconds: placement.destinationStart,
-                preferredTimescale: timescale
-            )
-
             guard let dest = composition.addMutableTrack(
                 withMediaType: .audio,
                 preferredTrackID: kCMPersistentTrackID_Invalid
             ) else {
                 continue
             }
-            do {
-                try dest.insertTimeRange(
-                    CMTimeRange(start: sourceStart, duration: insertDuration),
-                    of: sourceTrack,
-                    at: destination
+            let timescale = max(trackRange.duration.timescale, 48_000)
+            let sourceGlobalStart = source.offset
+            let sourceGlobalEnd = source.offset + trackRange.duration.seconds
+
+            for slice in speedTimeline.slices(sourceStart: start, sourceEnd: start + duration) {
+                if muteAudioWhenSpedUp, slice.rate > 1.000_001 { continue }
+                let intersectionStart = max(slice.sourceStart, sourceGlobalStart)
+                let intersectionEnd = min(slice.sourceEnd, sourceGlobalEnd)
+                guard intersectionEnd - intersectionStart > 0.01 else { continue }
+
+                let localStart = intersectionStart - source.offset
+                let localDuration = intersectionEnd - intersectionStart
+                let destinationSeconds = slice.outputStart
+                    + (intersectionStart - slice.sourceStart) / slice.rate
+                let destination = CMTime(
+                    seconds: destinationSeconds,
+                    preferredTimescale: timescale
                 )
-                inserted = true
-            } catch {
-                throw OpenRecordError.io(
-                    "Could not mix \(url.lastPathComponent): \(error.localizedDescription)"
+                let sourceTime = CMTimeAdd(
+                    trackRange.start,
+                    CMTime(seconds: localStart, preferredTimescale: timescale)
                 )
+                let insertDuration = CMTime(
+                    seconds: localDuration,
+                    preferredTimescale: timescale
+                )
+
+                do {
+                    try dest.insertTimeRange(
+                        CMTimeRange(start: sourceTime, duration: insertDuration),
+                        of: sourceTrack,
+                        at: destination
+                    )
+                    let outputDuration = CMTime(
+                        seconds: localDuration / slice.rate,
+                        preferredTimescale: timescale
+                    )
+                    dest.scaleTimeRange(
+                        CMTimeRange(start: destination, duration: insertDuration),
+                        toDuration: outputDuration
+                    )
+                    inserted = true
+                } catch {
+                    throw OpenRecordError.io(
+                        "Could not mix \(url.lastPathComponent): \(error.localizedDescription)"
+                    )
+                }
             }
+
+            let parameters = AVMutableAudioMixInputParameters(track: dest)
+            parameters.setVolume(Float(source.gain), at: .zero)
+            mixParameters.append(parameters)
         }
-        return inserted ? composition : nil
+        guard inserted else { return nil }
+        audioMix.inputParameters = mixParameters
+        let outputDuration = speedTimeline.outputDuration(
+            sourceStart: start,
+            sourceEnd: start + duration
+        )
+        return Prepared(
+            composition: composition,
+            audioMix: audioMix,
+            duration: outputDuration
+        )
     }
 
     static func append(
         to writer: AVAssetWriter,
         input: AVAssetWriterInput,
-        composition: AVMutableComposition
+        prepared: Prepared
     ) throws {
+        let composition = prepared.composition
         let audioTracks = composition.tracks(withMediaType: .audio)
         guard !audioTracks.isEmpty else { return }
 
@@ -337,11 +386,17 @@ enum ExportAudioMux {
                 AVLinearPCMIsNonInterleaved: false,
             ]
         )
+        mixOutput.audioMix = prepared.audioMix
+        mixOutput.audioTimePitchAlgorithm = .spectral
         mixOutput.alwaysCopiesSampleData = false
         guard reader.canAdd(mixOutput) else {
             throw OpenRecordError.io("Could not decode mixed audio for export.")
         }
         reader.add(mixOutput)
+        reader.timeRange = CMTimeRange(
+            start: .zero,
+            duration: CMTime(seconds: prepared.duration, preferredTimescale: 48_000)
+        )
         try Task.checkCancellation()
         guard reader.startReading() else {
             throw OpenRecordError.io(

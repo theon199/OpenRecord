@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim and restyle the canvas, adds velocity-based cursor motion blur and a movable picture-in-picture overlay, and exports an H.264 MP4.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim, restyle, and retime the recording, adds velocity-based cursor motion blur and a movable picture-in-picture overlay, cleans up audio locally, and exports an H.264 MP4.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -64,10 +64,10 @@ Sidebar context menu → **Reveal in Finder**. Export can optionally copy the MP
 Open a project from the sidebar.
 
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
-- **Timeline**: playhead, trim in/out handles, zoom blocks (drag to move/resize). Space play/pause, Delete removes the selected zoom.
-- **Inspector**: zoom amount, auto-zoom sensitivity (Subtle / Normal / Aggressive), camera easing (Fast / Smooth / Cinematic), background, padding, corner radius, cursor scale and motion blur, webcam and keyboard overlay controls, export.
+- **Timeline**: playhead, trim handles, zoom blocks, and color-coded 0.25×–4× speed regions (drag blocks or their edges to move/resize). Space plays/pauses; Delete removes the selected zoom or speed region.
+- **Inspector**: zoom amount, auto-zoom sensitivity, camera easing, canvas/cursor styling, webcam and keyboard overlays, speed controls, microphone normalization/noise gate/de-click, microphone/system balance, and export.
 
-**Export…** (⌘E) renders the **in-memory** document (current trims, zoom ranges, canvas) — not a stale re-read from disk. Output is H.264 High, Rec.709, **1080p-capped** (long edge ≤ 1920, short ≤ 1080), 60 fps if the source averages ≥ 45 fps else 30. Mic + system AAC are mixed to one stereo 48 kHz track when those files exist.
+**Export…** (⌘E) renders the **in-memory** document — not a stale re-read from disk. Output is H.264 High, Rec.709, **1080p-capped** (long edge ≤ 1920, short ≤ 1080), 60 fps if the source averages ≥ 45 fps else 30. Speed regions remap every visual/telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
 
 ## Project format
 
@@ -76,7 +76,7 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # capture target/timing/health and optional webcam device metadata
-  project.json              # v2: trims, zooms, canvas/effects, webcam + keyboard overlays
+  project.json              # v2: trims, zooms, speed/audio, canvas/effects, webcam + keyboard overlays
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     webcam.mp4              # optional H.264 face-camera track
@@ -96,4 +96,4 @@ Coordinates are **points** (Quartz, origin top-left of the main display). Cursor
 
 ## Out of scope
 
-No captions, speed control, annotations, GIF, iPhone capture, shareable links, noise reduction, or in-app OAuth yet.
+No captions, annotations, GIF, iPhone capture, shareable links, advanced voice isolation, or in-app OAuth yet.

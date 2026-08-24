@@ -530,6 +530,118 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
     }
 }
 
+public struct SpeedSegment: Codable, Sendable, Hashable, Identifiable {
+    public static let rateRange = 0.25...4.0
+
+    public var id: UUID
+    /// Source-timeline seconds, before speed remapping.
+    public var start: TimeInterval
+    public var end: TimeInterval
+    public var rate: Double
+
+    public init(
+        id: UUID = UUID(),
+        start: TimeInterval,
+        end: TimeInterval,
+        rate: Double = 2
+    ) {
+        self.id = id
+        self.start = start
+        self.end = end
+        self.rate = rate
+    }
+
+    public var normalized: SpeedSegment {
+        var value = self
+        value.start = value.start.isFinite ? max(value.start, 0) : 0
+        value.end = value.end.isFinite ? max(value.end, value.start) : value.start
+        value.rate = value.rate.isFinite
+            ? min(max(value.rate, Self.rateRange.lowerBound), Self.rateRange.upperBound)
+            : 1
+        return value
+    }
+}
+
+public struct AudioCleanupSettings: Codable, Sendable, Hashable {
+    public static let gainRange = 0.0...2.0
+    public static let noiseGateThresholdRange = -60.0 ... -20.0
+
+    public var microphoneGain: Double
+    public var systemGain: Double
+    public var noiseGateEnabled: Bool
+    public var noiseGateThresholdDB: Double
+    public var normalizeEnabled: Bool
+    public var deClickEnabled: Bool
+
+    public init(
+        microphoneGain: Double = 1,
+        systemGain: Double = 1,
+        noiseGateEnabled: Bool = false,
+        noiseGateThresholdDB: Double = -42,
+        normalizeEnabled: Bool = false,
+        deClickEnabled: Bool = false
+    ) {
+        self.microphoneGain = microphoneGain
+        self.systemGain = systemGain
+        self.noiseGateEnabled = noiseGateEnabled
+        self.noiseGateThresholdDB = noiseGateThresholdDB
+        self.normalizeEnabled = normalizeEnabled
+        self.deClickEnabled = deClickEnabled
+    }
+
+    public static let `default` = AudioCleanupSettings()
+
+    private enum CodingKeys: String, CodingKey {
+        case microphoneGain
+        case systemGain
+        case noiseGateEnabled
+        case noiseGateThresholdDB
+        case normalizeEnabled
+        case deClickEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        microphoneGain = (try? container.decode(Double.self, forKey: .microphoneGain)) ?? 1
+        systemGain = (try? container.decode(Double.self, forKey: .systemGain)) ?? 1
+        noiseGateEnabled = (try? container.decode(Bool.self, forKey: .noiseGateEnabled)) ?? false
+        noiseGateThresholdDB = (try? container.decode(
+            Double.self,
+            forKey: .noiseGateThresholdDB
+        )) ?? -42
+        normalizeEnabled = (try? container.decode(Bool.self, forKey: .normalizeEnabled)) ?? false
+        deClickEnabled = (try? container.decode(Bool.self, forKey: .deClickEnabled)) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(microphoneGain, forKey: .microphoneGain)
+        try container.encode(systemGain, forKey: .systemGain)
+        try container.encode(noiseGateEnabled, forKey: .noiseGateEnabled)
+        try container.encode(noiseGateThresholdDB, forKey: .noiseGateThresholdDB)
+        try container.encode(normalizeEnabled, forKey: .normalizeEnabled)
+        try container.encode(deClickEnabled, forKey: .deClickEnabled)
+    }
+
+    public var normalized: AudioCleanupSettings {
+        var value = self
+        value.microphoneGain = Self.clampGain(value.microphoneGain)
+        value.systemGain = Self.clampGain(value.systemGain)
+        value.noiseGateThresholdDB = value.noiseGateThresholdDB.isFinite
+            ? min(
+                max(value.noiseGateThresholdDB, Self.noiseGateThresholdRange.lowerBound),
+                Self.noiseGateThresholdRange.upperBound
+            )
+            : -42
+        return value
+    }
+
+    private static func clampGain(_ gain: Double) -> Double {
+        guard gain.isFinite else { return 1 }
+        return min(max(gain, gainRange.lowerBound), gainRange.upperBound)
+    }
+}
+
 public struct ProjectDocument: Codable, Sendable, Hashable {
     public static let currentFormatVersion = 2
 
@@ -544,6 +656,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var stylePresetID: String?
     public var autoZoomSensitivity: AutoZoomSensitivity
     public var zoomEasing: ZoomEasingPreset
+    public var speedSegments: [SpeedSegment]
+    public var muteAudioWhenSpedUp: Bool
+    public var audioCleanup: AudioCleanupSettings
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -556,7 +671,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         webcamOverlay: WebcamOverlaySettings = .disabled,
         stylePresetID: String? = nil,
         autoZoomSensitivity: AutoZoomSensitivity = .normal,
-        zoomEasing: ZoomEasingPreset = .smooth
+        zoomEasing: ZoomEasingPreset = .smooth,
+        speedSegments: [SpeedSegment] = [],
+        muteAudioWhenSpedUp: Bool = false,
+        audioCleanup: AudioCleanupSettings = .default
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -569,6 +687,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.stylePresetID = stylePresetID ?? CanvasPreset.matching(canvas)?.id
         self.autoZoomSensitivity = autoZoomSensitivity
         self.zoomEasing = zoomEasing
+        self.speedSegments = speedSegments
+        self.muteAudioWhenSpedUp = muteAudioWhenSpedUp
+        self.audioCleanup = audioCleanup
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -583,6 +704,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case stylePresetID
         case autoZoomSensitivity
         case zoomEasing
+        case speedSegments
+        case muteAudioWhenSpedUp
+        case audioCleanup
     }
 
     public init(from decoder: Decoder) throws {
@@ -608,6 +732,15 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         )) ?? .normal
         zoomEasing = (try? container.decode(ZoomEasingPreset.self, forKey: .zoomEasing))
             ?? .smooth
+        speedSegments = (try? container.decode([SpeedSegment].self, forKey: .speedSegments)) ?? []
+        muteAudioWhenSpedUp = (try? container.decode(
+            Bool.self,
+            forKey: .muteAudioWhenSpedUp
+        )) ?? false
+        audioCleanup = (try? container.decode(
+            AudioCleanupSettings.self,
+            forKey: .audioCleanup
+        )) ?? .default
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -623,6 +756,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encodeIfPresent(stylePresetID, forKey: .stylePresetID)
         try container.encode(autoZoomSensitivity, forKey: .autoZoomSensitivity)
         try container.encode(zoomEasing, forKey: .zoomEasing)
+        try container.encode(speedSegments, forKey: .speedSegments)
+        try container.encode(muteAudioWhenSpedUp, forKey: .muteAudioWhenSpedUp)
+        try container.encode(audioCleanup, forKey: .audioCleanup)
     }
 
     /// Opening a legacy project is read-only. Write paths call this helper so
@@ -634,6 +770,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         value.keyboardOverlay = value.keyboardOverlay.normalized
         value.webcamOverlay = value.webcamOverlay.normalized
         value.canvas.cursorMotionBlur = value.canvas.cursorMotionBlur.normalized
+        value.speedSegments = SpeedTimeline.normalizedSegments(value.speedSegments)
+        value.audioCleanup = value.audioCleanup.normalized
         if value.stylePresetID == nil {
             value.stylePresetID = CanvasPreset.matching(value.canvas)?.id
         }

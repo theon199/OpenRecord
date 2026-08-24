@@ -8,7 +8,9 @@ enum ProjectDocumentJSONRoundTrip {
         guard CanvasSettings.default.cursorScale == 0.5,
               CanvasSettings.cursorScaleRange.lowerBound == 0.1,
               CanvasSettings.default.cursorMotionBlur == .default,
-              ProjectDocument().webcamOverlay == .disabled
+              ProjectDocument().webcamOverlay == .disabled,
+              ProjectDocument().speedSegments.isEmpty,
+              ProjectDocument().audioCleanup == .default
         else {
             throw OpenRecordError.io("Canvas cursor defaults are incorrect")
         }
@@ -62,7 +64,24 @@ enum ProjectDocumentJSONRoundTrip {
             ),
             stylePresetID: "custom-demo",
             autoZoomSensitivity: .aggressive,
-            zoomEasing: .cinematic
+            zoomEasing: .cinematic,
+            speedSegments: [
+                SpeedSegment(
+                    id: UUID(uuidString: "87654321-4321-4321-4321-cba987654321")!,
+                    start: 2,
+                    end: 6,
+                    rate: 2.5
+                )
+            ],
+            muteAudioWhenSpedUp: true,
+            audioCleanup: AudioCleanupSettings(
+                microphoneGain: 1.25,
+                systemGain: 0.7,
+                noiseGateEnabled: true,
+                noiseGateThresholdDB: -38,
+                normalizeEnabled: true,
+                deClickEnabled: true
+            )
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -87,7 +106,10 @@ enum ProjectDocumentJSONRoundTrip {
               legacy.autoZoomSensitivity == .normal,
               legacy.zoomEasing == .smooth,
               legacy.canvas.cursorMotionBlur == .disabled,
-              legacy.webcamOverlay == .disabled
+              legacy.webcamOverlay == .disabled,
+              legacy.speedSegments.isEmpty,
+              legacy.muteAudioWhenSpedUp == false,
+              legacy.audioCleanup == .default
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
         }
@@ -150,6 +172,31 @@ enum ProjectDocumentJSONRoundTrip {
               normalizedWebcam.borderWidth == WebcamOverlaySettings.borderWidthRange.lowerBound
         else {
             throw OpenRecordError.io("Webcam overlay settings were not normalized on save")
+        }
+
+        var unboundedMedia = ProjectDocument()
+        unboundedMedia.speedSegments = [
+            SpeedSegment(start: 8, end: 4, rate: 20),
+            SpeedSegment(start: 1, end: 3, rate: 0.05),
+            SpeedSegment(start: 2, end: 6, rate: 2),
+        ]
+        unboundedMedia.audioCleanup = AudioCleanupSettings(
+            microphoneGain: -1,
+            systemGain: 9,
+            noiseGateThresholdDB: -100
+        )
+        let normalizedMedia = unboundedMedia.upgradedForSave()
+        guard normalizedMedia.speedSegments.count == 2,
+              normalizedMedia.speedSegments[0].start == 1,
+              normalizedMedia.speedSegments[0].end == 3,
+              normalizedMedia.speedSegments[0].rate == SpeedSegment.rateRange.lowerBound,
+              normalizedMedia.speedSegments[1].start == 3,
+              normalizedMedia.speedSegments[1].end == 6,
+              normalizedMedia.audioCleanup.microphoneGain == 0,
+              normalizedMedia.audioCleanup.systemGain == 2,
+              normalizedMedia.audioCleanup.noiseGateThresholdDB == -60
+        else {
+            throw OpenRecordError.io("Speed or audio cleanup settings were not normalized on save")
         }
     }
 

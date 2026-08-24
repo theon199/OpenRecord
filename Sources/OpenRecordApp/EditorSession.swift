@@ -51,6 +51,7 @@ final class EditorSession {
     var playhead: TimeInterval = 0
     var isPlaying = false
     var selectedZoomID: UUID?
+    var selectedSpeedID: UUID?
     var copyExportToLibrary = false
     var exportProgress: Double?
     var lastError: String?
@@ -71,6 +72,16 @@ final class EditorSession {
     let player: AVPlayer
 
     var hasWebcamVideo: Bool { webcamPlayer != nil }
+    var hasMicrophoneAudio: Bool {
+        FileManager.default.fileExists(
+            atPath: ProjectLayout.microphoneAudioURL(in: projectURL).path
+        )
+    }
+    var hasSystemAudio: Bool {
+        FileManager.default.fileExists(
+            atPath: ProjectLayout.systemAudioURL(in: projectURL).path
+        )
+    }
     var webcamAspect: Double {
         Double(max(webcamWidth, 1)) / Double(max(webcamHeight, 1))
     }
@@ -109,6 +120,27 @@ final class EditorSession {
         return document.zoomRanges.first { $0.id == selectedZoomID }
     }
 
+    var selectedSpeedSegment: SpeedSegment? {
+        guard let selectedSpeedID else { return nil }
+        return document.speedSegments.first { $0.id == selectedSpeedID }
+    }
+
+    var currentPlaybackRate: Double {
+        SpeedTimeline(segments: document.speedSegments).rate(at: playhead)
+    }
+
+    var canAddSpeedAtPlayhead: Bool {
+        if document.speedSegments.contains(where: { playhead >= $0.start && playhead < $0.end }) {
+            return true
+        }
+        let nextStart = document.speedSegments
+            .filter { $0.start > playhead }
+            .map(\.start)
+            .min() ?? timelineDuration
+        return min(playhead + 3, nextStart, timelineDuration) - playhead
+            >= SpeedTimeline.minimumSegmentDuration
+    }
+
     /// Whether the playhead has either an existing range to select or a
     /// collision-free interval large enough for a new zoom.
     var canAddZoomAtPlayhead: Bool {
@@ -126,6 +158,7 @@ final class EditorSession {
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var isSeeking = false
+    private var activePlaybackRate: Float = 1
     private var saveTask: Task<Void, Never>?
     private var engineTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
@@ -291,6 +324,8 @@ final class EditorSession {
         self.webcamHeight = webcamHeight
         self.savedDocument = document
         self.saveCoordinator = ProjectSaveCoordinator(library: library, projectURL: projectURL)
+        player.currentItem?.audioTimePitchAlgorithm = .spectral
+        webcamPlayer?.currentItem?.audioTimePitchAlgorithm = .spectral
     }
 
     func shutdown() {
@@ -354,15 +389,16 @@ final class EditorSession {
         if playhead >= effectiveTrimOut - 0.02 {
             seek(to: document.trimIn)
         }
-        player.play()
-        syncWebcam(to: playhead, playing: true)
         isPlaying = true
+        applyPlaybackRate(force: true)
+        syncWebcam(to: playhead, playing: true)
     }
 
     func pause() {
         player.pause()
         webcamPlayer?.pause()
         isPlaying = false
+        activePlaybackRate = 1
     }
 
     func seek(to time: TimeInterval) {
@@ -388,6 +424,7 @@ final class EditorSession {
         switch proposal {
         case .select(let id):
             selectedZoomID = id
+            selectedSpeedID = nil
             return
         case .unavailable:
             return
@@ -402,6 +439,7 @@ final class EditorSession {
             document.zoomRanges.append(zoom)
             document.zoomRanges.sort { $0.start < $1.start }
             selectedZoomID = zoom.id
+            selectedSpeedID = nil
             documentDidChange(
                 from: before,
                 actionName: "Add Zoom",
@@ -420,6 +458,90 @@ final class EditorSession {
             actionName: "Delete Zoom",
             rebuildZoomEngine: true
         )
+    }
+
+    func addSpeedAtPlayhead() {
+        if let existing = document.speedSegments.first(where: {
+            playhead >= $0.start && playhead < $0.end
+        }) {
+            selectedSpeedID = existing.id
+            selectedZoomID = nil
+            return
+        }
+
+        let nextStart = document.speedSegments
+            .filter { $0.start > playhead }
+            .map(\.start)
+            .min() ?? timelineDuration
+        let end = min(playhead + 3, nextStart, timelineDuration)
+        guard end - playhead >= SpeedTimeline.minimumSegmentDuration else { return }
+
+        let before = document
+        let segment = SpeedSegment(start: playhead, end: end, rate: 2)
+        document.speedSegments.append(segment)
+        document.speedSegments = SpeedTimeline.normalizedSegments(
+            document.speedSegments,
+            sourceDuration: timelineDuration
+        )
+        selectedSpeedID = segment.id
+        selectedZoomID = nil
+        documentDidChange(from: before, actionName: "Add Speed Region")
+    }
+
+    func deleteSelectedSpeedSegment() {
+        guard let selectedSpeedID else { return }
+        let before = document
+        document.speedSegments.removeAll { $0.id == selectedSpeedID }
+        self.selectedSpeedID = nil
+        documentDidChange(from: before, actionName: "Delete Speed Region")
+        applyPlaybackRate(force: true)
+    }
+
+    func updateSelectedSpeedRate(_ rate: Double) {
+        guard let selectedSpeedID,
+              let index = document.speedSegments.firstIndex(where: { $0.id == selectedSpeedID })
+        else { return }
+        let before = document
+        document.speedSegments[index].rate = min(
+            max(rate, SpeedSegment.rateRange.lowerBound),
+            SpeedSegment.rateRange.upperBound
+        )
+        documentDidChange(from: before, actionName: "Change Playback Speed")
+        applyPlaybackRate(force: true)
+    }
+
+    func replaceSpeedSegment(_ segment: SpeedSegment) {
+        guard let index = document.speedSegments.firstIndex(where: { $0.id == segment.id }) else {
+            return
+        }
+        let before = document
+        let bounds = speedNeighborBounds(excluding: segment.id, referenceStart: document.speedSegments[index].start)
+        var next = segment.normalized
+        next.start = min(max(next.start, bounds.lower), next.end - SpeedTimeline.minimumSegmentDuration)
+        next.end = max(
+            min(next.end, bounds.upper),
+            next.start + SpeedTimeline.minimumSegmentDuration
+        )
+        document.speedSegments[index] = next
+        document.speedSegments.sort { $0.start < $1.start }
+        documentDidChange(from: before, actionName: "Adjust Speed Region")
+        applyPlaybackRate(force: true)
+    }
+
+    func setMuteAudioWhenSpedUp(_ enabled: Bool) {
+        let before = document
+        document.muteAudioWhenSpedUp = enabled
+        documentDidChange(from: before, actionName: "Change Speed Audio")
+    }
+
+    func updateAudioCleanup(
+        actionName: String,
+        _ body: (inout AudioCleanupSettings) -> Void
+    ) {
+        let before = document
+        body(&document.audioCleanup)
+        document.audioCleanup = document.audioCleanup.normalized
+        documentDidChange(from: before, actionName: actionName)
     }
 
     func updateSelectedZoom(_ body: (inout ZoomRange) -> Void) {
@@ -571,12 +693,18 @@ final class EditorSession {
                 selectedZoomID = restoredZoomIDs.first
             }
         }
+        if let selectedSpeedID,
+           !document.speedSegments.contains(where: { $0.id == selectedSpeedID })
+        {
+            self.selectedSpeedID = nil
+        }
         let clampedPlayhead = min(max(playhead, document.trimIn), effectiveTrimOut)
         if abs(clampedPlayhead - playhead) > 0.000_001 {
             seek(to: clampedPlayhead)
         }
         markDirty()
         scheduleEngineRebuild()
+        applyPlaybackRate(force: true)
         scheduleSave()
     }
 
@@ -635,6 +763,7 @@ final class EditorSession {
         document = snapshot
         editRevision &+= 1
         selectedZoomID = nil
+        selectedSpeedID = nil
         documentHistory.removeAll()
         rebuildEngine()
         // Serialize behind any save already in flight, then restore the last
@@ -684,6 +813,19 @@ final class EditorSession {
         return (previous?.end ?? 0, next?.start ?? timelineDuration)
     }
 
+    func speedNeighborBounds(
+        excluding id: UUID,
+        referenceStart: TimeInterval? = nil
+    ) -> (lower: TimeInterval, upper: TimeInterval) {
+        let others = document.speedSegments.filter { $0.id != id }
+        let pivot = referenceStart
+            ?? document.speedSegments.first(where: { $0.id == id })?.start
+            ?? 0
+        let previous = others.filter { $0.start < pivot }.max { $0.start < $1.start }
+        let next = others.filter { $0.start > pivot }.min { $0.start < $1.start }
+        return (previous?.end ?? 0, next?.start ?? timelineDuration)
+    }
+
     private func attachPlayer() {
         detachPlayer()
         timeObserver = player.addPeriodicTimeObserver(
@@ -725,6 +867,7 @@ final class EditorSession {
         let seconds = time.seconds
         guard seconds.isFinite else { return }
         playhead = min(max(seconds, 0), timelineDuration)
+        applyPlaybackRate()
         syncWebcam(to: playhead, playing: isPlaying)
         if isPlaying, playhead >= effectiveTrimOut - 0.01 {
             pause()
@@ -751,10 +894,24 @@ final class EditorSession {
                 toleranceAfter: .zero
             )
         }
-        if playing, webcamPlayer.timeControlStatus != .playing {
-            webcamPlayer.play()
+        if playing,
+           webcamPlayer.timeControlStatus != .playing
+                || abs(webcamPlayer.rate - activePlaybackRate) > 0.001
+        {
+            webcamPlayer.playImmediately(atRate: activePlaybackRate)
         } else if !playing {
             webcamPlayer.pause()
+        }
+    }
+
+    private func applyPlaybackRate(force: Bool = false) {
+        guard isPlaying else { return }
+        let next = Float(currentPlaybackRate)
+        guard force || abs(next - activePlaybackRate) > 0.001 else { return }
+        activePlaybackRate = next
+        player.playImmediately(atRate: next)
+        if webcamIsVisible(at: playhead) {
+            webcamPlayer?.playImmediately(atRate: next)
         }
     }
 

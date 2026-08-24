@@ -187,6 +187,83 @@ struct InspectorPanel: View {
                 }
             }
 
+            Section("Speed") {
+                if let segment = session.selectedSpeedSegment {
+                    labeledSlider(
+                        "Rate",
+                        value: selectedSpeedRate,
+                        range: SpeedSegment.rateRange,
+                        format: "%.2f×",
+                        actionName: "Change Playback Speed",
+                        step: 0.25
+                    )
+                    LabeledContent("Start", value: Timecode.string(segment.start))
+                    LabeledContent("End", value: Timecode.string(segment.end))
+                    Text("Drag the orange or blue region and its edges on the timeline to adjust it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Delete Speed Region", role: .destructive) {
+                        session.deleteSelectedSpeedSegment()
+                    }
+                } else {
+                    Text("Add a speed region at the playhead, then choose 0.25×–4× playback.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Add Speed Region at Playhead") {
+                        session.addSpeedAtPlayhead()
+                    }
+                    .disabled(!session.canAddSpeedAtPlayhead)
+                }
+                Toggle("Mute audio in sped-up regions", isOn: muteAudioWhenSpedUp)
+            }
+
+            Section("Audio") {
+                if session.hasMicrophoneAudio {
+                    labeledSlider(
+                        "Microphone",
+                        value: microphoneGain,
+                        range: AudioCleanupSettings.gainRange,
+                        format: "%.0f%%",
+                        actionName: "Change Microphone Level",
+                        step: 0.05,
+                        displayScale: 100
+                    )
+                    Toggle("Normalize microphone", isOn: normalizeMicrophone)
+                    Toggle("Microphone noise gate", isOn: microphoneNoiseGate)
+                    if session.document.audioCleanup.noiseGateEnabled {
+                        labeledSlider(
+                            "Gate threshold",
+                            value: noiseGateThreshold,
+                            range: AudioCleanupSettings.noiseGateThresholdRange,
+                            format: "%.0f dB",
+                            actionName: "Change Noise Gate",
+                            step: 1
+                        )
+                    }
+                    Toggle("Remove microphone clicks", isOn: deClickMicrophone)
+                }
+                if session.hasSystemAudio {
+                    labeledSlider(
+                        "System audio",
+                        value: systemGain,
+                        range: AudioCleanupSettings.gainRange,
+                        format: "%.0f%%",
+                        actionName: "Change System Audio Level",
+                        step: 0.05,
+                        displayScale: 100
+                    )
+                }
+                if !session.hasMicrophoneAudio, !session.hasSystemAudio {
+                    Text("This project has no microphone or system-audio track.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Cleanup is local, non-destructive, and applied when the MP4 is exported.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Trim") {
                 LabeledContent("In", value: Timecode.string(session.document.trimIn))
                 LabeledContent("Out", value: Timecode.string(session.effectiveTrimOut))
@@ -390,6 +467,58 @@ struct InspectorPanel: View {
             set: { shadow in
                 session.updateWebcamOverlay(actionName: "Toggle Webcam Shadow") {
                     $0.shadow = shadow
+                }
+            }
+        )
+    }
+
+    private var selectedSpeedRate: Binding<Double> {
+        Binding(
+            get: { session.selectedSpeedSegment?.rate ?? 1 },
+            set: { session.updateSelectedSpeedRate($0) }
+        )
+    }
+
+    private var muteAudioWhenSpedUp: Binding<Bool> {
+        Binding(
+            get: { session.document.muteAudioWhenSpedUp },
+            set: { session.setMuteAudioWhenSpedUp($0) }
+        )
+    }
+
+    private var microphoneGain: Binding<Double> {
+        audioBinding(\.microphoneGain, actionName: "Change Microphone Level")
+    }
+
+    private var systemGain: Binding<Double> {
+        audioBinding(\.systemGain, actionName: "Change System Audio Level")
+    }
+
+    private var normalizeMicrophone: Binding<Bool> {
+        audioBinding(\.normalizeEnabled, actionName: "Toggle Microphone Normalization")
+    }
+
+    private var microphoneNoiseGate: Binding<Bool> {
+        audioBinding(\.noiseGateEnabled, actionName: "Toggle Microphone Noise Gate")
+    }
+
+    private var noiseGateThreshold: Binding<Double> {
+        audioBinding(\.noiseGateThresholdDB, actionName: "Change Noise Gate")
+    }
+
+    private var deClickMicrophone: Binding<Bool> {
+        audioBinding(\.deClickEnabled, actionName: "Toggle Microphone De-Click")
+    }
+
+    private func audioBinding<Value>(
+        _ keyPath: WritableKeyPath<AudioCleanupSettings, Value>,
+        actionName: String
+    ) -> Binding<Value> {
+        Binding(
+            get: { session.document.audioCleanup[keyPath: keyPath] },
+            set: { value in
+                session.updateAudioCleanup(actionName: actionName) {
+                    $0[keyPath: keyPath] = value
                 }
             }
         )

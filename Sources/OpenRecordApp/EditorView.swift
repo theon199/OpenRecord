@@ -90,7 +90,11 @@ struct EditorView: View {
             return .handled
         }
         .onKeyPress(.delete) {
-            session.deleteSelectedZoom()
+            if session.selectedSpeedID != nil {
+                session.deleteSelectedSpeedSegment()
+            } else {
+                session.deleteSelectedZoom()
+            }
             return .handled
         }
         .onDisappear {

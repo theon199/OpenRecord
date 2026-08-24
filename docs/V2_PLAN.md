@@ -55,7 +55,7 @@ v2.2 — Captions, annotations, export expansion
 
 ### Current implementation status (August 2026)
 
-**v2.0 is in progress.** The repository now includes CI, document-level undo/redo
+**v2.0 is complete.** The repository includes CI, document-level undo/redo
 for trim, zoom, and canvas edits, auto-zoom regeneration, export cancellation,
 library deletion, and direct zoom-anchor dragging in the preview. Gradient
 backgrounds and 16:9, 9:16, 1:1, and 4:3 aspect presets are now exposed in the
@@ -70,7 +70,7 @@ Auto-zoom generation now has Subtle, Normal, and Aggressive sensitivity
 presets, while the shared preview/export camera supports Fast, Smooth, and
 Cinematic easing. Normal + Smooth preserve the prior default behavior.
 
-**v2.1 is now in progress.** Velocity-based cursor motion blur is implemented
+**v2.1 is complete.** Velocity-based cursor motion blur is implemented
 with a non-destructive canvas setting, a SwiftUI preview approximation, and a
 directional Core Image export effect. New captures enable it by default while
 legacy projects decode with it disabled, preserving their existing look.
@@ -80,7 +80,14 @@ placement, border, shadow, and mirroring behavior. The preview supports direct
 dragging and handle-based resizing, and projects with a manually supplied
 webcam track are detected on reopen.
 
-Next: speed control and audio cleanup. v2.2 has not started.
+Piecewise 0.25×–4× speed regions now drive preview playback and the shared
+output-time-to-source-time export map, so video, webcam, cursor, zoom, click,
+and keyboard tracks stay aligned. Export audio is time-stretched with spectral
+pitch preservation and can be muted in sped-up regions. Non-destructive
+microphone normalization, a configurable noise gate, light de-clicking, and
+independent microphone/system gains run locally during export.
+
+Next: v2.2 captions, annotations, and export expansion.
 
 ---
 
@@ -260,6 +267,13 @@ settings, while missing webcam media remains a clean, disabled legacy case.
 - Audio: `AVAudioTimePitchAlgorithm` or resample; optional "mute audio when sped up"
 - Auto-zoom / keyboard / cursor telemetry: evaluate at **source** timestamps (pre-speed), then apply speed mapping for display
 
+Implemented: the timeline exposes movable/resizable speed regions and a
+0.25×–4× inspector control. Preview changes `AVPlayer` rate at source-time
+boundaries, while export integrates the same piecewise map to determine every
+output frame's source timestamp. Audio composition slices are scaled to the
+same output intervals with spectral pitch preservation; an optional setting
+replaces sped-up audio intervals with silence.
+
 ### 8. Audio cleanup
 
 | Feature | Approach |
@@ -270,6 +284,13 @@ settings, while missing webcam media remains a clean, disabled legacy case.
 | **De-click** | Optional light click removal on mic track |
 
 Keep processing **local and offline** — no cloud APIs. Document as export-time effects, not destructive rewrites of `mic.m4a`.
+
+Implemented: microphone and system gain are applied independently in the
+export mix. When enabled, the microphone receives an offline floating-point
+pass with peak normalization, an envelope-smoothed threshold gate, and light
+single-sample click suppression before the temporary result is mixed. Source
+media in the project bundle is never rewritten, and temporary cleanup media is
+removed after success, failure, or cancellation.
 
 ### 9. Export performance
 
