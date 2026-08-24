@@ -27,6 +27,15 @@ identity_installed() {
 }
 
 ensure_codesign_identity() {
+  # CI and other callers can explicitly request ad-hoc signing with `-`.
+  # In that mode there is no certificate to install, and attempting to create
+  # one would make a non-interactive build unnecessarily dependent on the
+  # login keychain.
+  if [[ "$IDENTITY" == "-" ]]; then
+    echo "Using ad-hoc codesign identity"
+    return
+  fi
+
   if identity_installed; then
     echo "Using existing codesign identity: $IDENTITY"
     return
@@ -105,6 +114,15 @@ EOF
 
 sign_app() {
   local app="$1"
+  if [[ "$IDENTITY" == "-" ]]; then
+    codesign --force --sign - \
+      --entitlements "$ENTITLEMENTS" \
+      --identifier "$BUNDLE_ID" \
+      --timestamp=none \
+      "$app"
+    return
+  fi
+
   if codesign --force --sign "$IDENTITY" \
     --entitlements "$ENTITLEMENTS" \
     --identifier "$BUNDLE_ID" \
