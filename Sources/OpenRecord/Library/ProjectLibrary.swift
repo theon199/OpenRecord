@@ -10,6 +10,7 @@ import Foundation
 /// project.json
 /// recording/
 ///   display.mp4
+///   webcam.mp4
 ///   thumb.jpg
 ///   mic.m4a
 ///   system.m4a

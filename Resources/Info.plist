@@ -37,6 +37,6 @@
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>OpenRecord records system audio alongside the screen capture.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>OpenRecord may use the camera in a future release. Camera capture is not part of the current version.</string>
+	<string>OpenRecord records an optional webcam video for a picture-in-picture overlay.</string>
 </dict>
 </plist>

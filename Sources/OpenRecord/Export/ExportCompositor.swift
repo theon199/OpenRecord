@@ -4,12 +4,14 @@ import CoreImage.CIFilterBuiltins
 import CoreVideo
 import Foundation
 
-/// Core Image compositor: background + padded rounded source + cursor + click ripple.
+/// Core Image compositor: background + source + webcam + cursor/keyboard overlays.
 final class ExportCompositor {
     private let context: CIContext
     private let colorSpace: CGColorSpace
     private let canvas: CanvasSettings
     private let keyboardOverlay: KeyboardOverlaySettings
+    private let webcamOverlay: WebcamOverlaySettings
+    private let webcamMirror: Bool
     private let layout: ExportCanvasLayout
     private let canvasExtent: CGRect
     private let background: CIImage
@@ -24,6 +26,8 @@ final class ExportCompositor {
         colorSpace: CGColorSpace,
         canvas: CanvasSettings,
         keyboardOverlay: KeyboardOverlaySettings,
+        webcamOverlay: WebcamOverlaySettings,
+        webcamMirror: Bool,
         layout: ExportCanvasLayout,
         sourceWidth: Int,
         sourceHeight: Int,
@@ -35,6 +39,8 @@ final class ExportCompositor {
         self.colorSpace = colorSpace
         self.canvas = canvas
         self.keyboardOverlay = keyboardOverlay
+        self.webcamOverlay = webcamOverlay
+        self.webcamMirror = webcamMirror
         self.layout = layout
         self.sourceWidth = sourceWidth
         self.sourceHeight = sourceHeight
@@ -47,6 +53,7 @@ final class ExportCompositor {
 
     func render(
         source: CIImage,
+        webcam: CIImage?,
         cropUV: CGRect,
         cursorUV: Point2D?,
         cursorVelocity: Point2D?,
@@ -71,6 +78,17 @@ final class ExportCompositor {
         let placed = placeSource(source, cropUV: cropUV, videoRect: videoRect)
         let masked = roundCorners(placed, videoRect: videoRect, radius: radius)
         var output = masked.composited(over: background)
+
+        if let webcam,
+           let overlay = WebcamOverlayRenderer.image(
+            webcam,
+            settings: webcamOverlay,
+            canvasSize: layout.size,
+            mirror: webcamMirror
+           )
+        {
+            output = overlay.composited(over: output)
+        }
 
         if let cursorUV {
             let hotspot = ExportLayout.mapSourceUVToCanvas(

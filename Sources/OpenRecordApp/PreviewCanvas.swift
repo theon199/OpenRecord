@@ -6,6 +6,8 @@ import SwiftUI
 struct PreviewCanvas: View {
     @Bindable var session: EditorSession
     @State private var anchorDrag: ZoomAnchorDrag?
+    @State private var webcamDrag: WebcamOverlayDrag?
+    @State private var webcamResize: WebcamOverlayResize?
 
     var body: some View {
         GeometryReader { geo in
@@ -48,6 +50,18 @@ struct PreviewCanvas: View {
 
                 videoStack(crop: crop, inner: video, cornerRadius: corner)
 
+                if let webcamPlayer = session.webcamPlayer,
+                   session.webcamIsVisible(at: session.playhead)
+                {
+                    webcamOverlay(
+                        player: webcamPlayer,
+                        canvasSize: layout.size,
+                        outer: outer,
+                        viewScale: viewScale,
+                        mirror: session.meta.webcam?.mirror ?? false
+                    )
+                }
+
                 if let cursor {
                     cursorOverlay(
                         cursor: cursor,
@@ -83,6 +97,129 @@ struct PreviewCanvas: View {
             .clipped()
         }
         .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func webcamOverlay(
+        player: AVPlayer,
+        canvasSize: CGSize,
+        outer: CGRect,
+        viewScale: CGFloat,
+        mirror: Bool
+    ) -> some View {
+        let settings = session.document.webcamOverlay
+        if let geometry = WebcamOverlayLayout.geometry(
+            settings: settings,
+            canvasSize: canvasSize,
+            sourceAspect: session.webcamAspect
+        ) {
+            let rect = mapRect(geometry.frame, from: canvasSize, into: outer)
+            let radius = geometry.cornerRadius * Double(viewScale)
+            let shape = WebcamPreviewShape(kind: settings.shape, cornerRadius: radius)
+
+            ZStack(alignment: .bottomTrailing) {
+                PlayerLayerView(player: player, videoGravity: .resizeAspectFill)
+                    .scaleEffect(x: mirror ? -1 : 1, y: 1)
+                    .frame(width: rect.width, height: rect.height)
+                    .clipShape(shape)
+                    .overlay(
+                        shape.stroke(
+                            .white,
+                            lineWidth: settings.borderWidth * Double(viewScale)
+                        )
+                    )
+                    .contentShape(shape)
+                    .gesture(webcamMoveGesture(outer: outer))
+                    .onHover { hovering in
+                        if webcamDrag != nil {
+                            NSCursor.closedHand.set()
+                        } else if hovering {
+                            NSCursor.openHand.set()
+                        } else {
+                            NSCursor.arrow.set()
+                        }
+                    }
+
+                Circle()
+                    .fill(.white)
+                    .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
+                    .frame(width: 14, height: 14)
+                    .offset(x: 4, y: 4)
+                    .contentShape(Circle().inset(by: -6))
+                    .gesture(
+                        webcamResizeGesture(
+                            canvasSize: canvasSize,
+                            viewScale: viewScale
+                        )
+                    )
+                    .help("Drag to resize the webcam overlay")
+                    .accessibilityLabel("Resize webcam overlay")
+            }
+            .frame(width: rect.width, height: rect.height)
+            .position(x: rect.midX, y: rect.midY)
+            .shadow(
+                color: settings.shadow ? .black.opacity(0.38) : .clear,
+                radius: settings.shadow ? 12 * viewScale : 0,
+                y: settings.shadow ? 6 * viewScale : 0
+            )
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Webcam overlay")
+        }
+    }
+
+    private func webcamMoveGesture(outer: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if webcamDrag == nil {
+                    session.pause()
+                    session.beginDocumentEdit(actionName: "Move Webcam Overlay")
+                    webcamDrag = WebcamOverlayDrag(
+                        originalPosition: session.document.webcamOverlay.position
+                    )
+                }
+                guard let webcamDrag else { return }
+                let x = webcamDrag.originalPosition.x
+                    + Double(value.translation.width / max(outer.width, 1))
+                let y = webcamDrag.originalPosition.y
+                    + Double(value.translation.height / max(outer.height, 1))
+                session.updateWebcamOverlay(actionName: "Move Webcam Overlay") {
+                    $0.position = Point2D(x: x, y: y)
+                }
+                NSCursor.closedHand.set()
+            }
+            .onEnded { _ in
+                session.endDocumentEdit()
+                webcamDrag = nil
+                NSCursor.openHand.set()
+            }
+    }
+
+    private func webcamResizeGesture(
+        canvasSize: CGSize,
+        viewScale: CGFloat
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if webcamResize == nil {
+                    session.pause()
+                    session.beginDocumentEdit(actionName: "Resize Webcam Overlay")
+                    webcamResize = WebcamOverlayResize(
+                        originalSize: session.document.webcamOverlay.size
+                    )
+                }
+                guard let webcamResize else { return }
+                let denominator = max(min(canvasSize.width, canvasSize.height) * viewScale, 1)
+                let delta = Double(
+                    (value.translation.width + value.translation.height) / (2 * denominator)
+                )
+                session.updateWebcamOverlay(actionName: "Resize Webcam Overlay") {
+                    $0.size = webcamResize.originalSize + delta
+                }
+            }
+            .onEnded { _ in
+                session.endDocumentEdit()
+                webcamResize = nil
+            }
     }
 
     @ViewBuilder
@@ -377,6 +514,31 @@ private struct ZoomAnchorDrag {
     var videoRect: CGRect
 }
 
+private struct WebcamOverlayDrag {
+    var originalPosition: Point2D
+}
+
+private struct WebcamOverlayResize {
+    var originalSize: Double
+}
+
+private struct WebcamPreviewShape: Shape {
+    var kind: WebcamOverlayShape
+    var cornerRadius: Double
+
+    func path(in rect: CGRect) -> Path {
+        switch kind {
+        case .circle:
+            return Path(ellipseIn: rect)
+        case .roundedRectangle:
+            return Path(
+                roundedRect: rect,
+                cornerRadius: min(CGFloat(cornerRadius), min(rect.width, rect.height) / 2)
+            )
+        }
+    }
+}
+
 private struct CursorPointerShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
@@ -391,10 +553,12 @@ private struct CursorPointerShape: Shape {
 
 struct PlayerLayerView: NSViewRepresentable {
     let player: AVPlayer
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     func makeNSView(context: Context) -> PlayerNSView {
         let view = PlayerNSView()
         view.player = player
+        view.videoGravity = videoGravity
         return view
     }
 
@@ -402,6 +566,7 @@ struct PlayerLayerView: NSViewRepresentable {
         if nsView.player !== player {
             nsView.player = player
         }
+        nsView.videoGravity = videoGravity
     }
 }
 
@@ -410,6 +575,11 @@ final class PlayerNSView: NSView {
 
     var player: AVPlayer? {
         didSet { playerLayer.player = player }
+    }
+
+    var videoGravity: AVLayerVideoGravity {
+        get { playerLayer.videoGravity }
+        set { playerLayer.videoGravity = newValue }
     }
 
     override init(frame frameRect: NSRect) {

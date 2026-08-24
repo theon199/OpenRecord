@@ -18,6 +18,7 @@ enum ExportLayoutSuite {
         try trimClamping()
         try clickAgeAndRipple()
         try cursorMotionBlurMapping()
+        try webcamOverlayGeometryAndRendering()
         try keyboardTimelineAndGeometry()
         try keyboardRendererProducesBoundedImage()
         try jsonlMissingIsEmpty()
@@ -278,6 +279,66 @@ enum ExportLayoutSuite {
         }
     }
 
+    static func webcamOverlayGeometryAndRendering() throws {
+        let canvas = CGSize(width: 1920, height: 1080)
+        guard WebcamOverlayLayout.geometry(
+            settings: .disabled,
+            canvasSize: canvas
+        ) == nil else {
+            throw OpenRecordError.io("disabled webcam overlay produced geometry")
+        }
+
+        let circleSettings = WebcamOverlaySettings(enabled: true)
+        guard let circle = WebcamOverlayLayout.geometry(
+            settings: circleSettings,
+            canvasSize: canvas,
+            sourceAspect: 4.0 / 3.0
+        ) else {
+            throw OpenRecordError.io("enabled webcam overlay produced no geometry")
+        }
+        try expectClose(circle.frame.width, circle.frame.height, "circular webcam size")
+        guard CGRect(origin: .zero, size: canvas).contains(circle.frame),
+              abs(circle.cornerRadius - Double(circle.frame.width / 2)) < 0.000_001
+        else {
+            throw OpenRecordError.io("circular webcam geometry escaped the canvas")
+        }
+
+        let roundedSettings = WebcamOverlaySettings(
+            enabled: true,
+            shape: .roundedRectangle,
+            position: Point2D(x: 0, y: 0),
+            size: 0.2,
+            borderWidth: 4
+        )
+        guard let rounded = WebcamOverlayLayout.geometry(
+            settings: roundedSettings,
+            canvasSize: canvas,
+            sourceAspect: 16.0 / 9.0
+        ), rounded.frame.width > rounded.frame.height,
+           rounded.frame.minX >= 0,
+           rounded.frame.minY >= 0
+        else {
+            throw OpenRecordError.io("rounded webcam geometry was not clamped inside the canvas")
+        }
+
+        let source = CIImage(color: CIColor(red: 0.2, green: 0.6, blue: 0.9))
+            .cropped(to: CGRect(x: 0, y: 0, width: 640, height: 480))
+        guard let image = WebcamOverlayRenderer.image(
+            source,
+            settings: roundedSettings,
+            canvasSize: canvas,
+            mirror: true
+        ), image.extent.width.isFinite,
+           image.extent.height.isFinite,
+           image.extent.width > 1,
+           image.extent.height > 1,
+           image.extent.width < canvas.width,
+           image.extent.height < canvas.height
+        else {
+            throw OpenRecordError.io("webcam renderer did not produce a bounded overlay image")
+        }
+    }
+
     static func keyboardTimelineAndGeometry() throws {
         let samples = [
             KeySample(t: 1.0, key: "K", modifiers: [.command], down: true),
@@ -529,6 +590,11 @@ func exportCanvasPointMapsBackToSourceUV() throws {
 @Test
 func exportCursorMotionBlurMapping() throws {
     try ExportLayoutSuite.cursorMotionBlurMapping()
+}
+
+@Test
+func exportWebcamOverlayGeometryAndRendering() throws {
+    try ExportLayoutSuite.webcamOverlayGeometryAndRendering()
 }
 
 @Test

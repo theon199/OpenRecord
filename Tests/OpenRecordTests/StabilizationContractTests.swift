@@ -41,11 +41,16 @@ enum StabilizationContractSuite {
             displayBounds: Rect2D(x: 10, y: 20, width: 300, height: 200),
             scale: 2,
             captureTarget: .window(id: 42),
-            captureTiming: CaptureTiming(systemAudioOffset: 0.05, microphoneOffset: -0.2),
+            captureTiming: CaptureTiming(
+                systemAudioOffset: 0.05,
+                microphoneOffset: -0.2,
+                webcamOffset: 0.08
+            ),
             captureHealth: CaptureHealth(
                 state: .recovered,
-                warnings: [.screenStoppedUnexpectedly, .truncatedMicrophone]
-            )
+                warnings: [.screenStoppedUnexpectedly, .truncatedMicrophone, .truncatedWebcam]
+            ),
+            webcam: WebcamCaptureInfo(deviceID: "camera-1", mirror: true)
         )
         let decoded = try ProjectJSON.decoder.decode(
             ProjectMeta.self,

@@ -287,6 +287,8 @@ public struct ProjectMeta: Codable, Sendable, Hashable {
     public var captureTiming: CaptureTiming?
     /// Capture completion/recovery state. Missing on legacy projects means complete.
     public var captureHealth: CaptureHealth?
+    /// Camera selected for the optional picture-in-picture track.
+    public var webcam: WebcamCaptureInfo?
 
     public init(
         createdAt: Date = Date(),
@@ -295,7 +297,8 @@ public struct ProjectMeta: Codable, Sendable, Hashable {
         scale: Double,
         captureTarget: CaptureTarget,
         captureTiming: CaptureTiming? = nil,
-        captureHealth: CaptureHealth? = nil
+        captureHealth: CaptureHealth? = nil,
+        webcam: WebcamCaptureInfo? = nil
     ) {
         self.createdAt = createdAt
         self.appVersion = appVersion
@@ -304,19 +307,33 @@ public struct ProjectMeta: Codable, Sendable, Hashable {
         self.captureTarget = captureTarget
         self.captureTiming = captureTiming
         self.captureHealth = captureHealth
+        self.webcam = webcam
+    }
+}
+
+public struct WebcamCaptureInfo: Codable, Sendable, Hashable {
+    public var deviceID: String
+    public var mirror: Bool
+
+    public init(deviceID: String, mirror: Bool = true) {
+        self.deviceID = deviceID
+        self.mirror = mirror
     }
 }
 
 public struct CaptureTiming: Codable, Sendable, Hashable {
     public var systemAudioOffset: TimeInterval?
     public var microphoneOffset: TimeInterval?
+    public var webcamOffset: TimeInterval?
 
     public init(
         systemAudioOffset: TimeInterval? = nil,
-        microphoneOffset: TimeInterval? = nil
+        microphoneOffset: TimeInterval? = nil,
+        webcamOffset: TimeInterval? = nil
     ) {
         self.systemAudioOffset = systemAudioOffset
         self.microphoneOffset = microphoneOffset
+        self.webcamOffset = webcamOffset
     }
 }
 
@@ -334,6 +351,8 @@ public enum CaptureWarningCode: String, Codable, Sendable, Hashable {
     case truncatedVideo
     case truncatedSystemAudio
     case truncatedMicrophone
+    case missingWebcam
+    case truncatedWebcam
     case truncatedMouseTelemetry
     case truncatedClickTelemetry
     case truncatedKeyboardTelemetry
@@ -432,6 +451,85 @@ public struct CaptureHealth: Codable, Sendable, Hashable {
     public static let complete = CaptureHealth()
 }
 
+public enum WebcamOverlayShape: String, Codable, CaseIterable, Sendable, Hashable {
+    case circle
+    case roundedRectangle = "rounded-rectangle"
+}
+
+public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
+    public static let sizeRange = 0.08...0.4
+    public static let borderWidthRange = 0.0...12.0
+
+    public var enabled: Bool
+    public var shape: WebcamOverlayShape
+    /// Normalized center position in canvas space, origin top-left.
+    public var position: Point2D
+    /// Diameter/height relative to the canvas's shorter edge.
+    public var size: Double
+    public var borderWidth: Double
+    public var shadow: Bool
+
+    public init(
+        enabled: Bool = false,
+        shape: WebcamOverlayShape = .circle,
+        position: Point2D = Point2D(x: 0.85, y: 0.82),
+        size: Double = 0.18,
+        borderWidth: Double = 3,
+        shadow: Bool = true
+    ) {
+        self.enabled = enabled
+        self.shape = shape
+        self.position = position
+        self.size = size
+        self.borderWidth = borderWidth
+        self.shadow = shadow
+    }
+
+    public static let disabled = WebcamOverlaySettings()
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case shape
+        case position
+        case size
+        case borderWidth
+        case shadow
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        shape = (try? container.decode(WebcamOverlayShape.self, forKey: .shape)) ?? .circle
+        position = try container.decodeIfPresent(Point2D.self, forKey: .position)
+            ?? Point2D(x: 0.85, y: 0.82)
+        size = try container.decodeIfPresent(Double.self, forKey: .size) ?? 0.18
+        borderWidth = try container.decodeIfPresent(Double.self, forKey: .borderWidth) ?? 3
+        shadow = try container.decodeIfPresent(Bool.self, forKey: .shadow) ?? true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(shape, forKey: .shape)
+        try container.encode(position, forKey: .position)
+        try container.encode(size, forKey: .size)
+        try container.encode(borderWidth, forKey: .borderWidth)
+        try container.encode(shadow, forKey: .shadow)
+    }
+
+    public var normalized: WebcamOverlaySettings {
+        var value = self
+        value.position.x = min(max(value.position.x, 0), 1)
+        value.position.y = min(max(value.position.y, 0), 1)
+        value.size = min(max(value.size, Self.sizeRange.lowerBound), Self.sizeRange.upperBound)
+        value.borderWidth = min(
+            max(value.borderWidth, Self.borderWidthRange.lowerBound),
+            Self.borderWidthRange.upperBound
+        )
+        return value
+    }
+}
+
 public struct ProjectDocument: Codable, Sendable, Hashable {
     public static let currentFormatVersion = 2
 
@@ -442,6 +540,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var canvas: CanvasSettings
     public var cursorSprites: [CursorSprite]
     public var keyboardOverlay: KeyboardOverlaySettings
+    public var webcamOverlay: WebcamOverlaySettings
     public var stylePresetID: String?
     public var autoZoomSensitivity: AutoZoomSensitivity
     public var zoomEasing: ZoomEasingPreset
@@ -454,6 +553,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         canvas: CanvasSettings = .default,
         cursorSprites: [CursorSprite] = [],
         keyboardOverlay: KeyboardOverlaySettings = .disabled,
+        webcamOverlay: WebcamOverlaySettings = .disabled,
         stylePresetID: String? = nil,
         autoZoomSensitivity: AutoZoomSensitivity = .normal,
         zoomEasing: ZoomEasingPreset = .smooth
@@ -465,6 +565,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.canvas = canvas
         self.cursorSprites = cursorSprites
         self.keyboardOverlay = keyboardOverlay
+        self.webcamOverlay = webcamOverlay
         self.stylePresetID = stylePresetID ?? CanvasPreset.matching(canvas)?.id
         self.autoZoomSensitivity = autoZoomSensitivity
         self.zoomEasing = zoomEasing
@@ -478,6 +579,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case canvas
         case cursorSprites
         case keyboardOverlay
+        case webcamOverlay
         case stylePresetID
         case autoZoomSensitivity
         case zoomEasing
@@ -495,6 +597,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             KeyboardOverlaySettings.self,
             forKey: .keyboardOverlay
         ) ?? .disabled
+        webcamOverlay = (try? container.decode(
+            WebcamOverlaySettings.self,
+            forKey: .webcamOverlay
+        )) ?? .disabled
         stylePresetID = try container.decodeIfPresent(String.self, forKey: .stylePresetID)
         autoZoomSensitivity = (try? container.decode(
             AutoZoomSensitivity.self,
@@ -513,6 +619,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encode(canvas, forKey: .canvas)
         try container.encode(cursorSprites, forKey: .cursorSprites)
         try container.encode(keyboardOverlay, forKey: .keyboardOverlay)
+        try container.encode(webcamOverlay, forKey: .webcamOverlay)
         try container.encodeIfPresent(stylePresetID, forKey: .stylePresetID)
         try container.encode(autoZoomSensitivity, forKey: .autoZoomSensitivity)
         try container.encode(zoomEasing, forKey: .zoomEasing)
@@ -525,6 +632,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         var value = self
         value.formatVersion = max(value.formatVersion, Self.currentFormatVersion)
         value.keyboardOverlay = value.keyboardOverlay.normalized
+        value.webcamOverlay = value.webcamOverlay.normalized
         value.canvas.cursorMotionBlur = value.canvas.cursorMotionBlur.normalized
         if value.stylePresetID == nil {
             value.stylePresetID = CanvasPreset.matching(value.canvas)?.id

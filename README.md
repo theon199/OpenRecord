@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, and optional keyboard shortcuts. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim and restyle the canvas, adds velocity-based cursor motion blur, and exports an H.264 MP4.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim and restyle the canvas, adds velocity-based cursor motion blur and a movable picture-in-picture overlay, and exports an H.264 MP4.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -65,7 +65,7 @@ Open a project from the sidebar.
 
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
 - **Timeline**: playhead, trim in/out handles, zoom blocks (drag to move/resize). Space play/pause, Delete removes the selected zoom.
-- **Inspector**: zoom amount, auto-zoom sensitivity (Subtle / Normal / Aggressive), camera easing (Fast / Smooth / Cinematic), background, padding, corner radius, cursor scale and motion blur, keyboard overlay controls, export.
+- **Inspector**: zoom amount, auto-zoom sensitivity (Subtle / Normal / Aggressive), camera easing (Fast / Smooth / Cinematic), background, padding, corner radius, cursor scale and motion blur, webcam and keyboard overlay controls, export.
 
 **Export…** (⌘E) renders the **in-memory** document (current trims, zoom ranges, canvas) — not a stale re-read from disk. Output is H.264 High, Rec.709, **1080p-capped** (long edge ≤ 1920, short ≤ 1080), 60 fps if the source averages ≥ 45 fps else 30. Mic + system AAC are mixed to one stereo 48 kHz track when those files exist.
 
@@ -75,10 +75,11 @@ Each recording is a folder package:
 
 ```
 <name>.openrecord/
-  meta.json                 # createdAt, app version, display bounds, scale, capture target
-  project.json              # v2: trims, zooms, auto-zoom/easing presets, canvas + cursor effects, sprites, keyboard overlay
+  meta.json                 # capture target/timing/health and optional webcam device metadata
+  project.json              # v2: trims, zooms, canvas/effects, webcam + keyboard overlays
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
+    webcam.mp4              # optional H.264 face-camera track
     mic.m4a                 # microphone (may be absent)
     system.m4a              # system audio (may be absent)
     mouse.jsonl             # { t, x, y, cursorId, visible? } in points, ~90–120 Hz
@@ -91,8 +92,8 @@ Each recording is a folder package:
 
 Coordinates are **points** (Quartz, origin top-left of the main display). Cursor samples may include `visible: false` while the pointer is outside the captured target. New window recordings use `target.jsonl` to map global cursor points through the window bounds at each timestamp; older projects fall back to `meta.json` bounds. Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
 
-`meta.json` may also contain capture timing offsets and health warnings. Video is the timing origin; microphone and system-audio offsets keep separately recorded tracks synchronized. If capture stops unexpectedly but the display video is usable, OpenRecord finalizes and opens the recovered project with a warning instead of discarding it.
+`meta.json` may also contain capture timing offsets and health warnings. Display video is the timing origin; microphone, system-audio, and webcam offsets keep separately recorded tracks synchronized. If capture stops unexpectedly but the display video is usable, OpenRecord finalizes and opens the recovered project with a warning instead of discarding it. A manually supplied `recording/webcam.mp4` is also detected when the project is reopened.
 
 ## Out of scope
 
-No webcam, captions, motion blur, annotations, GIF, iPhone, shareable links, noise reduction, or in-app OAuth.
+No captions, speed control, annotations, GIF, iPhone capture, shareable links, noise reduction, or in-app OAuth yet.

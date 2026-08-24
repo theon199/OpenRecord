@@ -68,9 +68,19 @@ final class AppModel {
             )
         }
     }
+    var capturesWebcam = false {
+        didSet {
+            UserDefaults.standard.set(
+                capturesWebcam,
+                forKey: Self.capturesWebcamDefaultsKey
+            )
+        }
+    }
 
     var allPermissionsGranted: Bool {
-        CapturePermissionKind.allCases.allSatisfy { permissionGranted[$0] == true }
+        CapturePermissionKind.requiredForScreenCapture.allSatisfy {
+            permissionGranted[$0] == true
+        }
     }
 
     var selectedSource: CaptureSourceOption? {
@@ -99,6 +109,7 @@ final class AppModel {
     private var thumbnailTask: Task<Void, Never>?
     private static let capturesKeyboardShortcutsDefaultsKey =
         "OpenRecord.capturesKeyboardShortcuts"
+    private static let capturesWebcamDefaultsKey = "OpenRecord.capturesWebcam"
 
     init() {
         library = .resolved()
@@ -107,6 +118,11 @@ final class AppModel {
         ) != nil {
             capturesKeyboardShortcuts = UserDefaults.standard.bool(
                 forKey: Self.capturesKeyboardShortcutsDefaultsKey
+            )
+        }
+        if UserDefaults.standard.object(forKey: Self.capturesWebcamDefaultsKey) != nil {
+            capturesWebcam = UserDefaults.standard.bool(
+                forKey: Self.capturesWebcamDefaultsKey
             )
         }
         refreshPermissions()
@@ -683,7 +699,8 @@ final class AppModel {
                 document: ProjectDocument(
                     keyboardOverlay: KeyboardOverlaySettings(
                         enabled: capturesKeyboardShortcuts
-                    )
+                    ),
+                    webcamOverlay: WebcamOverlaySettings(enabled: capturesWebcam)
                 ),
                 to: url
             )
@@ -691,7 +708,8 @@ final class AppModel {
             try await capture.start(
                 target: source.target,
                 projectURL: url,
-                capturesKeyboardShortcuts: capturesKeyboardShortcuts
+                capturesKeyboardShortcuts: capturesKeyboardShortcuts,
+                capturesWebcam: capturesWebcam
             )
             guard capture.isRunning else { return }
             isRecording = true

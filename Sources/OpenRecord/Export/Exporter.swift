@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import CoreMedia
 import Foundation
 
@@ -112,6 +113,35 @@ private enum ExportSession {
             throw OpenRecordError.io("recording/display.mp4 has an empty duration.")
         }
 
+        var webcamAsset: AVURLAsset?
+        var webcamTrack: AVAssetTrack?
+        var webcamDuration: TimeInterval = 0
+        if project.webcamOverlay.enabled {
+            let webcamURL = ProjectLayout.webcamVideoURL(in: bundleURL)
+            if FileManager.default.fileExists(atPath: webcamURL.path) {
+                let candidate = AVURLAsset(
+                    url: webcamURL,
+                    options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+                )
+                if let track = try? await candidate.loadTracks(withMediaType: .video).first,
+                   let duration = try? await candidate.load(.duration),
+                   duration.isNumeric,
+                   duration.seconds > 0
+                {
+                    webcamAsset = candidate
+                    webcamTrack = track
+                    if let timeRange = try? await track.load(.timeRange),
+                       timeRange.duration.isNumeric,
+                       timeRange.duration.seconds > 0
+                    {
+                        webcamDuration = timeRange.duration.seconds
+                    } else {
+                        webcamDuration = duration.seconds
+                    }
+                }
+            }
+        }
+
         let (trimStart, trimEnd) = try ExportLayout.clampedTrim(
             trimIn: project.trimIn,
             trimOut: project.trimOut,
@@ -168,6 +198,18 @@ private enum ExportSession {
             copyContext: ciContext,
             colorSpace: colorSpace
         )
+        let webcamReader: ExportVideoReader?
+        if let webcamAsset, let webcamTrack {
+            webcamReader = try? ExportVideoReader(
+                asset: webcamAsset,
+                track: webcamTrack,
+                copyContext: ciContext,
+                colorSpace: colorSpace
+            )
+        } else {
+            webcamReader = nil
+        }
+        let webcamOffset = meta.captureTiming?.webcamOffset ?? 0
         let sourceWidth = reader.sourceWidth
         let sourceHeight = reader.sourceHeight
 
@@ -182,6 +224,8 @@ private enum ExportSession {
             colorSpace: colorSpace,
             canvas: project.canvas,
             keyboardOverlay: project.keyboardOverlay,
+            webcamOverlay: project.webcamOverlay,
+            webcamMirror: meta.webcam?.mirror ?? false,
             layout: layout,
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
@@ -251,6 +295,16 @@ private enum ExportSession {
 
             try autoreleasepool {
                 let source = try reader.image(at: t)
+                let webcamTime = t - webcamOffset
+                let webcamFrame: CIImage?
+                if let webcamReader,
+                   webcamTime >= 0,
+                   webcamTime <= webcamDuration
+                {
+                    webcamFrame = try? webcamReader.image(at: webcamTime)
+                } else {
+                    webcamFrame = nil
+                }
                 let crop = engine.crop(at: t)
                 let cursorUV = engine.interpolateCursor(at: t)
                 let cursorVelocity = engine.cursorVelocity(at: t)
@@ -280,6 +334,7 @@ private enum ExportSession {
 
                 compositor.render(
                     source: source,
+                    webcam: webcamFrame,
                     cropUV: crop,
                     cursorUV: cursorUV,
                     cursorVelocity: cursorVelocity,

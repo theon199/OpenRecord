@@ -20,7 +20,7 @@ struct PermissionsView: View {
             }
 
             VStack(spacing: 10) {
-                ForEach(CapturePermissionKind.allCases, id: \.self) { kind in
+                ForEach(CapturePermissionKind.requiredForScreenCapture, id: \.self) { kind in
                     permissionRow(kind)
                 }
             }
@@ -32,7 +32,9 @@ struct PermissionsView: View {
                 }
                 Button("Request Remaining") {
                     Task {
-                        for kind in CapturePermissionKind.allCases where model.permissionGranted[kind] != true {
+                        for kind in CapturePermissionKind.requiredForScreenCapture
+                            where model.permissionGranted[kind] != true
+                        {
                             await model.requestPermission(kind)
                         }
                     }
@@ -83,6 +85,7 @@ struct PermissionsView: View {
         case .screenRecording: return "Screen Recording"
         case .microphone: return "Microphone"
         case .accessibility: return "Accessibility"
+        case .camera: return "Camera"
         }
     }
 }

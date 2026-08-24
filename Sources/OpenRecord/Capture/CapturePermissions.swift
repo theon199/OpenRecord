@@ -10,6 +10,13 @@ public enum CapturePermissionKind: String, Sendable, CaseIterable, Hashable {
     case screenRecording
     case microphone
     case accessibility
+    case camera
+
+    public static let requiredForScreenCapture: [CapturePermissionKind] = [
+        .screenRecording,
+        .microphone,
+        .accessibility,
+    ]
 }
 
 /// Thrown when a required capture permission is missing. The UI should offer
@@ -36,6 +43,8 @@ public enum CapturePermissions: Sendable {
             return AVAudioApplication.shared.recordPermission == .granted
         case .accessibility:
             return AXIsProcessTrusted()
+        case .camera:
+            return AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         }
     }
 
@@ -63,13 +72,22 @@ public enum CapturePermissions: Sendable {
             // Literal matches `kAXTrustedCheckOptionPrompt` (a mutable CF global, not Sendable).
             let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
             return AXIsProcessTrustedWithOptions(options)
+        case .camera:
+            if AVCaptureDevice.authorizationStatus(for: .video) == .authorized {
+                return true
+            }
+            return await AVCaptureDevice.requestAccess(for: .video)
         }
     }
 
     /// Screen Recording, Microphone, and Accessibility. Throws rather than
     /// continuing without cursor telemetry or media.
-    public static func ensureGranted() async throws {
-        for kind in CapturePermissionKind.allCases {
+    public static func ensureGranted(includeCamera: Bool = false) async throws {
+        var kinds = CapturePermissionKind.requiredForScreenCapture
+        if includeCamera {
+            kinds.append(.camera)
+        }
+        for kind in kinds {
             if isGranted(kind) {
                 continue
             }
@@ -97,6 +115,8 @@ public enum CapturePermissions: Sendable {
             return "Privacy_Microphone"
         case .accessibility:
             return "Privacy_Accessibility"
+        case .camera:
+            return "Privacy_Camera"
         }
     }
 
@@ -108,6 +128,8 @@ public enum CapturePermissions: Sendable {
             return "Microphone permission is required. Enable OpenRecord in System Settings → Privacy & Security → Microphone, then try again."
         case .accessibility:
             return "Accessibility permission is required to record the cursor. Enable OpenRecord in System Settings → Privacy & Security → Accessibility, then try again. Recording cannot continue without cursor telemetry."
+        case .camera:
+            return "Camera permission is required when webcam recording is enabled. Enable OpenRecord in System Settings → Privacy & Security → Camera, then try again."
         }
     }
 }

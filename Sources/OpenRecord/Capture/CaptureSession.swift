@@ -29,8 +29,13 @@ public final class CaptureSession: @unchecked Sendable {
 
     deinit { eventContinuation.finish() }
 
-    public func start(target: CaptureTarget, projectURL: URL, capturesKeyboardShortcuts: Bool = true) async throws {
-        try await CapturePermissions.ensureGranted()
+    public func start(
+        target: CaptureTarget,
+        projectURL: URL,
+        capturesKeyboardShortcuts: Bool = true,
+        capturesWebcam: Bool = false
+    ) async throws {
+        try await CapturePermissions.ensureGranted(includeCamera: capturesWebcam)
         let reserved = unfairLock.withLock { () -> Bool in
             guard sessionState == .idle || sessionState == .finalized else { return false }
             sessionState = .starting
@@ -51,7 +56,12 @@ public final class CaptureSession: @unchecked Sendable {
             }
         }
         do {
-            try await pipeline.start(target: target, projectURL: projectURL, capturesKeyboardShortcuts: capturesKeyboardShortcuts)
+            try await pipeline.start(
+                target: target,
+                projectURL: projectURL,
+                capturesKeyboardShortcuts: capturesKeyboardShortcuts,
+                capturesWebcam: capturesWebcam
+            )
         } catch {
             unfairLock.withLock {
                 if stopTask == nil {
@@ -125,6 +135,7 @@ public final class CaptureSession: @unchecked Sendable {
             if title.isEmpty, appName.isEmpty { continue }
             rawWindows.append(RawWindow(id: UInt32(window.windowID), title: title.isEmpty ? appName : title, appName: title.isEmpty ? "" : appName))
         }
+        let windows = rawWindows
         return await MainActor.run {
             let mainID = CGMainDisplayID()
             let displays = rawDisplays.sorted { a, b in
@@ -135,7 +146,7 @@ public final class CaptureSession: @unchecked Sendable {
                 let name = Self.displayName(for: display.id) ?? (index == 0 ? "Built-in Display" : "Display \(index + 1)")
                 options.append(CaptureSourceOption(target: .display(id: display.id), title: name, subtitle: "\(display.width)×\(display.height)"))
             }
-            for window in rawWindows.sorted(by: { $0.appName == $1.appName ? $0.title.localizedStandardCompare($1.title) == .orderedAscending : $0.appName.localizedStandardCompare($1.appName) == .orderedAscending }) {
+            for window in windows.sorted(by: { $0.appName == $1.appName ? $0.title.localizedStandardCompare($1.title) == .orderedAscending : $0.appName.localizedStandardCompare($1.appName) == .orderedAscending }) {
                 options.append(CaptureSourceOption(target: .window(id: window.id), title: window.title, subtitle: window.appName))
             }
             return options

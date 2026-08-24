@@ -118,6 +118,45 @@ struct InspectorPanel: View {
                 }
             }
 
+            Section("Webcam") {
+                if session.hasWebcamVideo {
+                    Toggle("Show webcam", isOn: webcamOverlayEnabled)
+                    if session.document.webcamOverlay.enabled {
+                        Picker("Shape", selection: webcamOverlayShape) {
+                            Text("Circle").tag(WebcamOverlayShape.circle)
+                            Text("Rounded").tag(WebcamOverlayShape.roundedRectangle)
+                        }
+                        .pickerStyle(.segmented)
+
+                        labeledSlider(
+                            "Size",
+                            value: webcamOverlaySize,
+                            range: WebcamOverlaySettings.sizeRange,
+                            format: "%.0f%%",
+                            actionName: "Resize Webcam Overlay",
+                            step: 0.01,
+                            displayScale: 100
+                        )
+                        labeledSlider(
+                            "Border",
+                            value: webcamOverlayBorderWidth,
+                            range: WebcamOverlaySettings.borderWidthRange,
+                            format: "%.0f px",
+                            actionName: "Change Webcam Border",
+                            step: 1
+                        )
+                        Toggle("Shadow", isOn: webcamOverlayShadow)
+                        Text("Drag the webcam in the preview to move it; use its lower-right handle to resize.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("This project has no recording/webcam.mp4. Add that file to the project bundle to use a webcam overlay.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Keyboard") {
                 Toggle("Show keyboard shortcuts", isOn: keyboardOverlayEnabled)
                 if session.keys.isEmpty {
@@ -162,7 +201,7 @@ struct InspectorPanel: View {
                     session.presentExportPanel()
                 }
                 .disabled(session.exportProgress != nil)
-                Text("Renders the live trim, zooms, canvas, and keyboard overlay to an H.264 MP4 (1080p-capped). Mic and system audio are mixed when present.")
+                Text("Renders the live trim, zooms, canvas, webcam, and keyboard overlays to an H.264 MP4 (1080p-capped). Mic and system audio are mixed when present.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -296,6 +335,61 @@ struct InspectorPanel: View {
             set: { enabled in
                 session.updateKeyboardOverlay(actionName: "Toggle Keyboard Overlay") {
                     $0.enabled = enabled
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayEnabled: Binding<Bool> {
+        Binding(
+            get: { session.document.webcamOverlay.enabled },
+            set: { enabled in
+                session.updateWebcamOverlay(actionName: "Toggle Webcam Overlay") {
+                    $0.enabled = enabled
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayShape: Binding<WebcamOverlayShape> {
+        Binding(
+            get: { session.document.webcamOverlay.shape },
+            set: { shape in
+                session.updateWebcamOverlay(actionName: "Change Webcam Shape") {
+                    $0.shape = shape
+                }
+            }
+        )
+    }
+
+    private var webcamOverlaySize: Binding<Double> {
+        Binding(
+            get: { session.document.webcamOverlay.size },
+            set: { size in
+                session.updateWebcamOverlay(actionName: "Resize Webcam Overlay") {
+                    $0.size = size
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayBorderWidth: Binding<Double> {
+        Binding(
+            get: { session.document.webcamOverlay.borderWidth },
+            set: { width in
+                session.updateWebcamOverlay(actionName: "Change Webcam Border") {
+                    $0.borderWidth = width
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayShadow: Binding<Bool> {
+        Binding(
+            get: { session.document.webcamOverlay.shadow },
+            set: { shadow in
+                session.updateWebcamOverlay(actionName: "Toggle Webcam Shadow") {
+                    $0.shadow = shadow
                 }
             }
         )

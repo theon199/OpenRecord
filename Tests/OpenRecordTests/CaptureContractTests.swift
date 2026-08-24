@@ -49,6 +49,7 @@ enum CaptureContractTests {
             (.screenRecording, "Privacy_ScreenCapture"),
             (.microphone, "Privacy_Microphone"),
             (.accessibility, "Privacy_Accessibility"),
+            (.camera, "Privacy_Camera"),
         ]
         for (kind, anchor) in expected {
             guard CapturePermissions.settingsAnchor(for: kind) == anchor else {
@@ -60,6 +61,13 @@ enum CaptureContractTests {
             else {
                 throw OpenRecordError.io("Unexpected System Settings URL for \(kind.rawValue): \(url.absoluteString)")
             }
+        }
+        guard !CapturePermissionKind.requiredForScreenCapture.contains(.camera),
+              ProjectLayout.webcamVideoURL(
+                in: URL(fileURLWithPath: "/tmp/Test.openrecord")
+              ).lastPathComponent == "webcam.mp4"
+        else {
+            throw OpenRecordError.io("optional webcam capture contract was incorrect")
         }
     }
 }

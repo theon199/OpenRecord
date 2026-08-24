@@ -7,7 +7,8 @@ enum ProjectDocumentJSONRoundTrip {
     static func run() throws {
         guard CanvasSettings.default.cursorScale == 0.5,
               CanvasSettings.cursorScaleRange.lowerBound == 0.1,
-              CanvasSettings.default.cursorMotionBlur == .default
+              CanvasSettings.default.cursorMotionBlur == .default,
+              ProjectDocument().webcamOverlay == .disabled
         else {
             throw OpenRecordError.io("Canvas cursor defaults are incorrect")
         }
@@ -51,6 +52,14 @@ enum ProjectDocumentJSONRoundTrip {
                 fadeDelay: 1.2,
                 maxVisibleKeys: 4
             ),
+            webcamOverlay: WebcamOverlaySettings(
+                enabled: true,
+                shape: .roundedRectangle,
+                position: Point2D(x: 0.2, y: 0.3),
+                size: 0.24,
+                borderWidth: 6,
+                shadow: false
+            ),
             stylePresetID: "custom-demo",
             autoZoomSensitivity: .aggressive,
             zoomEasing: .cinematic
@@ -77,7 +86,8 @@ enum ProjectDocumentJSONRoundTrip {
               legacy.stylePresetID == nil,
               legacy.autoZoomSensitivity == .normal,
               legacy.zoomEasing == .smooth,
-              legacy.canvas.cursorMotionBlur == .disabled
+              legacy.canvas.cursorMotionBlur == .disabled,
+              legacy.webcamOverlay == .disabled
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
         }
@@ -125,6 +135,21 @@ enum ProjectDocumentJSONRoundTrip {
         unboundedBlur.canvas.cursorMotionBlur.amount = 3
         guard unboundedBlur.upgradedForSave().canvas.cursorMotionBlur.amount == 1 else {
             throw OpenRecordError.io("Cursor motion blur amount was not normalized on save")
+        }
+
+        var unboundedWebcam = ProjectDocument()
+        unboundedWebcam.webcamOverlay = WebcamOverlaySettings(
+            enabled: true,
+            position: Point2D(x: -2, y: 3),
+            size: 4,
+            borderWidth: -1
+        )
+        let normalizedWebcam = unboundedWebcam.upgradedForSave().webcamOverlay
+        guard normalizedWebcam.position == Point2D(x: 0, y: 1),
+              normalizedWebcam.size == WebcamOverlaySettings.sizeRange.upperBound,
+              normalizedWebcam.borderWidth == WebcamOverlaySettings.borderWidthRange.lowerBound
+        else {
+            throw OpenRecordError.io("Webcam overlay settings were not normalized on save")
         }
     }
 

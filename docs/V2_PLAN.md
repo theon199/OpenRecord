@@ -74,8 +74,13 @@ Cinematic easing. Normal + Smooth preserve the prior default behavior.
 with a non-destructive canvas setting, a SwiftUI preview approximation, and a
 directional Core Image export effect. New captures enable it by default while
 legacy projects decode with it disabled, preserving their existing look.
+Optional default-camera capture now writes a host-time-aligned
+`recording/webcam.mp4`; the editor and exporter share circle/rounded-rectangle
+placement, border, shadow, and mirroring behavior. The preview supports direct
+dragging and handle-based resizing, and projects with a manually supplied
+webcam track are detected on reopen.
 
-Next: webcam capture and overlay. v2.2 has not started.
+Next: speed control and audio cleanup. v2.2 has not started.
 
 ---
 
@@ -228,6 +233,12 @@ an enable toggle plus a 0–100% amount control.
 **Fallback**
 
 - Allow importing a webcam video after the fact (`recording/webcam.mp4` dropped into bundle) for users who didn't enable it during capture
+
+Implemented: webcam recording is opt-in and requests camera permission only
+when selected. Camera samples buffer until the first complete display frame
+sets the shared host-time origin; metadata stores the device ID, mirror flag,
+and first-frame offset. Preview and export consume the same normalized overlay
+settings, while missing webcam media remains a clean, disabled legacy case.
 
 ### 7. Speed control
 

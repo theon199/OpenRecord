@@ -63,8 +63,23 @@ final class EditorSession {
     var sourceHeight: Int
     var cursorImage: NSImage?
     var cursorSprite: CursorSprite?
+    var webcamPlayer: AVPlayer?
+    var webcamDuration: TimeInterval
+    var webcamWidth: Int
+    var webcamHeight: Int
 
     let player: AVPlayer
+
+    var hasWebcamVideo: Bool { webcamPlayer != nil }
+    var webcamAspect: Double {
+        Double(max(webcamWidth, 1)) / Double(max(webcamHeight, 1))
+    }
+
+    func webcamIsVisible(at time: TimeInterval) -> Bool {
+        guard hasWebcamVideo else { return false }
+        let localTime = time - (meta.captureTiming?.webcamOffset ?? 0)
+        return localTime >= 0 && localTime <= webcamDuration
+    }
 
     private(set) var editRevision: UInt64 = 0
     private(set) var savedRevision: UInt64 = 0
@@ -173,6 +188,8 @@ final class EditorSession {
             fallbackWidth: max(Int((opened.meta.displayBounds.width * opened.meta.scale).rounded()), 1),
             fallbackHeight: max(Int((opened.meta.displayBounds.height * opened.meta.scale).rounded()), 1)
         )
+        let webcamURL = ProjectLayout.webcamVideoURL(in: opened.url)
+        let webcamMedia = await optionalVideoInfo(videoURL: webcamURL)
 
         let engine = ZoomEngine(
             document: opened.document,
@@ -189,6 +206,14 @@ final class EditorSession {
         } else {
             player = AVPlayer()
         }
+        let webcamPlayer: AVPlayer?
+        if webcamMedia != nil {
+            let player = AVPlayer(url: webcamURL)
+            player.actionAtItemEnd = .pause
+            webcamPlayer = player
+        } else {
+            webcamPlayer = nil
+        }
 
         let session = EditorSession(
             projectURL: opened.url,
@@ -204,7 +229,11 @@ final class EditorSession {
             hasVideo: hasVideo,
             sourceWidth: media.width,
             sourceHeight: media.height,
-            player: player
+            player: player,
+            webcamPlayer: webcamPlayer,
+            webcamDuration: webcamMedia?.duration ?? 0,
+            webcamWidth: webcamMedia?.width ?? 1,
+            webcamHeight: webcamMedia?.height ?? 1
         )
         session.telemetryIssueMessages = messages
         session.persistentWarnings = messages
@@ -235,7 +264,11 @@ final class EditorSession {
         hasVideo: Bool,
         sourceWidth: Int,
         sourceHeight: Int,
-        player: AVPlayer
+        player: AVPlayer,
+        webcamPlayer: AVPlayer?,
+        webcamDuration: TimeInterval,
+        webcamWidth: Int,
+        webcamHeight: Int
     ) {
         self.projectURL = projectURL
         self.library = library
@@ -252,6 +285,10 @@ final class EditorSession {
         self.sourceWidth = sourceWidth
         self.sourceHeight = sourceHeight
         self.player = player
+        self.webcamPlayer = webcamPlayer
+        self.webcamDuration = webcamDuration
+        self.webcamWidth = webcamWidth
+        self.webcamHeight = webcamHeight
         self.savedDocument = document
         self.saveCoordinator = ProjectSaveCoordinator(library: library, projectURL: projectURL)
     }
@@ -262,6 +299,7 @@ final class EditorSession {
         engineTask?.cancel()
         detachPlayer()
         player.pause()
+        webcamPlayer?.pause()
     }
 
     func applyAutoZoomsAndSave() async throws {
@@ -317,11 +355,13 @@ final class EditorSession {
             seek(to: document.trimIn)
         }
         player.play()
+        syncWebcam(to: playhead, playing: true)
         isPlaying = true
     }
 
     func pause() {
         player.pause()
+        webcamPlayer?.pause()
         isPlaying = false
     }
 
@@ -336,6 +376,7 @@ final class EditorSession {
                 self?.isSeeking = false
             }
         }
+        syncWebcam(to: clamped, playing: false)
     }
 
     func addZoomAtPlayhead() {
@@ -451,6 +492,16 @@ final class EditorSession {
         let before = document
         body(&document.keyboardOverlay)
         document.keyboardOverlay = document.keyboardOverlay.normalized
+        documentDidChange(from: before, actionName: actionName)
+    }
+
+    func updateWebcamOverlay(
+        actionName: String,
+        _ body: (inout WebcamOverlaySettings) -> Void
+    ) {
+        let before = document
+        body(&document.webcamOverlay)
+        document.webcamOverlay = document.webcamOverlay.normalized
         documentDidChange(from: before, actionName: actionName)
     }
 
@@ -674,9 +725,36 @@ final class EditorSession {
         let seconds = time.seconds
         guard seconds.isFinite else { return }
         playhead = min(max(seconds, 0), timelineDuration)
+        syncWebcam(to: playhead, playing: isPlaying)
         if isPlaying, playhead >= effectiveTrimOut - 0.01 {
             pause()
             seek(to: document.trimIn)
+        }
+    }
+
+    private func syncWebcam(to screenTime: TimeInterval, playing: Bool) {
+        guard let webcamPlayer else { return }
+        let localTime = screenTime - (meta.captureTiming?.webcamOffset ?? 0)
+        guard localTime >= 0, localTime <= webcamDuration else {
+            webcamPlayer.pause()
+            if localTime < 0 {
+                webcamPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+            return
+        }
+
+        let current = webcamPlayer.currentTime().seconds
+        if !current.isFinite || abs(current - localTime) > 0.15 || !playing {
+            webcamPlayer.seek(
+                to: CMTime(seconds: localTime, preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+        }
+        if playing, webcamPlayer.timeControlStatus != .playing {
+            webcamPlayer.play()
+        } else if !playing {
+            webcamPlayer.pause()
         }
     }
 
@@ -822,5 +900,36 @@ final class EditorSession {
             }
         }
         return (duration, width, height)
+    }
+
+    private static func optionalVideoInfo(
+        videoURL: URL
+    ) async -> (duration: TimeInterval, width: Int, height: Int)? {
+        guard FileManager.default.fileExists(atPath: videoURL.path) else { return nil }
+        let asset = AVURLAsset(url: videoURL)
+        guard let duration = try? await asset.load(.duration),
+              duration.isNumeric,
+              duration.seconds > 0,
+              let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let size = try? await track.load(.naturalSize),
+              size.width.isFinite,
+              size.height.isFinite,
+              abs(size.width) >= 1,
+              abs(size.height) >= 1
+        else { return nil }
+        let trackDuration: TimeInterval
+        if let timeRange = try? await track.load(.timeRange),
+           timeRange.duration.isNumeric,
+           timeRange.duration.seconds > 0
+        {
+            trackDuration = timeRange.duration.seconds
+        } else {
+            trackDuration = duration.seconds
+        }
+        return (
+            trackDuration,
+            max(Int(abs(size.width).rounded()), 1),
+            max(Int(abs(size.height).rounded()), 1)
+        )
     }
 }

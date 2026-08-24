@@ -12,6 +12,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private let stateLock = NSLock()
     private let cursor = CursorMonitor()
     private let mic = MicrophoneRecorder()
+    private let webcam = WebcamRecorder()
     private var stream: SCStream?
     private var videoWriter: SampleBufferWriter?
     private var systemAudioWriter: SampleBufferWriter?
@@ -30,10 +31,17 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private var unexpectedNotified = false
     private var healthWarnings = Set<CaptureWarningCode>()
     private var targetInitialBounds: Rect2D?
+    private var capturesWebcam = false
     var onUnexpectedStop: ((Error) -> Void)?
 
-    func start(target: CaptureTarget, projectURL: URL, capturesKeyboardShortcuts: Bool = true) async throws {
+    func start(
+        target: CaptureTarget,
+        projectURL: URL,
+        capturesKeyboardShortcuts: Bool = true,
+        capturesWebcam: Bool = false
+    ) async throws {
         self.projectURL = projectURL; self.captureTarget = target; createdAt = Date()
+        self.capturesWebcam = capturesWebcam
         try prepareRecordingDirectory(in: projectURL)
         cursorSprite = try await MainActor.run { try CursorSpriteCapture.writeDefaultArrow(to: ProjectLayout.cursorsDirectory(in: projectURL)) }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -45,9 +53,20 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         systemAudioWriter = try SampleBufferWriter.systemAudio(url: ProjectLayout.systemAudioURL(in: projectURL), queue: audioQueue)
         let targetURL = ProjectLayout.targetGeometryURL(in: projectURL)
         let keysURL = capturesKeyboardShortcuts ? ProjectLayout.keysURL(in: projectURL) : nil
-        try await MainActor.run {
-            try cursor.start(mouseURL: ProjectLayout.mouseURL(in: projectURL), clicksURL: ProjectLayout.clicksURL(in: projectURL), target: target, initialBounds: targetInitialBounds, targetURL: targetURL, keysURL: keysURL)
-            try mic.start(url: ProjectLayout.microphoneAudioURL(in: projectURL))
+        do {
+            try await MainActor.run {
+                try cursor.start(mouseURL: ProjectLayout.mouseURL(in: projectURL), clicksURL: ProjectLayout.clicksURL(in: projectURL), target: target, initialBounds: targetInitialBounds, targetURL: targetURL, keysURL: keysURL)
+                try mic.start(url: ProjectLayout.microphoneAudioURL(in: projectURL))
+            }
+            if capturesWebcam {
+                try await webcam.start(url: ProjectLayout.webcamVideoURL(in: projectURL))
+            }
+        } catch {
+            await teardownCaptureComponents()
+            try? cursor.closeFiles()
+            videoWriter = nil
+            systemAudioWriter = nil
+            throw error
         }
         let configuration = SCStreamConfiguration()
         configuration.capturesAudio = true; configuration.excludesCurrentProcessAudio = true; configuration.showsCursor = false
@@ -84,6 +103,21 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         }
         await MainActor.run { mic.stop() }
         var finalError: Error?
+        if capturesWebcam {
+            do {
+                try await webcam.stop()
+            } catch {
+                finalError = finalError ?? error
+                healthWarnings.insert(.truncatedWebcam)
+            }
+            if webcam.appendError != nil || webcam.droppedSamples {
+                healthWarnings.insert(.truncatedWebcam)
+                finalError = finalError ?? webcam.appendError
+            }
+            if !webcam.didAppend {
+                healthWarnings.insert(.missingWebcam)
+            }
+        }
         let video = videoWriter
         let system = systemAudioWriter
         do { try await video?.finish() } catch { finalError = error; healthWarnings.insert(.truncatedVideo) }
@@ -133,6 +167,9 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             if first, let origin {
                 videoWriter?.startSession(at: origin)
                 cursor.setRecordingStart(CMTimeGetSeconds(origin))
+                if capturesWebcam {
+                    webcam.setRecordingStart(origin)
+                }
                 audioQueue.async { [weak self] in self?.flushPendingAudio(origin: origin) }
             }
             videoWriter?.append(sampleBuffer)
@@ -174,9 +211,18 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
 
     private func teardownAfterFailedStart(stream: SCStream) async {
         try? stream.removeStreamOutput(self, type: .screen); try? stream.removeStreamOutput(self, type: .audio); try? await stream.stopCapture()
-        await MainActor.run { cursor.stop(); mic.stop() }
-        try? await videoWriter?.finish(); try? await systemAudioWriter?.finish(); try? cursor.closeFiles()
+        await teardownCaptureComponents()
+        try? cursor.closeFiles()
         videoWriter = nil; systemAudioWriter = nil; self.stream = nil
+    }
+
+    private func teardownCaptureComponents() async {
+        await MainActor.run { cursor.stop(); mic.stop() }
+        if capturesWebcam {
+            try? await webcam.stop()
+        }
+        try? await videoWriter?.finish()
+        try? await systemAudioWriter?.finish()
     }
 
     private func prepareRecordingDirectory(in projectURL: URL) throws {
@@ -198,8 +244,21 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         } else {
             microphoneOffset = nil
         }
-        let timing = CaptureTiming(systemAudioOffset: systemAudioOffset, microphoneOffset: microphoneOffset)
-        let meta = ProjectMeta(createdAt: existingCreatedAt, appVersion: OpenRecordInfo.appVersion, displayBounds: displayBounds, scale: scale, captureTarget: captureTarget, captureTiming: timing, captureHealth: health)
+        let timing = CaptureTiming(
+            systemAudioOffset: systemAudioOffset,
+            microphoneOffset: microphoneOffset,
+            webcamOffset: capturesWebcam ? webcam.firstFrameOffset : nil
+        )
+        let meta = ProjectMeta(
+            createdAt: existingCreatedAt,
+            appVersion: OpenRecordInfo.appVersion,
+            displayBounds: displayBounds,
+            scale: scale,
+            captureTarget: captureTarget,
+            captureTiming: timing,
+            captureHealth: health,
+            webcam: capturesWebcam ? webcam.captureInfo : nil
+        )
         try ProjectJSON.encoder.encode(meta).write(to: url, options: .atomic)
         let documentURL = ProjectLayout.documentURL(in: projectURL)
         if !FileManager.default.fileExists(atPath: documentURL.path) {
