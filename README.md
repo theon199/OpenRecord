@@ -94,6 +94,17 @@ Each recording is a folder package:
 
 Coordinates are **points** (Quartz, origin top-left of the main display). Cursor samples may include `visible: false` while the pointer is outside the captured target. New window recordings use `target.jsonl` to map global cursor points through the window bounds at each timestamp; older projects fall back to `meta.json` bounds. Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
 
+Opening a v1 or v2 project is read-only until the first save, which migrates a
+copy of every supported field to the current v3 schema. Projects with a newer
+format version, or unknown top-level fields in the current format, are rejected
+with an update-required error instead of risking silent data loss. Legacy v1/v2
+files with unknown top-level fields may open read-only, but cannot be migrated
+until those fields are supported. Unknown nested fields in an otherwise valid
+current document are preserved across library saves; unknown enum values may
+open with safe preview defaults but remain read-only so their raw values cannot
+be overwritten. Project JSON saves use a same-directory temporary file and
+atomic replacement.
+
 `meta.json` may also contain capture timing offsets and health warnings. Display video is the timing origin; microphone, system-audio, and webcam offsets keep separately recorded tracks synchronized. If capture stops unexpectedly but the display video is usable, OpenRecord finalizes and opens the recovered project with a warning instead of discarding it. A manually supplied `recording/webcam.mp4` is also detected when the project is reopened.
 
 ## Out of scope

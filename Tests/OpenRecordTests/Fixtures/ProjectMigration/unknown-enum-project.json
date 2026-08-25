@@ -1,0 +1,19 @@
+{
+  "formatVersion" : 3,
+  "autoZoomSensitivity" : "extreme",
+  "webcamOverlay" : {
+    "borderWidth" : 4,
+    "enabled" : true,
+    "position" : {
+      "x" : 0.8,
+      "y" : 0.75
+    },
+    "shadow" : true,
+    "shape" : "squircle",
+    "size" : 0.2
+  },
+  "videoExportSettings" : {
+    "codec" : "av1",
+    "resolution" : "1080p"
+  }
+}

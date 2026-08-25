@@ -1,0 +1,31 @@
+{
+  "formatVersion" : 1,
+  "trimIn" : 0.5,
+  "trimOut" : 18,
+  "zoomRanges" : [
+    {
+      "amount" : 1.8,
+      "anchor" : {
+        "x" : 0.25,
+        "y" : 0.75
+      },
+      "end" : 6,
+      "id" : "11111111-1111-1111-1111-111111111111",
+      "start" : 2
+    }
+  ],
+  "cursorSprites" : [
+    {
+      "hotspot" : {
+        "x" : 3,
+        "y" : 2
+      },
+      "id" : "legacy-arrow",
+      "pngRelativePath" : "recording/cursors/legacy-arrow.png",
+      "standardSize" : {
+        "height" : 32,
+        "width" : 32
+      }
+    }
+  ]
+}

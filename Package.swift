@@ -36,7 +36,11 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        .executable(name: "OpenRecord", targets: ["OpenRecordApp"])
+        .executable(name: "OpenRecord", targets: ["OpenRecordApp"]),
+        .executable(
+            name: "OpenRecordExportBenchmark",
+            targets: ["OpenRecordExportBenchmark"]
+        ),
     ],
     targets: [
         // Contracts + stubs. Tests import this module (not the @main executable).
@@ -53,12 +57,23 @@ let package = Package(
             path: "Sources/OpenRecordApp",
             linkerSettings: appleFrameworks
         ),
+        .executableTarget(
+            name: "OpenRecordExportBenchmark",
+            dependencies: [
+                "OpenRecord"
+            ],
+            path: "Benchmarks/OpenRecordExportBenchmark",
+            linkerSettings: appleFrameworks
+        ),
         .testTarget(
             name: "OpenRecordTests",
             dependencies: [
                 "OpenRecord"
             ],
             path: "Tests/OpenRecordTests",
+            resources: [
+                .copy("Fixtures")
+            ],
             swiftSettings: [
                 .unsafeFlags([
                     "-F", testingFrameworksPath,

@@ -701,7 +701,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.videoExportSettings = videoExportSettings
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case formatVersion
         case trimIn
         case trimOut
@@ -721,12 +721,43 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case videoExportSettings
     }
 
+    private struct AnyCodingKey: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            intValue = nil
+        }
+
+        init?(intValue: Int) {
+            stringValue = String(intValue)
+            self.intValue = intValue
+        }
+    }
+
+    static var supportedTopLevelFieldNames: Set<String> {
+        Set(CodingKeys.allCases.map(\.rawValue))
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         formatVersion = try container.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
         guard formatVersion <= Self.currentFormatVersion else {
             throw OpenRecordError.io(
                 "This project uses format version \(formatVersion), but this version of OpenRecord supports up to version \(Self.currentFormatVersion). Update OpenRecord before opening it."
+            )
+        }
+        let allFields = try decoder.container(keyedBy: AnyCodingKey.self)
+        let unknownFields = allFields.allKeys
+            .map(\.stringValue)
+            .filter { !Self.supportedTopLevelFieldNames.contains($0) }
+            .sorted()
+        guard unknownFields.isEmpty || formatVersion < Self.currentFormatVersion else {
+            throw OpenRecordError.io(
+                "This project contains unsupported fields for format version \(formatVersion): "
+                    + unknownFields.joined(separator: ", ")
+                    + ". Update OpenRecord before opening it."
             )
         }
         trimIn = try container.decodeIfPresent(TimeInterval.self, forKey: .trimIn) ?? 0

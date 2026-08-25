@@ -1,0 +1,47 @@
+{
+  "formatVersion" : 3,
+  "trimIn" : 1,
+  "webcamOverlay" : {
+    "borderWidth" : 4,
+    "enabled" : true,
+    "futureShape" : {
+      "feather" : 0.25,
+      "name" : "squircle"
+    },
+    "position" : {
+      "x" : 0.8,
+      "y" : 0.75
+    },
+    "shadow" : true,
+    "shape" : "circle",
+    "size" : 0.2
+  },
+  "captions" : [
+    {
+      "end" : 4,
+      "futureAnimation" : {
+        "name" : "bounce"
+      },
+      "id" : "77777777-7777-7777-7777-777777777777",
+      "start" : 2,
+      "style" : {
+        "background" : {
+          "a" : 0.8,
+          "b" : 0.04,
+          "g" : 0.03,
+          "r" : 0.03
+        },
+        "fontSize" : 44,
+        "foreground" : {
+          "a" : 1,
+          "b" : 1,
+          "g" : 1,
+          "r" : 1
+        },
+        "maxWidth" : 0.78,
+        "position" : "bottom"
+      },
+      "text" : "Preserve nested fields"
+    }
+  ]
+}

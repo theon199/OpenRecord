@@ -1,0 +1,1 @@
+This placeholder keeps the transparent v2 project bundle layout in source control.

@@ -1,0 +1,16 @@
+{
+  "appVersion" : "2.1.0",
+  "captureTarget" : {
+    "window" : {
+      "id" : 42
+    }
+  },
+  "createdAt" : "2024-06-15T10:30:00Z",
+  "displayBounds" : {
+    "height" : 900,
+    "width" : 1440,
+    "x" : 120,
+    "y" : 80
+  },
+  "scale" : 2
+}

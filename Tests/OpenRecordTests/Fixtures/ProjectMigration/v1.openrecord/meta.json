@@ -1,0 +1,16 @@
+{
+  "appVersion" : "1.0.1",
+  "captureTarget" : {
+    "display" : {
+      "id" : 1
+    }
+  },
+  "createdAt" : "2024-01-02T03:04:05Z",
+  "displayBounds" : {
+    "height" : 1080,
+    "width" : 1920,
+    "x" : 0,
+    "y" : 0
+  },
+  "scale" : 2
+}

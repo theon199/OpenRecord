@@ -1,0 +1,56 @@
+{
+  "formatVersion" : 2,
+  "trimIn" : 1.25,
+  "trimOut" : 30,
+  "zoomRanges" : [
+    {
+      "amount" : 2.2,
+      "anchor" : {
+        "x" : 0.6,
+        "y" : 0.4
+      },
+      "end" : 9,
+      "id" : "22222222-2222-2222-2222-222222222222",
+      "start" : 4
+    }
+  ],
+  "cursorSprites" : [ ],
+  "keyboardOverlay" : {
+    "enabled" : true,
+    "fadeDelay" : 1.1,
+    "maxVisibleKeys" : 4,
+    "position" : "bottom-left",
+    "style" : "pill"
+  },
+  "webcamOverlay" : {
+    "borderWidth" : 5,
+    "enabled" : true,
+    "position" : {
+      "x" : 0.78,
+      "y" : 0.72
+    },
+    "shadow" : false,
+    "shape" : "rounded-rectangle",
+    "size" : 0.24
+  },
+  "stylePresetID" : "dark",
+  "autoZoomSensitivity" : "aggressive",
+  "zoomEasing" : "cinematic",
+  "speedSegments" : [
+    {
+      "end" : 16,
+      "id" : "33333333-3333-3333-3333-333333333333",
+      "rate" : 2,
+      "start" : 12
+    }
+  ],
+  "muteAudioWhenSpedUp" : true,
+  "audioCleanup" : {
+    "deClickEnabled" : true,
+    "microphoneGain" : 1.2,
+    "noiseGateEnabled" : true,
+    "noiseGateThresholdDB" : -38,
+    "normalizeEnabled" : true,
+    "systemGain" : 0.8
+  }
+}

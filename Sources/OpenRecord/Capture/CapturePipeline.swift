@@ -259,11 +259,11 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             captureHealth: health,
             webcam: capturesWebcam ? webcam.captureInfo : nil
         )
-        try ProjectJSON.encoder.encode(meta).write(to: url, options: .atomic)
+        try AtomicFileWrite.writeJSON(meta, to: url)
         let documentURL = ProjectLayout.documentURL(in: projectURL)
         if !FileManager.default.fileExists(atPath: documentURL.path) {
             let document = ProjectDocument(cursorSprites: cursorSprite.map { [$0] } ?? [])
-            try ProjectJSON.encoder.encode(document).write(to: documentURL, options: .atomic)
+            try AtomicFileWrite.writeProjectDocument(document, to: documentURL)
         }
     }
 

@@ -385,8 +385,8 @@ public struct ProjectLibrary: Sendable {
         let projectURL = projectURL.standardizedFileURL
         try withAccess(to: projectURL) {
             try validateProjectBundleURL(projectURL, fileManager: .default)
-            try AtomicFileWrite.writeJSON(
-                document.validatedForSave(),
+            try AtomicFileWrite.writeProjectDocument(
+                document,
                 to: ProjectLayout.documentURL(in: projectURL)
             )
         }
@@ -440,8 +440,8 @@ public struct ProjectLibrary: Sendable {
             )
             do {
                 try fm.copyItem(at: source, to: staging)
-                try AtomicFileWrite.writeJSON(
-                    document.validatedForSave(),
+                try AtomicFileWrite.writeProjectDocument(
+                    document,
                     to: ProjectLayout.documentURL(in: staging)
                 )
                 if fm.fileExists(atPath: destination.path) {
@@ -531,7 +531,10 @@ extension ProjectLibrary {
                 withIntermediateDirectories: true
             )
             try AtomicFileWrite.writeJSON(meta, to: ProjectLayout.metaURL(in: stagingURL))
-            try AtomicFileWrite.writeJSON(document, to: ProjectLayout.documentURL(in: stagingURL))
+            try AtomicFileWrite.writeProjectDocument(
+                document,
+                to: ProjectLayout.documentURL(in: stagingURL)
+            )
             try fm.moveItem(at: stagingURL, to: projectURL)
         } catch let error as OpenRecordError {
             try? fm.removeItem(at: stagingURL)

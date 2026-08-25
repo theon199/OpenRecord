@@ -1,0 +1,132 @@
+{
+  "formatVersion" : 3,
+  "trimIn" : 0.75,
+  "trimOut" : 45,
+  "zoomRanges" : [ ],
+  "canvas" : {
+    "aspectHeight" : 9,
+    "aspectWidth" : 16,
+    "background" : {
+      "solid" : {
+        "_0" : {
+          "a" : 1,
+          "b" : 0.18,
+          "g" : 0.12,
+          "r" : 0.08
+        }
+      }
+    },
+    "cornerRadius" : 18,
+    "cursorMotionBlur" : {
+      "amount" : 0.7,
+      "enabled" : true
+    },
+    "cursorScale" : 0.8,
+    "padding" : 56
+  },
+  "cursorSprites" : [ ],
+  "keyboardOverlay" : {
+    "enabled" : true,
+    "fadeDelay" : 0.9,
+    "maxVisibleKeys" : 3,
+    "position" : "bottom-center",
+    "style" : "pill"
+  },
+  "webcamOverlay" : {
+    "borderWidth" : 4,
+    "enabled" : true,
+    "position" : {
+      "x" : 0.82,
+      "y" : 0.8
+    },
+    "shadow" : true,
+    "shape" : "circle",
+    "size" : 0.2
+  },
+  "stylePresetID" : "fixture-custom",
+  "autoZoomSensitivity" : "normal",
+  "zoomEasing" : "smooth",
+  "speedSegments" : [
+    {
+      "end" : 24,
+      "id" : "44444444-4444-4444-4444-444444444444",
+      "rate" : 0.5,
+      "start" : 20
+    }
+  ],
+  "muteAudioWhenSpedUp" : false,
+  "audioCleanup" : {
+    "deClickEnabled" : false,
+    "microphoneGain" : 1,
+    "noiseGateEnabled" : false,
+    "noiseGateThresholdDB" : -42,
+    "normalizeEnabled" : true,
+    "systemGain" : 0.9
+  },
+  "captions" : [
+    {
+      "end" : 5.5,
+      "id" : "55555555-5555-5555-5555-555555555555",
+      "start" : 3,
+      "style" : {
+        "background" : {
+          "a" : 0.8,
+          "b" : 0.04,
+          "g" : 0.03,
+          "r" : 0.03
+        },
+        "fontSize" : 48,
+        "foreground" : {
+          "a" : 1,
+          "b" : 1,
+          "g" : 1,
+          "r" : 1
+        },
+        "maxWidth" : 0.75,
+        "position" : "bottom"
+      },
+      "text" : "Fixture caption"
+    }
+  ],
+  "annotations" : [
+    {
+      "background" : {
+        "a" : 0.88,
+        "b" : 0.04,
+        "g" : 0.03,
+        "r" : 0.03
+      },
+      "color" : {
+        "a" : 1,
+        "b" : 0.16,
+        "g" : 0.25,
+        "r" : 1
+      },
+      "dimAmount" : 0.58,
+      "end" : 12,
+      "endPosition" : {
+        "x" : 0.7,
+        "y" : 0.5
+      },
+      "fontSize" : 42,
+      "id" : "66666666-6666-6666-6666-666666666666",
+      "kind" : "text",
+      "position" : {
+        "x" : 0.5,
+        "y" : 0.25
+      },
+      "rect" : {
+        "height" : 0.3,
+        "width" : 0.4,
+        "x" : 0.3,
+        "y" : 0.3
+      },
+      "start" : 8,
+      "text" : "Fixture callout"
+    }
+  ],
+  "videoExportSettings" : {
+    "codec" : "hevc",
+    "resolution" : "1080p"
+  }
+}
