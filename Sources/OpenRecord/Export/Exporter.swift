@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreImage
 import CoreMedia
+import CoreVideo
 import Foundation
 
 public typealias ExportProgressHandler = @Sendable (Double) -> Void
@@ -34,13 +35,43 @@ public struct Exporter: Sendable {
         url: URL,
         progress: ExportProgressHandler?
     ) async throws {
+        try await export(
+            project: project,
+            url: url,
+            legacyProgress: progress,
+            status: nil
+        )
+    }
+
+    /// Rich progress for editor UX. The original fractional callback remains
+    /// source-compatible for callers that do not need FPS or ETA details.
+    public func exportWithStatus(
+        project: ProjectDocument,
+        url: URL,
+        status: ExportStatusHandler?
+    ) async throws {
+        try await export(
+            project: project,
+            url: url,
+            legacyProgress: nil,
+            status: status
+        )
+    }
+
+    private func export(
+        project: ProjectDocument,
+        url: URL,
+        legacyProgress: ExportProgressHandler?,
+        status: ExportStatusHandler?
+    ) async throws {
         let bundleURL = projectBundleURL
         let work = Task.detached(priority: .userInitiated) {
             try await ExportSession.run(
                 bundleURL: bundleURL,
                 project: project,
                 outputURL: url,
-                progress: progress
+                progress: legacyProgress,
+                status: status
             )
         }
         try await withTaskCancellationHandler {
@@ -56,7 +87,8 @@ private enum ExportSession {
         bundleURL: URL,
         project: ProjectDocument,
         outputURL: URL,
-        progress: ExportProgressHandler?
+        progress: ExportProgressHandler?,
+        status: ExportStatusHandler?
     ) async throws {
         let accessed = bundleURL.startAccessingSecurityScopedResource()
         defer {
@@ -65,7 +97,11 @@ private enum ExportSession {
             }
         }
 
-        report(progress, 0)
+        report(
+            progress,
+            status,
+            ExportProgress(phase: .preparing, fraction: 0)
+        )
 
         let displayURL = try ExportMediaIO.requireDisplayVideo(in: bundleURL)
         let meta = try AtomicFileWrite.readJSON(
@@ -105,13 +141,27 @@ private enum ExportSession {
             url: displayURL,
             options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
         )
-        let videoTracks = try await sourceAsset.loadTracks(withMediaType: .video)
-        guard let videoTrack = videoTracks.first else {
-            throw OpenRecordError.io("recording/display.mp4 has no video track.")
+        let videoTracks: [AVAssetTrack]
+        let sourceDuration: CMTime
+        do {
+            videoTracks = try await sourceAsset.loadTracks(withMediaType: .video)
+            sourceDuration = try await sourceAsset.load(.duration)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ExportFailure(stage: .sourceReading, detail: error.localizedDescription)
         }
-        let sourceDuration = try await sourceAsset.load(.duration)
+        guard let videoTrack = videoTracks.first else {
+            throw ExportFailure(
+                stage: .sourceReading,
+                detail: "recording/display.mp4 has no video track."
+            )
+        }
         guard sourceDuration.isNumeric, sourceDuration.seconds > 0 else {
-            throw OpenRecordError.io("recording/display.mp4 has an empty duration.")
+            throw ExportFailure(
+                stage: .sourceReading,
+                detail: "recording/display.mp4 has an empty duration."
+            )
         }
 
         var webcamAsset: AVURLAsset?
@@ -161,7 +211,17 @@ private enum ExportSession {
         let frameCount = max(1, Int((mappedSpan * Double(fps)).rounded(.down)))
 
         let parent = outputURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: parent,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            throw ExportFailure(
+                stage: .installation,
+                detail: "Could not prepare the destination folder: \(error.localizedDescription)"
+            )
+        }
         let tempURL = parent.appendingPathComponent(
             ".\(outputURL.lastPathComponent).export-\(UUID().uuidString).\(project.videoExportSettings.codec == .proRes422 ? "mov" : "mp4")",
             isDirectory: false
@@ -186,11 +246,21 @@ private enum ExportSession {
                 ".\(outputURL.lastPathComponent).mic-cleanup-\(UUID().uuidString).m4a",
                 isDirectory: false
             )
-            let processed = try await AudioCleanupProcessor.prepareMicrophone(
-                sourceURL: rawMicURL,
-                settings: project.audioCleanup,
-                outputURL: cleanupURL
-            )
+            let processed: URL
+            do {
+                processed = try await AudioCleanupProcessor.prepareMicrophone(
+                    sourceURL: rawMicURL,
+                    settings: project.audioCleanup,
+                    outputURL: cleanupURL
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw ExportFailure(
+                    stage: .audioMixing,
+                    detail: "Could not prepare microphone audio: \(error.localizedDescription)"
+                )
+            }
             if processed == cleanupURL {
                 cleanedMicrophoneURL = cleanupURL
             }
@@ -222,28 +292,37 @@ private enum ExportSession {
                 )
             )
         }
-        let audioComposition = try await ExportAudioMux.makeComposition(
-            sources: audioSources,
-            start: trimStart,
-            duration: sourceSpan,
-            speedTimeline: speedTimeline,
-            muteAudioWhenSpedUp: project.muteAudioWhenSpedUp
-        )
+        let audioComposition: ExportAudioMux.Prepared?
+        do {
+            audioComposition = try await ExportAudioMux.makeComposition(
+                sources: audioSources,
+                start: trimStart,
+                duration: sourceSpan,
+                speedTimeline: speedTimeline,
+                muteAudioWhenSpedUp: project.muteAudioWhenSpedUp
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ExportFailure(stage: .audioMixing, detail: error.localizedDescription)
+        }
 
-        let (ciContext, colorSpace) = ExportMediaIO.makeCIContext()
-        let reader = try ExportVideoReader(
-            asset: sourceAsset,
-            track: videoTrack,
-            copyContext: ciContext,
-            colorSpace: colorSpace
-        )
+        let renderContext = ExportMediaIO.makeCIContext()
+        let ciContext = renderContext.context
+        let colorSpace = renderContext.colorSpace
+        let reader: ExportVideoReader
+        do {
+            reader = try ExportVideoReader(asset: sourceAsset, track: videoTrack)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ExportFailure(stage: .sourceReading, detail: error.localizedDescription)
+        }
         let webcamReader: ExportVideoReader?
         if let webcamAsset, let webcamTrack {
             webcamReader = try? ExportVideoReader(
                 asset: webcamAsset,
-                track: webcamTrack,
-                copyContext: ciContext,
-                colorSpace: colorSpace
+                track: webcamTrack
             )
         } else {
             webcamReader = nil
@@ -277,19 +356,32 @@ private enum ExportSession {
             annotations: project.annotations
         )
 
-        let (writer, videoInput, adaptor) = try ExportWriterFactory.makeVideoWriter(
-            url: tempURL,
-            width: layout.width,
-            height: layout.height,
-            fps: fps,
-            codec: project.videoExportSettings.codec
+        let writerParts: (
+            AVAssetWriter,
+            AVAssetWriterInput,
+            AVAssetWriterInputPixelBufferAdaptor
         )
+        do {
+            writerParts = try ExportWriterFactory.makeVideoWriter(
+                url: tempURL,
+                width: layout.width,
+                height: layout.height,
+                fps: fps,
+                codec: project.videoExportSettings.codec
+            )
+        } catch {
+            throw ExportFailure(stage: .videoEncoding, detail: error.localizedDescription)
+        }
+        let (writer, videoInput, adaptor) = writerParts
 
         var audioInput: AVAssetWriterInput?
         if audioComposition != nil {
             let input = ExportWriterFactory.makeAudioInput()
             guard writer.canAdd(input) else {
-                throw OpenRecordError.io("Could not add an audio track to the export file.")
+                throw ExportFailure(
+                    stage: .audioMixing,
+                    detail: "Could not add the mixed audio track to the export file."
+                )
             }
             writer.add(input)
             audioInput = input
@@ -308,8 +400,10 @@ private enum ExportSession {
         }
 
         guard writer.startWriting() else {
-            throw OpenRecordError.io(
-                writer.error?.localizedDescription ?? "Could not start writing the export file."
+            throw ExportFailure(
+                stage: .videoEncoding,
+                detail: writer.error?.localizedDescription
+                    ?? "Could not start writing the export file."
             )
         }
         writer.startSession(atSourceTime: .zero)
@@ -325,96 +419,119 @@ private enum ExportSession {
             }
         }
 
-        report(progress, 0.02)
-
-        let canvasWidth = layout.width
-        let canvasHeight = layout.height
-
-        for index in 0..<frameCount {
-            try Task.checkCancellation()
-            try ExportAudioMux.waitUntilReady(videoInput, writer: writer)
-
-            let outputTime = Double(index) / Double(fps)
-            let t = speedTimeline.sourceTime(
-                atOutputTime: outputTime,
-                sourceStart: trimStart,
-                sourceEnd: trimEnd
+        report(
+            progress,
+            status,
+            ExportProgress(
+                phase: .rendering,
+                fraction: 0.02,
+                framesCompleted: 0,
+                totalFrames: frameCount
             )
-            let pts = CMTime(value: Int64(index), timescale: fps)
+        )
 
-            try autoreleasepool {
-                let source = try reader.image(at: t)
-                let webcamTime = WebcamTimeline.sourceTime(
-                    atTimelineTime: t,
-                    sourceDuration: webcamDuration,
-                    legacyOffset: webcamOffset,
-                    diagnostics: captureDiagnostics
-                )
-                let webcamFrame: CIImage?
-                if let webcamReader,
-                   let webcamTime,
-                   webcamTime >= 0,
-                   webcamTime <= webcamDuration
-                {
-                    webcamFrame = try? webcamReader.image(at: webcamTime)
-                } else {
-                    webcamFrame = nil
-                }
-                let crop = engine.crop(at: t)
-                let cursorUV = engine.interpolateCursor(at: t)
-                let cursorVelocity = engine.cursorVelocity(at: t)
-                let clicking = engine.isClicking(at: t)
-                let clickAge = clicking
-                    ? (ExportLayout.primaryClickAge(at: t, clicks: engine.smoother.clicks) ?? 0)
-                    : nil
-                let keyboardState = keyboardTimeline.state(
-                    at: t,
-                    settings: project.keyboardOverlay
-                )
-
-                let pixelBuffer: CVPixelBuffer
-                if let pool = adaptor.pixelBufferPool {
-                    var buffer: CVPixelBuffer?
-                    let status = CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
-                    guard status == kCVReturnSuccess, let buffer else {
-                        throw OpenRecordError.io("Could not allocate an export frame buffer.")
+        // Decode and compose on one producer while the consumer serially feeds
+        // AVAssetWriter. A three-frame queue is enough to overlap encoder
+        // backpressure without allowing a long or 4K export to fan out memory.
+        let frameQueue = ExportBoundedQueue<PreparedExportFrame>(capacity: 3)
+        let framePreparer = ExportFramePreparer(
+            reader: reader,
+            webcamReader: webcamReader,
+            webcamDuration: webcamDuration,
+            webcamOffset: webcamOffset,
+            captureDiagnostics: captureDiagnostics,
+            speedTimeline: speedTimeline,
+            trimStart: trimStart,
+            trimEnd: trimEnd,
+            fps: fps,
+            engine: engine,
+            keyboardTimeline: keyboardTimeline,
+            keyboardSettings: project.keyboardOverlay,
+            compositor: compositor,
+            pixelBufferPool: adaptor.pixelBufferPool,
+            canvasWidth: layout.width,
+            canvasHeight: layout.height
+        )
+        let framePreparationTask = Task.detached(priority: .userInitiated) {
+            do {
+                for index in 0..<frameCount {
+                    try Task.checkCancellation()
+                    let frame = try autoreleasepool {
+                        try framePreparer.prepare(index: index)
                     }
-                    pixelBuffer = buffer
-                } else {
-                    pixelBuffer = try ExportMediaIO.makePixelBuffer(
-                        width: canvasWidth,
-                        height: canvasHeight
-                    )
+                    try frameQueue.append(frame)
                 }
-
-                compositor.render(
-                    source: source,
-                    webcam: webcamFrame,
-                    cropUV: crop,
-                    cursorUV: cursorUV,
-                    cursorVelocity: cursorVelocity,
-                    clicking: clicking,
-                    clickAge: clickAge,
-                    keyboardState: keyboardState,
-                    sourceTime: t,
-                    into: pixelBuffer
-                )
-
-                guard adaptor.append(pixelBuffer, withPresentationTime: pts) else {
-                    throw OpenRecordError.io(
-                        writer.error?.localizedDescription ?? "Could not append an export video frame."
-                    )
-                }
-            }
-
-            if index == frameCount - 1 || index % 4 == 0 {
-                let fraction = Double(index + 1) / Double(frameCount)
-                report(progress, 0.02 + 0.86 * fraction)
+                frameQueue.finish()
+            } catch {
+                frameQueue.finish(throwing: error)
             }
         }
 
+        let renderStarted = ContinuousClock.now
+        var estimator = ExportProgressEstimator(totalFrames: frameCount)
+        var completedFrames = 0
+        do {
+            while let frame = try frameQueue.next() {
+                try Task.checkCancellation()
+                try ExportAudioMux.waitUntilReady(videoInput, writer: writer)
+                guard adaptor.append(
+                    frame.pixelBuffer,
+                    withPresentationTime: frame.presentationTime
+                ) else {
+                    throw ExportFailure(
+                        stage: .videoEncoding,
+                        detail: writer.error?.localizedDescription
+                            ?? "Could not append a video frame."
+                    )
+                }
+                completedFrames += 1
+
+                if completedFrames == frameCount || completedFrames % 4 == 0 {
+                    let measured = estimator.update(
+                        framesCompleted: completedFrames,
+                        elapsedSeconds: elapsedSeconds(since: renderStarted)
+                    )
+                    report(
+                        progress,
+                        status,
+                        renderingProgress(from: measured)
+                    )
+                }
+            }
+            await framePreparationTask.value
+            guard completedFrames == frameCount else {
+                throw ExportFailure(
+                    stage: .frameRendering,
+                    detail: "Frame preparation ended before every output frame was produced."
+                )
+            }
+        } catch {
+            frameQueue.cancel()
+            framePreparationTask.cancel()
+            audioTask?.cancel()
+            writer.cancelWriting()
+            await framePreparationTask.value
+            if let audioTask {
+                _ = await audioTask.result
+            }
+            if error is CancellationError || Task.isCancelled {
+                throw CancellationError()
+            }
+            throw error
+        }
+
         videoInput.markAsFinished()
-        report(progress, 0.90)
+        report(
+            progress,
+            status,
+            ExportProgress(
+                phase: .finalizing,
+                fraction: 0.90,
+                framesCompleted: frameCount,
+                totalFrames: frameCount,
+                elapsedSeconds: elapsedSeconds(since: renderStarted)
+            )
+        )
 
         if let audioTask {
             do {
@@ -427,17 +544,39 @@ private enum ExportSession {
                 }
             } catch {
                 if Task.isCancelled { throw CancellationError() }
-                throw error
+                throw ExportFailure(
+                    stage: .audioMixing,
+                    detail: error.localizedDescription
+                )
             }
         }
-        report(progress, 0.97)
+        report(
+            progress,
+            status,
+            ExportProgress(
+                phase: .finalizing,
+                fraction: 0.97,
+                framesCompleted: frameCount,
+                totalFrames: frameCount,
+                elapsedSeconds: elapsedSeconds(since: renderStarted)
+            )
+        )
 
         try Task.checkCancellation()
-        try await finish(writer)
+        do {
+            try await finish(writer)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ExportFailure(stage: .finalization, detail: error.localizedDescription)
+        }
         try Task.checkCancellation()
         try install(tempURL, at: outputURL)
         succeeded = true
-        report(progress, 1)
+        let completed = estimator.complete(
+            elapsedSeconds: elapsedSeconds(since: renderStarted)
+        )
+        report(progress, status, completed)
     }
 
     private static func finish(_ writer: AVAssetWriter) async throws {
@@ -475,14 +614,201 @@ private enum ExportSession {
             }
         } catch {
             try? fm.removeItem(at: tempURL)
-            throw OpenRecordError.io(
-                "Could not write \(outputURL.lastPathComponent): \(error.localizedDescription)"
+            throw ExportFailure(
+                stage: .installation,
+                detail: "Could not write \(outputURL.lastPathComponent): \(error.localizedDescription)"
             )
         }
     }
 
-    private static func report(_ progress: ExportProgressHandler?, _ value: Double) {
-        progress?(min(1, max(0, value)))
+    private static func renderingProgress(from measured: ExportProgress) -> ExportProgress {
+        ExportProgress(
+            phase: .rendering,
+            fraction: 0.02 + 0.86 * measured.fraction,
+            framesCompleted: measured.framesCompleted,
+            totalFrames: measured.totalFrames,
+            elapsedSeconds: measured.elapsedSeconds,
+            framesPerSecond: measured.framesPerSecond,
+            estimatedRemainingSeconds: measured.estimatedRemainingSeconds
+        )
+    }
+
+    private static func elapsedSeconds(
+        since start: ContinuousClock.Instant
+    ) -> TimeInterval {
+        let components = start.duration(to: .now).components
+        return max(
+            0,
+            Double(components.seconds) + Double(components.attoseconds) / 1e18
+        )
+    }
+
+    private static func report(
+        _ progress: ExportProgressHandler?,
+        _ status: ExportStatusHandler?,
+        _ value: ExportProgress
+    ) {
+        progress?(value.fraction)
+        status?(value)
+    }
+}
+
+private struct PreparedExportFrame: @unchecked Sendable {
+    var pixelBuffer: CVPixelBuffer
+    var presentationTime: CMTime
+}
+
+/// Owns every sequential, non-thread-safe decoder/compositor dependency. Only
+/// one producer task calls `prepare`, while the writer consumes already-rendered
+/// buffers in order from `ExportBoundedQueue`.
+private final class ExportFramePreparer: @unchecked Sendable {
+    let reader: ExportVideoReader
+    let webcamReader: ExportVideoReader?
+    let webcamDuration: TimeInterval
+    let webcamOffset: TimeInterval
+    let captureDiagnostics: CaptureDiagnostics?
+    let speedTimeline: SpeedTimeline
+    let trimStart: TimeInterval
+    let trimEnd: TimeInterval
+    let fps: Int32
+    let engine: ZoomEngine
+    let keyboardTimeline: KeyboardOverlayTimeline
+    let keyboardSettings: KeyboardOverlaySettings
+    let compositor: ExportCompositor
+    let pixelBufferPool: CVPixelBufferPool?
+    let canvasWidth: Int
+    let canvasHeight: Int
+
+    init(
+        reader: ExportVideoReader,
+        webcamReader: ExportVideoReader?,
+        webcamDuration: TimeInterval,
+        webcamOffset: TimeInterval,
+        captureDiagnostics: CaptureDiagnostics?,
+        speedTimeline: SpeedTimeline,
+        trimStart: TimeInterval,
+        trimEnd: TimeInterval,
+        fps: Int32,
+        engine: ZoomEngine,
+        keyboardTimeline: KeyboardOverlayTimeline,
+        keyboardSettings: KeyboardOverlaySettings,
+        compositor: ExportCompositor,
+        pixelBufferPool: CVPixelBufferPool?,
+        canvasWidth: Int,
+        canvasHeight: Int
+    ) {
+        self.reader = reader
+        self.webcamReader = webcamReader
+        self.webcamDuration = webcamDuration
+        self.webcamOffset = webcamOffset
+        self.captureDiagnostics = captureDiagnostics
+        self.speedTimeline = speedTimeline
+        self.trimStart = trimStart
+        self.trimEnd = trimEnd
+        self.fps = fps
+        self.engine = engine
+        self.keyboardTimeline = keyboardTimeline
+        self.keyboardSettings = keyboardSettings
+        self.compositor = compositor
+        self.pixelBufferPool = pixelBufferPool
+        self.canvasWidth = canvasWidth
+        self.canvasHeight = canvasHeight
+    }
+
+    func prepare(index: Int) throws -> PreparedExportFrame {
+        try Task.checkCancellation()
+        let outputTime = Double(index) / Double(fps)
+        let sourceTime = speedTimeline.sourceTime(
+            atOutputTime: outputTime,
+            sourceStart: trimStart,
+            sourceEnd: trimEnd
+        )
+
+        let source: CIImage
+        do {
+            source = try reader.image(at: sourceTime)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ExportFailure(stage: .sourceReading, detail: error.localizedDescription)
+        }
+
+        let webcamTime = WebcamTimeline.sourceTime(
+            atTimelineTime: sourceTime,
+            sourceDuration: webcamDuration,
+            legacyOffset: webcamOffset,
+            diagnostics: captureDiagnostics
+        )
+        let webcamFrame: CIImage?
+        if let webcamReader,
+           let webcamTime,
+           webcamTime >= 0,
+           webcamTime <= webcamDuration
+        {
+            do {
+                webcamFrame = try webcamReader.image(at: webcamTime)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Webcam is an optional overlay. Preserve the existing
+                // degraded-export behavior when only that track is damaged.
+                webcamFrame = nil
+            }
+        } else {
+            webcamFrame = nil
+        }
+
+        let pixelBuffer: CVPixelBuffer
+        do {
+            if let pixelBufferPool {
+                var buffer: CVPixelBuffer?
+                let status = CVPixelBufferPoolCreatePixelBuffer(
+                    nil,
+                    pixelBufferPool,
+                    &buffer
+                )
+                guard status == kCVReturnSuccess, let buffer else {
+                    throw OpenRecordError.io(
+                        "Could not allocate an export frame buffer (Core Video status \(status))."
+                    )
+                }
+                pixelBuffer = buffer
+            } else {
+                pixelBuffer = try ExportMediaIO.makePixelBuffer(
+                    width: canvasWidth,
+                    height: canvasHeight
+                )
+            }
+        } catch {
+            throw ExportFailure(stage: .frameRendering, detail: error.localizedDescription)
+        }
+
+        let clicking = engine.isClicking(at: sourceTime)
+        compositor.render(
+            source: source,
+            webcam: webcamFrame,
+            cropUV: engine.crop(at: sourceTime),
+            cursorUV: engine.interpolateCursor(at: sourceTime),
+            cursorVelocity: engine.cursorVelocity(at: sourceTime),
+            clicking: clicking,
+            clickAge: clicking
+                ? (ExportLayout.primaryClickAge(
+                    at: sourceTime,
+                    clicks: engine.smoother.clicks
+                ) ?? 0)
+                : nil,
+            keyboardState: keyboardTimeline.state(
+                at: sourceTime,
+                settings: keyboardSettings
+            ),
+            sourceTime: sourceTime,
+            into: pixelBuffer
+        )
+        try Task.checkCancellation()
+        return PreparedExportFrame(
+            pixelBuffer: pixelBuffer,
+            presentationTime: CMTime(value: Int64(index), timescale: fps)
+        )
     }
 }
 
@@ -505,12 +831,12 @@ private final class ExportAudioTaskBox: @unchecked Sendable {
     }
 
     func appendAndFinish() throws {
+        defer { input.markAsFinished() }
         try ExportAudioMux.append(
             to: writer,
             input: input,
             prepared: prepared
         )
-        input.markAsFinished()
     }
 }
 

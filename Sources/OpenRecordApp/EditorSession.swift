@@ -56,7 +56,8 @@ final class EditorSession {
     var selectedAnnotationID: UUID?
     var isWebcamSelected = false
     var copyExportToLibrary = false
-    var exportProgress: Double?
+    var exportProgress: ExportProgress?
+    private(set) var isCancellingExport = false
     var lastError: String?
     /// Warnings retained for the lifetime of the editor and shown by the
     /// parent app as a persistent degraded-project indicator.
@@ -175,6 +176,10 @@ final class EditorSession {
     private var saveTask: Task<Void, Never>?
     private var engineTask: Task<Void, Never>?
     private var exportTask: Task<Void, Never>?
+    /// Monotonically increasing identity for the active export. Exporter
+    /// callbacks are delivered from a detached worker and may arrive after
+    /// the worker has finished, so the identity also acts as a callback fence.
+    private var exportGeneration: UInt64 = 0
     private let saveCoordinator: ProjectSaveCoordinator
 
     static func load(
@@ -776,13 +781,15 @@ final class EditorSession {
             ? "Renders the current trim, overlays, and canvas into a ProRes 422 QuickTime movie."
             : kind.message
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard exportProgress == nil else { return }
         exportTask?.cancel()
         exportTask = Task { await export(to: url, kind: kind) }
     }
 
     func cancelExport() {
+        guard exportProgress != nil else { return }
+        isCancellingExport = true
         exportTask?.cancel()
-        exportProgress = nil
     }
 
     /// Flush the latest document revision and return only after its bytes are
@@ -839,48 +846,100 @@ final class EditorSession {
     }
 
     func export(to url: URL, kind: EditorExportKind) async {
-        exportProgress = 0
+        exportGeneration &+= 1
+        let generation = exportGeneration
+        exportProgress = ExportProgress(
+            phase: .preparing,
+            fraction: 0,
+            framesCompleted: 0,
+            totalFrames: 0,
+            elapsedSeconds: 0,
+            framesPerSecond: nil,
+            estimatedRemainingSeconds: nil
+        )
+        isCancellingExport = false
         lastError = nil
         let exporter = Exporter(projectBundleURL: projectURL)
         do {
+            try Task.checkCancellation()
             switch kind {
             case .video:
-                try await exporter.export(project: document, url: url) { [weak self] progress in
+                try await exporter.exportWithStatus(project: document, url: url, status: { [weak self] status in
                     Task { @MainActor in
-                        guard let self, self.exportProgress != nil else { return }
-                        self.exportProgress = progress
+                        guard let self,
+                              self.exportGeneration == generation,
+                              self.exportProgress != nil
+                        else { return }
+                        self.exportProgress = status
                     }
-                }
+                })
             case .gif:
                 try await exporter.exportGIF(project: document, url: url) { [weak self] progress in
                     Task { @MainActor in
-                        guard let self, self.exportProgress != nil else { return }
-                        self.exportProgress = progress
+                        guard let self,
+                              self.exportGeneration == generation,
+                              self.exportProgress != nil
+                        else { return }
+                        self.exportProgress = self.syntheticExportProgress(
+                            fraction: progress,
+                            phase: progress >= 0.999 ? .finalizing : .rendering
+                        )
                     }
                 }
             case .audio:
                 try await exporter.exportAudio(project: document, url: url) { [weak self] progress in
                     Task { @MainActor in
-                        guard let self, self.exportProgress != nil else { return }
-                        self.exportProgress = progress
+                        guard let self,
+                              self.exportGeneration == generation,
+                              self.exportProgress != nil
+                        else { return }
+                        self.exportProgress = self.syntheticExportProgress(
+                            fraction: progress,
+                            phase: progress >= 0.999 ? .finalizing : .rendering
+                        )
                     }
                 }
             case .snapshot:
                 try await exporter.exportSnapshot(project: document, at: playhead, url: url)
-                exportProgress = 1
+                exportProgress = syntheticExportProgress(fraction: 1, phase: .completed)
             }
-            if Task.isCancelled { return }
+            try Task.checkCancellation()
             if copyExportToLibrary {
                 try library.copyExport(from: url, to: library.rootURL)
             }
-            exportProgress = nil
+            finishExport(generation: generation)
         } catch is CancellationError {
-            exportProgress = nil
+            finishExport(generation: generation)
         } catch {
-            exportProgress = nil
-            if !Task.isCancelled {
-                lastError = error.localizedDescription
-            }
+            finishExport(generation: generation, error: error)
+        }
+    }
+
+    private func syntheticExportProgress(
+        fraction: Double,
+        phase: ExportPhase
+    ) -> ExportProgress {
+        ExportProgress(
+            phase: phase,
+            fraction: min(max(fraction, 0), 1),
+            framesCompleted: 0,
+            totalFrames: 0,
+            elapsedSeconds: 0,
+            framesPerSecond: nil,
+            estimatedRemainingSeconds: nil
+        )
+    }
+
+    private func finishExport(generation: UInt64, error: Error? = nil) {
+        guard exportGeneration == generation else { return }
+        // Invalidate callbacks before clearing the visible state. A callback
+        // already queued on MainActor must not resurrect a completed export.
+        exportGeneration &+= 1
+        exportProgress = nil
+        isCancellingExport = false
+        exportTask = nil
+        if let error, !(error is CancellationError), !Task.isCancelled {
+            lastError = error.localizedDescription
         }
     }
 

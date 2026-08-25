@@ -7,6 +7,22 @@ import Foundation
 import Metal
 import VideoToolbox
 
+enum ExportRenderingBackend: String, Sendable, Equatable {
+    case metal
+    case softwareCoreImage
+}
+
+enum ExportRenderingPreference: Sendable, Equatable {
+    case automatic
+    case softwareOnly
+}
+
+struct ExportRenderContext {
+    var context: CIContext
+    var colorSpace: CGColorSpace
+    var backend: ExportRenderingBackend
+}
+
 enum ExportMediaIO {
     static func requireDisplayVideo(in bundleURL: URL) throws -> URL {
         let url = ProjectLayout.displayVideoURL(in: bundleURL)
@@ -53,16 +69,35 @@ enum ExportMediaIO {
         return 30
     }
 
-    static func makeCIContext() -> (CIContext, CGColorSpace) {
+    /// Core Image remains the compositor authority for preview/export parity,
+    /// while its rendering backend uses Metal whenever the machine provides a
+    /// device. The explicit software preference is the validation and recovery
+    /// path used by tests and by callers that cannot create a Metal device.
+    static func makeCIContext(
+        preference: ExportRenderingPreference = .automatic
+    ) -> ExportRenderContext {
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         let options: [CIContextOption: Any] = [
             .workingColorSpace: colorSpace,
             .outputColorSpace: colorSpace,
+            // Video frames are one-shot graphs. Retaining intermediates makes
+            // long and 4K exports consume memory without improving reuse.
+            .cacheIntermediates: false,
         ]
-        if let device = MTLCreateSystemDefaultDevice() {
-            return (CIContext(mtlDevice: device, options: options), colorSpace)
+        if preference == .automatic, let device = MTLCreateSystemDefaultDevice() {
+            return ExportRenderContext(
+                context: CIContext(mtlDevice: device, options: options),
+                colorSpace: colorSpace,
+                backend: .metal
+            )
         }
-        return (CIContext(options: options), colorSpace)
+        var softwareOptions = options
+        softwareOptions[.useSoftwareRenderer] = true
+        return ExportRenderContext(
+            context: CIContext(options: softwareOptions),
+            colorSpace: colorSpace,
+            backend: .softwareCoreImage
+        )
     }
 
     static func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
@@ -88,14 +123,14 @@ enum ExportMediaIO {
 }
 
 /// Sequential VFR decoder. Times are seconds from the first encoded frame (file origin).
+///
+/// AVAssetReader's pixel buffers are retained directly instead of being copied
+/// through a second Core Image render. `current` and `peek` keep at most two
+/// decoded frames alive, preserving the bounded-memory behavior while removing
+/// a full-frame GPU/CPU copy from the export hot path.
 final class ExportVideoReader {
     private let reader: AVAssetReader
     private let output: AVAssetReaderTrackOutput
-    private let copyContext: CIContext
-    private let colorSpace: CGColorSpace
-    private var slotA: CVPixelBuffer?
-    private var slotB: CVPixelBuffer?
-    private var nextSlotIsA = true
     private var current: HeldFrame?
     private var peek: HeldFrame?
     private var firstPTS: CMTime?
@@ -103,13 +138,17 @@ final class ExportVideoReader {
 
     struct HeldFrame {
         var time: TimeInterval
-        var image: CIImage
+        var pixelBuffer: CVPixelBuffer
+
+        var image: CIImage {
+            CIImage(cvPixelBuffer: pixelBuffer)
+        }
     }
 
     private(set) var sourceWidth = 0
     private(set) var sourceHeight = 0
 
-    init(asset: AVAsset, track: AVAssetTrack, copyContext: CIContext, colorSpace: CGColorSpace) throws {
+    init(asset: AVAsset, track: AVAssetTrack) throws {
 
         let reader: AVAssetReader
         do {
@@ -139,8 +178,6 @@ final class ExportVideoReader {
 
         self.reader = reader
         self.output = output
-        self.copyContext = copyContext
-        self.colorSpace = colorSpace
         try prime()
     }
 
@@ -157,7 +194,7 @@ final class ExportVideoReader {
     }
 
     private func prime() throws {
-        current = try readCopied()
+        current = try readFrame()
         guard current != nil else {
             exhausted = true
             throw OpenRecordError.io("recording/display.mp4 has no video frames to export.")
@@ -167,25 +204,22 @@ final class ExportVideoReader {
 
     private func fillPeek() throws {
         if exhausted || peek != nil { return }
-        if let frame = try readCopied() {
+        if let frame = try readFrame() {
             peek = frame
         } else {
             exhausted = true
         }
     }
 
-    private func readCopied() throws -> HeldFrame? {
+    private func readFrame() throws -> HeldFrame? {
         while let sample = output.copyNextSampleBuffer() {
+            try Task.checkCancellation()
             guard CMSampleBufferIsValid(sample),
                   let src = CMSampleBufferGetImageBuffer(sample)
             else {
                 continue
             }
-            try ensureSlots(matching: src)
-            guard let dest = nextSlotIsA ? slotA : slotB else {
-                throw OpenRecordError.io("Export decoder lost its frame buffers.")
-            }
-            nextSlotIsA.toggle()
+            try recordDimensions(matching: src)
 
             let pts = CMSampleBufferGetPresentationTimeStamp(sample)
             if firstPTS == nil {
@@ -194,13 +228,7 @@ final class ExportVideoReader {
             let origin = firstPTS ?? .zero
             let time = max(0, CMTimeGetSeconds(CMTimeSubtract(pts, origin)))
 
-            copyContext.render(
-                CIImage(cvPixelBuffer: src),
-                to: dest,
-                bounds: CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight),
-                colorSpace: colorSpace
-            )
-            return HeldFrame(time: time, image: CIImage(cvPixelBuffer: dest))
+            return HeldFrame(time: time, pixelBuffer: src)
         }
         if reader.status == .failed {
             throw OpenRecordError.io(
@@ -210,8 +238,8 @@ final class ExportVideoReader {
         return nil
     }
 
-    private func ensureSlots(matching src: CVPixelBuffer) throws {
-        if slotA != nil { return }
+    private func recordDimensions(matching src: CVPixelBuffer) throws {
+        if sourceWidth > 0, sourceHeight > 0 { return }
         let width = CVPixelBufferGetWidth(src)
         let height = CVPixelBufferGetHeight(src)
         guard width >= 2, height >= 2 else {
@@ -219,8 +247,6 @@ final class ExportVideoReader {
         }
         sourceWidth = width
         sourceHeight = height
-        slotA = try ExportMediaIO.makePixelBuffer(width: width, height: height)
-        slotB = try ExportMediaIO.makePixelBuffer(width: width, height: height)
     }
 }
 
@@ -458,6 +484,12 @@ enum ExportAudioMux {
             }
             if Task.isCancelled {
                 throw CancellationError()
+            }
+            if writer.status == .cancelled {
+                throw OpenRecordError.io("Export writer stopped before all media was written.")
+            }
+            if writer.status == .completed {
+                throw OpenRecordError.io("Export writer completed before all media was written.")
             }
             Thread.sleep(forTimeInterval: 0.001)
         }

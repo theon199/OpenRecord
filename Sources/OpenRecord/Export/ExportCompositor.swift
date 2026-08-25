@@ -23,6 +23,20 @@ final class ExportCompositor {
     private let sourceHeight: Int
     private let captions: [CaptionCue]
     private let annotations: [Annotation]
+    /// Authored overlays are unchanged between their timeline boundaries.
+    /// Reusing their raster avoids allocating and drawing a full-canvas
+    /// CGContext for every output frame in a caption or annotation range.
+    private var authoredOverlayCacheKey: AuthoredOverlayCacheKey?
+    private var authoredOverlayCache: CIImage?
+    /// Keyboard pills are also static during their hold interval. Fade frames
+    /// naturally miss this cache because opacity is part of the state key.
+    private var keyboardOverlayCacheKey: KeyboardOverlayState?
+    private var keyboardOverlayCache: CIImage?
+
+    private struct AuthoredOverlayCacheKey: Hashable {
+        var captions: [CaptionCue]
+        var annotations: [Annotation]
+    }
 
     init(
         context: CIContext,
@@ -132,12 +146,7 @@ final class ExportCompositor {
             }
         }
 
-        if let keyboard = KeyboardOverlayRenderer.image(
-            state: keyboardState,
-            settings: keyboardOverlay,
-            canvasSize: layout.size,
-            canvasPadding: canvas.padding
-        ) {
+        if let keyboard = cachedKeyboardOverlay(for: keyboardState) {
             output = keyboard.composited(over: output)
         }
 
@@ -158,7 +167,18 @@ final class ExportCompositor {
     private func authoredOverlay(at time: TimeInterval, canvasSize: CGSize) -> CIImage? {
         let activeCaptions = captions.filter { $0.isActive(at: time) }
         let activeAnnotations = annotations.filter { $0.isActive(at: time) }
-        guard !activeCaptions.isEmpty || !activeAnnotations.isEmpty else { return nil }
+        let cacheKey = AuthoredOverlayCacheKey(
+            captions: activeCaptions,
+            annotations: activeAnnotations
+        )
+        if cacheKey == authoredOverlayCacheKey {
+            return authoredOverlayCache
+        }
+        authoredOverlayCacheKey = cacheKey
+        guard !activeCaptions.isEmpty || !activeAnnotations.isEmpty else {
+            authoredOverlayCache = nil
+            return nil
+        }
 
         let width = max(Int(canvasSize.width.rounded()), 2)
         let height = max(Int(canvasSize.height.rounded()), 2)
@@ -180,8 +200,28 @@ final class ExportCompositor {
         for annotation in activeAnnotations {
             draw(annotation, in: context, canvasSize: canvasSize)
         }
-        guard let image = context.makeImage() else { return nil }
-        return CIImage(cgImage: image)
+        guard let image = context.makeImage() else {
+            authoredOverlayCache = nil
+            return nil
+        }
+        let rendered = CIImage(cgImage: image)
+        authoredOverlayCache = rendered
+        return rendered
+    }
+
+    private func cachedKeyboardOverlay(for state: KeyboardOverlayState) -> CIImage? {
+        if state == keyboardOverlayCacheKey {
+            return keyboardOverlayCache
+        }
+        keyboardOverlayCacheKey = state
+        let image = KeyboardOverlayRenderer.image(
+            state: state,
+            settings: keyboardOverlay,
+            canvasSize: layout.size,
+            canvasPadding: canvas.padding
+        )
+        keyboardOverlayCache = image
+        return image
     }
 
     private func draw(_ caption: CaptionCue, in context: CGContext, canvasSize: CGSize) {

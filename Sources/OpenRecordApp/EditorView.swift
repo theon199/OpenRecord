@@ -63,13 +63,33 @@ struct EditorView: View {
                 ZStack {
                     Color.black.opacity(0.28)
                     VStack(spacing: 12) {
-                        ProgressView(value: min(max(progress, 0), 1))
+                        ProgressView(value: min(max(progress.fraction, 0), 1))
                             .frame(width: 220)
-                        Text("Exporting…")
+                            .accessibilityLabel("Export progress")
+                        Text(session.isCancellingExport ? "Cancelling…" : "Exporting…")
                             .font(.headline)
+                        if let fps = progress.framesPerSecond,
+                           fps.isFinite,
+                           fps > 0
+                        {
+                            Text("\(fps, specifier: "%.1f") FPS")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Rendering speed \(fps, specifier: "%.1f") frames per second")
+                        }
+                        if let eta = progress.estimatedRemainingSeconds,
+                           eta.isFinite,
+                           eta >= 0
+                        {
+                            Text("About \(formattedDuration(eta)) remaining")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Estimated time remaining \(formattedDuration(eta))")
+                        }
                         Button("Cancel") {
                             session.cancelExport()
                         }
+                        .disabled(session.isCancellingExport)
                         .keyboardShortcut(.cancelAction)
                     }
                     .padding(24)
@@ -104,5 +124,15 @@ struct EditorView: View {
         .onDisappear {
             session.pause()
         }
+    }
+
+    private func formattedDuration(_ seconds: Double) -> String {
+        let clamped = max(0, seconds)
+        if clamped < 60 {
+            return "\(Int(clamped.rounded())) sec"
+        }
+        let minutes = Int(clamped) / 60
+        let remaining = Int(clamped) % 60
+        return "\(minutes) min \(remaining) sec"
     }
 }

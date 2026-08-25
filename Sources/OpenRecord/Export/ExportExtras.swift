@@ -217,8 +217,10 @@ private final class ExportFrameSession: @unchecked Sendable {
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw OpenRecordError.io("Recording has no video track.") }
         let duration = try await asset.load(.duration)
         let trim = try ExportLayout.clampedTrim(trimIn: project.trimIn, trimOut: project.trimOut, duration: duration.seconds)
-        let (ci, colorSpace) = ExportMediaIO.makeCIContext()
-        let reader = try ExportVideoReader(asset: asset, track: track, copyContext: ci, colorSpace: colorSpace)
+        let renderContext = ExportMediaIO.makeCIContext()
+        let ci = renderContext.context
+        let colorSpace = renderContext.colorSpace
+        let reader = try ExportVideoReader(asset: asset, track: track)
         let webcamOffset = meta.captureTiming?.webcamOffset ?? 0
         var webcamReader: ExportVideoReader?
         var webcamDuration = 0.0
@@ -229,7 +231,7 @@ private final class ExportFrameSession: @unchecked Sendable {
                 if let wt = try? await webcam.loadTracks(withMediaType: .video).first {
                     let wduration = (try? await webcam.load(.duration))?.seconds ?? 0
                     webcamDuration = wduration
-                    webcamReader = try? ExportVideoReader(asset: webcam, track: wt, copyContext: ci, colorSpace: colorSpace)
+                    webcamReader = try? ExportVideoReader(asset: webcam, track: wt)
                 }
             }
         }
