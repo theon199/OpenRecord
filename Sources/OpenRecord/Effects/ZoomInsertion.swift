@@ -17,7 +17,10 @@ public enum ZoomInsertion: Sendable {
     ) -> ZoomInsertionResult {
         let duration = max(0, timelineDuration)
         let pivot = min(max(playhead, 0), duration)
-        if let existing = ranges.first(where: { pivot >= $0.start && pivot <= $0.end }) {
+        // Timeline ranges are half-open throughout preview and export. At an
+        // exact end boundary the prior zoom is no longer active, so insertion
+        // must consider the following gap/range instead of reselecting it.
+        if let existing = ranges.first(where: { pivot >= $0.start && pivot < $0.end }) {
             return .select(existing.id)
         }
 

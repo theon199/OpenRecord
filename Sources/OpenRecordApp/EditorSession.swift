@@ -59,6 +59,8 @@ final class EditorSession {
     var exportProgress: ExportProgress?
     private(set) var isCancellingExport = false
     var lastError: String?
+    var lastErrorCategory: LocalDiagnosticsErrorCategory = .none
+    private(set) var diagnosticsCopied = false
     /// Warnings retained for the lifetime of the editor and shown by the
     /// parent app as a persistent degraded-project indicator.
     private(set) var persistentWarnings: [String] = []
@@ -241,9 +243,12 @@ final class EditorSession {
         )
         let webcamURL = ProjectLayout.webcamVideoURL(in: opened.url)
         let webcamMedia = await optionalVideoInfo(videoURL: webcamURL)
+        let editorDocument = opened.document.normalizedForTimelineEditing(
+            sourceDuration: media.duration
+        )
 
         let engine = ZoomEngine(
-            document: opened.document,
+            document: editorDocument,
             samples: mouse,
             clicks: clicks,
             displayBounds: opened.meta.displayBounds,
@@ -270,7 +275,7 @@ final class EditorSession {
             projectURL: opened.url,
             library: library,
             meta: opened.meta,
-            document: opened.document,
+            document: editorDocument,
             samples: mouse,
             clicks: clicks,
             keys: keys,
@@ -288,15 +293,21 @@ final class EditorSession {
         )
         session.telemetryIssueMessages = messages
         session.persistentWarnings = messages
+        if !messages.isEmpty {
+            session.lastErrorCategory = .telemetry
+        }
         if let health = opened.meta.captureHealth, health.state == .recovered {
             let recovery = health.warnings.map { "Capture recovery: \($0.rawValue)." }
             session.persistentWarnings.append(contentsOf: recovery)
+            if session.lastErrorCategory == .none {
+                session.lastErrorCategory = .capture
+            }
         }
         session.loadCursorSprite()
-        session.playhead = opened.document.trimIn
+        session.playhead = editorDocument.trimIn
         if hasVideo {
             session.attachPlayer()
-            session.seek(to: opened.document.trimIn)
+            session.seek(to: editorDocument.trimIn)
         }
         return session
     }
@@ -389,6 +400,7 @@ final class EditorSession {
                 document = before
                 selectedZoomID = previousSelection
                 rebuildEngine()
+                lastErrorCategory = .projectSave
                 lastError = error.localizedDescription
             }
         }
@@ -531,11 +543,14 @@ final class EditorSession {
         let before = document
         let bounds = speedNeighborBounds(excluding: segment.id, referenceStart: document.speedSegments[index].start)
         var next = segment.normalized
-        next.start = min(max(next.start, bounds.lower), next.end - SpeedTimeline.minimumSegmentDuration)
-        next.end = max(
-            min(next.end, bounds.upper),
-            next.start + SpeedTimeline.minimumSegmentDuration
-        )
+        guard let range = TimelineRangeEditing.normalized(
+            TimelineEditRange(start: next.start, end: next.end),
+            lowerBound: max(0, bounds.lower),
+            upperBound: min(timelineDuration, bounds.upper),
+            minimumDuration: SpeedTimeline.minimumSegmentDuration
+        ) else { return }
+        next.start = range.start
+        next.end = range.end
         document.speedSegments[index] = next
         document.speedSegments.sort { $0.start < $1.start }
         documentDidChange(from: before, actionName: "Adjust Speed Region")
@@ -592,15 +607,33 @@ final class EditorSession {
 
     func setTrimIn(_ time: TimeInterval) {
         let before = document
-        let maxIn = max(0, effectiveTrimOut - 0.1)
-        document.trimIn = min(max(time, 0), maxIn)
+        guard let range = TimelineRangeEditing.resizingStart(
+            TimelineEditRange(start: document.trimIn, end: effectiveTrimOut),
+            to: time,
+            lowerBound: 0,
+            upperBound: timelineDuration,
+            minimumDuration: min(
+                TimelineRangeEditing.minimumTrimDuration,
+                timelineDuration
+            )
+        ) else { return }
+        document.trimIn = range.start
         documentDidChange(from: before, actionName: "Adjust Trim")
     }
 
     func setTrimOut(_ time: TimeInterval) {
         let before = document
-        let minOut = document.trimIn + 0.1
-        document.trimOut = min(max(time, minOut), timelineDuration)
+        guard let range = TimelineRangeEditing.resizingEnd(
+            TimelineEditRange(start: document.trimIn, end: effectiveTrimOut),
+            to: time,
+            lowerBound: 0,
+            upperBound: timelineDuration,
+            minimumDuration: min(
+                TimelineRangeEditing.minimumTrimDuration,
+                timelineDuration
+            )
+        ) else { return }
+        document.trimOut = range.end
         documentDidChange(from: before, actionName: "Adjust Trim")
     }
 
@@ -714,44 +747,17 @@ final class EditorSession {
     }
 
     private func restoreHistorySnapshot(_ snapshot: ProjectDocument) {
-        let previousZoomIDs = Set(document.zoomRanges.map(\.id))
-        let previousCaptionIDs = Set(document.captions.map(\.id))
-        let previousAnnotationIDs = Set(document.annotations.map(\.id))
-        document = snapshot
-        if let selectedZoomID,
-           !document.zoomRanges.contains(where: { $0.id == selectedZoomID })
-        {
-            self.selectedZoomID = nil
-        }
-        if selectedZoomID == nil {
-            let restoredZoomIDs = Set(document.zoomRanges.map(\.id)).subtracting(previousZoomIDs)
-            if restoredZoomIDs.count == 1 {
-                selectedZoomID = restoredZoomIDs.first
-            }
-        }
-        if let selectedSpeedID,
-           !document.speedSegments.contains(where: { $0.id == selectedSpeedID })
-        {
-            self.selectedSpeedID = nil
-        }
-        if let selectedCaptionID,
-           !document.captions.contains(where: { $0.id == selectedCaptionID })
-        {
-            self.selectedCaptionID = nil
-        }
-        if let selectedAnnotationID,
-           !document.annotations.contains(where: { $0.id == selectedAnnotationID })
-        {
-            self.selectedAnnotationID = nil
-        }
-        if selectedCaptionID == nil {
-            let restoredIDs = Set(document.captions.map(\.id)).subtracting(previousCaptionIDs)
-            if restoredIDs.count == 1 { selectedCaptionID = restoredIDs.first }
-        }
-        if selectedAnnotationID == nil {
-            let restoredIDs = Set(document.annotations.map(\.id)).subtracting(previousAnnotationIDs)
-            if restoredIDs.count == 1 { selectedAnnotationID = restoredIDs.first }
-        }
+        let previousDocument = document
+        let restoredDocument = snapshot.normalizedForTimelineEditing(
+            sourceDuration: timelineDuration
+        )
+        let selection = EditorDocumentSelection.reconciled(
+            current: documentSelection,
+            previousDocument: previousDocument,
+            restoredDocument: restoredDocument
+        )
+        document = restoredDocument
+        applyDocumentSelection(selection)
         let clampedPlayhead = min(max(playhead, document.trimIn), effectiveTrimOut)
         if abs(clampedPlayhead - playhead) > 0.000_001 {
             seek(to: clampedPlayhead)
@@ -790,6 +796,57 @@ final class EditorSession {
         guard exportProgress != nil else { return }
         isCancellingExport = true
         exportTask?.cancel()
+    }
+
+    func copyDiagnostics() {
+        let bundle = Bundle.main
+        let appVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? OpenRecordInfo.appVersion
+        let appBuild = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let operatingSystem = "macOS \(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+        #if arch(arm64)
+        let architecture = "arm64"
+        #elseif arch(x86_64)
+        let architecture = "x86_64"
+        #else
+        let architecture = "unknown"
+        #endif
+        let snapshot = LocalDiagnosticsSnapshot(
+            appVersion: appVersion,
+            appBuild: appBuild,
+            operatingSystem: operatingSystem,
+            architecture: architecture,
+            projectFormatVersion: document.formatVersion,
+            captureHealth: meta.captureHealth,
+            captureDiagnostics: meta.captureDiagnostics,
+            captureTiming: meta.captureTiming,
+            trackPresence: [
+                .displayVideo: hasVideo,
+                .systemAudio: hasSystemAudio,
+                .microphone: hasMicrophoneAudio,
+                .webcam: hasWebcamVideo,
+            ],
+            trackDurations: [
+                .displayVideo: duration,
+                .webcam: webcamDuration,
+            ],
+            exportSettings: document.videoExportSettings,
+            lastErrorCategory: lastErrorCategory
+        )
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(snapshot.text, forType: .string) else {
+            diagnosticsCopied = false
+            lastErrorCategory = .unknown
+            lastError = "Could not copy diagnostics to the clipboard."
+            return
+        }
+        diagnosticsCopied = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            self?.diagnosticsCopied = false
+        }
     }
 
     /// Flush the latest document revision and return only after its bytes are
@@ -939,6 +996,7 @@ final class EditorSession {
         isCancellingExport = false
         exportTask = nil
         if let error, !(error is CancellationError), !Task.isCancelled {
+            lastErrorCategory = .export
             lastError = error.localizedDescription
         }
     }
@@ -1109,6 +1167,7 @@ final class EditorSession {
             do {
                 try await flushSave()
             } catch {
+                lastErrorCategory = .projectSave
                 lastError = error.localizedDescription
             }
         }

@@ -56,6 +56,15 @@ struct EditorView: View {
                     session.presentExportPanel()
                 }
                 .disabled(session.exportProgress != nil)
+                Button {
+                    session.copyDiagnostics()
+                } label: {
+                    Label(
+                        session.diagnosticsCopied ? "Diagnostics Copied" : "Copy Diagnostics",
+                        systemImage: session.diagnosticsCopied ? "checkmark" : "doc.on.doc"
+                    )
+                }
+                .help("Copy privacy-safe technical diagnostics to the clipboard")
             }
         }
         .overlay {
@@ -110,15 +119,7 @@ struct EditorView: View {
             return .handled
         }
         .onKeyPress(.delete) {
-            if session.selectedCaptionID != nil {
-                session.deleteSelectedCaption()
-            } else if session.selectedAnnotationID != nil {
-                session.deleteSelectedAnnotation()
-            } else if session.selectedSpeedID != nil {
-                session.deleteSelectedSpeedSegment()
-            } else {
-                session.deleteSelectedZoom()
-            }
+            session.deleteSelectedTimelineItem()
             return .handled
         }
         .onDisappear {

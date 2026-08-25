@@ -50,15 +50,7 @@ struct TimelineView: View {
                     Button("Import Captions…") { session.importCaptionsPanel() }
                 }
                 Button("Delete") {
-                    if session.selectedCaptionID != nil {
-                        session.deleteSelectedCaption()
-                    } else if session.selectedAnnotationID != nil {
-                        session.deleteSelectedAnnotation()
-                    } else if session.selectedSpeedID != nil {
-                        session.deleteSelectedSpeedSegment()
-                    } else {
-                        session.deleteSelectedZoom()
-                    }
+                    session.deleteSelectedTimelineItem()
                 }
                 .disabled(
                     session.selectedZoomID == nil
@@ -328,85 +320,159 @@ struct TimelineView: View {
             session.seek(to: session.effectiveTrimOut)
         case .zoomStart(let id):
             guard var range = session.document.zoomRanges.first(where: { $0.id == id }) else { return }
-            let (lower, _) = session.zoomNeighborBounds(excluding: id)
-            range.start = min(max(time, lower), range.end - 0.12)
+            let (lower, upper) = session.zoomNeighborBounds(excluding: id)
+            guard let edited = TimelineRangeEditing.resizingStart(
+                TimelineEditRange(start: range.start, end: range.end),
+                to: time,
+                lowerBound: max(0, lower),
+                upperBound: min(session.timelineDuration, upper),
+                minimumDuration: ZoomInsertion.minimumDuration
+            ) else { return }
+            range.start = edited.start
+            range.end = edited.end
             session.replaceZoom(range)
         case .zoomEnd(let id):
             guard var range = session.document.zoomRanges.first(where: { $0.id == id }) else { return }
-            let (_, upper) = session.zoomNeighborBounds(excluding: id)
-            range.end = max(min(time, upper), range.start + 0.12)
+            let (lower, upper) = session.zoomNeighborBounds(excluding: id)
+            guard let edited = TimelineRangeEditing.resizingEnd(
+                TimelineEditRange(start: range.start, end: range.end),
+                to: time,
+                lowerBound: max(0, lower),
+                upperBound: min(session.timelineDuration, upper),
+                minimumDuration: ZoomInsertion.minimumDuration
+            ) else { return }
+            range.start = edited.start
+            range.end = edited.end
             session.replaceZoom(range)
         case .zoomBody(let id, let originalStart, let originalEnd, let grab):
-            let span = originalEnd - originalStart
             let (lower, upper) = session.zoomNeighborBounds(excluding: id, referenceStart: originalStart)
-            let lo = max(0, lower)
-            let hi = min(session.timelineDuration, upper)
-            let maxStart = max(lo, hi - span)
-            let start = min(max(time - grab, lo), maxStart)
             guard var range = session.document.zoomRanges.first(where: { $0.id == id }) else { return }
-            range.start = start
-            range.end = start + span
+            guard let edited = TimelineRangeEditing.moving(
+                TimelineEditRange(start: originalStart, end: originalEnd),
+                toStart: time - grab,
+                lowerBound: max(0, lower),
+                upperBound: min(session.timelineDuration, upper),
+                minimumDuration: ZoomInsertion.minimumDuration
+            ) else { return }
+            range.start = edited.start
+            range.end = edited.end
             session.replaceZoom(range)
         case .speedStart(let id):
             guard var segment = session.document.speedSegments.first(where: { $0.id == id })
             else { return }
-            let (lower, _) = session.speedNeighborBounds(excluding: id)
-            segment.start = min(
-                max(time, lower),
-                segment.end - SpeedTimeline.minimumSegmentDuration
-            )
+            let (lower, upper) = session.speedNeighborBounds(excluding: id)
+            guard let edited = TimelineRangeEditing.resizingStart(
+                TimelineEditRange(start: segment.start, end: segment.end),
+                to: time,
+                lowerBound: max(0, lower),
+                upperBound: min(session.timelineDuration, upper),
+                minimumDuration: SpeedTimeline.minimumSegmentDuration
+            ) else { return }
+            segment.start = edited.start
+            segment.end = edited.end
             session.replaceSpeedSegment(segment)
         case .speedEnd(let id):
             guard var segment = session.document.speedSegments.first(where: { $0.id == id })
             else { return }
-            let (_, upper) = session.speedNeighborBounds(excluding: id)
-            segment.end = max(
-                min(time, upper),
-                segment.start + SpeedTimeline.minimumSegmentDuration
-            )
+            let (lower, upper) = session.speedNeighborBounds(excluding: id)
+            guard let edited = TimelineRangeEditing.resizingEnd(
+                TimelineEditRange(start: segment.start, end: segment.end),
+                to: time,
+                lowerBound: max(0, lower),
+                upperBound: min(session.timelineDuration, upper),
+                minimumDuration: SpeedTimeline.minimumSegmentDuration
+            ) else { return }
+            segment.start = edited.start
+            segment.end = edited.end
             session.replaceSpeedSegment(segment)
         case .speedBody(let id, let originalStart, let originalEnd, let grab):
-            let span = originalEnd - originalStart
             let (lower, upper) = session.speedNeighborBounds(
                 excluding: id,
                 referenceStart: originalStart
             )
-            let maxStart = max(lower, min(upper, session.timelineDuration) - span)
-            let start = min(max(time - grab, lower), maxStart)
             guard var segment = session.document.speedSegments.first(where: { $0.id == id })
             else { return }
-            segment.start = start
-            segment.end = start + span
+            guard let edited = TimelineRangeEditing.moving(
+                TimelineEditRange(start: originalStart, end: originalEnd),
+                toStart: time - grab,
+                lowerBound: max(0, lower),
+                upperBound: min(session.timelineDuration, upper),
+                minimumDuration: SpeedTimeline.minimumSegmentDuration
+            ) else { return }
+            segment.start = edited.start
+            segment.end = edited.end
             session.replaceSpeedSegment(segment)
         case .captionStart(let id):
             guard var cue = session.document.captions.first(where: { $0.id == id }) else { return }
-            cue.start = min(time, cue.end - 0.05)
+            guard let edited = TimelineRangeEditing.resizingStart(
+                TimelineEditRange(start: cue.start, end: cue.end),
+                to: time,
+                lowerBound: 0,
+                upperBound: session.timelineDuration,
+                minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+            ) else { return }
+            cue.start = edited.start
+            cue.end = edited.end
             session.replaceCaption(cue)
         case .captionEnd(let id):
             guard var cue = session.document.captions.first(where: { $0.id == id }) else { return }
-            cue.end = max(time, cue.start + 0.05)
+            guard let edited = TimelineRangeEditing.resizingEnd(
+                TimelineEditRange(start: cue.start, end: cue.end),
+                to: time,
+                lowerBound: 0,
+                upperBound: session.timelineDuration,
+                minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+            ) else { return }
+            cue.start = edited.start
+            cue.end = edited.end
             session.replaceCaption(cue)
         case .captionBody(let id, let originalStart, let originalEnd, let grab):
-            let span = originalEnd - originalStart
             guard var cue = session.document.captions.first(where: { $0.id == id }) else { return }
-            let start = min(max(time - grab, 0), max(0, session.timelineDuration - span))
-            cue.start = start
-            cue.end = start + span
+            guard let edited = TimelineRangeEditing.moving(
+                TimelineEditRange(start: originalStart, end: originalEnd),
+                toStart: time - grab,
+                lowerBound: 0,
+                upperBound: session.timelineDuration,
+                minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+            ) else { return }
+            cue.start = edited.start
+            cue.end = edited.end
             session.replaceCaption(cue)
         case .annotationStart(let id):
             guard var annotation = session.document.annotations.first(where: { $0.id == id }) else { return }
-            annotation.start = min(time, annotation.end - 0.05)
+            guard let edited = TimelineRangeEditing.resizingStart(
+                TimelineEditRange(start: annotation.start, end: annotation.end),
+                to: time,
+                lowerBound: 0,
+                upperBound: session.timelineDuration,
+                minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+            ) else { return }
+            annotation.start = edited.start
+            annotation.end = edited.end
             session.replaceAnnotation(annotation)
         case .annotationEnd(let id):
             guard var annotation = session.document.annotations.first(where: { $0.id == id }) else { return }
-            annotation.end = max(time, annotation.start + 0.05)
+            guard let edited = TimelineRangeEditing.resizingEnd(
+                TimelineEditRange(start: annotation.start, end: annotation.end),
+                to: time,
+                lowerBound: 0,
+                upperBound: session.timelineDuration,
+                minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+            ) else { return }
+            annotation.start = edited.start
+            annotation.end = edited.end
             session.replaceAnnotation(annotation)
         case .annotationBody(let id, let originalStart, let originalEnd, let grab):
-            let span = originalEnd - originalStart
             guard var annotation = session.document.annotations.first(where: { $0.id == id }) else { return }
-            let start = min(max(time - grab, 0), max(0, session.timelineDuration - span))
-            annotation.start = start
-            annotation.end = start + span
+            guard let edited = TimelineRangeEditing.moving(
+                TimelineEditRange(start: originalStart, end: originalEnd),
+                toStart: time - grab,
+                lowerBound: 0,
+                upperBound: session.timelineDuration,
+                minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+            ) else { return }
+            annotation.start = edited.start
+            annotation.end = edited.end
             session.replaceAnnotation(annotation)
         }
     }
@@ -419,69 +485,92 @@ struct TimelineView: View {
     ) -> TimelineDrag {
         let x = point.x
         let handle: CGFloat = 7
-        let trimInX = xPosition(session.document.trimIn, width: width)
-        let trimOutX = xPosition(session.effectiveTrimOut, width: width)
-        if abs(x - trimInX) <= handle { return .trimIn }
-        if abs(x - trimOutX) <= handle { return .trimOut }
+        let time = timeAt(x, width: width, duration: duration)
+        let handleTime = TimeInterval(handle / max(width, 1)) * duration
+        let minimumVisibleTime = TimeInterval(8 / max(width, 1)) * duration
+
+        func rangeHit(_ ranges: [TimelineHitRange]) -> TimelineRangeHit? {
+            TimelineHitTesting.hit(
+                at: time,
+                ranges: ranges,
+                handleTolerance: handleTime,
+                minimumVisibleDuration: minimumVisibleTime
+            )
+        }
 
         if point.y >= height - 26 {
-            for segment in session.document.speedSegments.reversed() {
-                let x0 = xPosition(segment.start, width: width)
-                let x1 = xPosition(segment.end, width: width)
-                if abs(x - x0) <= handle { return .speedStart(segment.id) }
-                if abs(x - x1) <= handle { return .speedEnd(segment.id) }
-                if x >= x0, x <= x1 {
-                    let t = timeAt(x, width: width, duration: duration)
-                    return .speedBody(
-                        segment.id,
-                        start: segment.start,
-                        end: segment.end,
-                        grab: t - segment.start
-                    )
+            let items = session.document.speedSegments.map {
+                TimelineHitRange(id: $0.id, start: $0.start, end: $0.end)
+            }
+            if let hit = rangeHit(items),
+               let segment = session.document.speedSegments.first(where: { $0.id == hit.id })
+            {
+                switch hit {
+                case .start(let id): return .speedStart(id)
+                case .end(let id): return .speedEnd(id)
+                case .body(let id, let grab):
+                    return .speedBody(id, start: segment.start, end: segment.end, grab: grab)
                 }
             }
         }
 
         if point.y >= 40, point.y < 60 {
-            for annotation in session.document.annotations.reversed() {
-                let x0 = xPosition(annotation.start, width: width)
-                let x1 = xPosition(annotation.end, width: width)
-                if abs(x - x0) <= handle { return .annotationStart(annotation.id) }
-                if abs(x - x1) <= handle { return .annotationEnd(annotation.id) }
-                if x >= x0, x <= x1 {
-                    return .annotationBody(annotation.id, start: annotation.start, end: annotation.end, grab: timeAt(x, width: width, duration: duration) - annotation.start)
+            let items = session.document.annotations.map {
+                TimelineHitRange(id: $0.id, start: $0.start, end: $0.end)
+            }
+            if let hit = rangeHit(items),
+               let annotation = session.document.annotations.first(where: { $0.id == hit.id })
+            {
+                switch hit {
+                case .start(let id): return .annotationStart(id)
+                case .end(let id): return .annotationEnd(id)
+                case .body(let id, let grab):
+                    return .annotationBody(id, start: annotation.start, end: annotation.end, grab: grab)
                 }
             }
         }
 
         if point.y >= 18, point.y < 38 {
-            for cue in session.document.captions.reversed() {
-                let x0 = xPosition(cue.start, width: width)
-                let x1 = xPosition(cue.end, width: width)
-                if abs(x - x0) <= handle { return .captionStart(cue.id) }
-                if abs(x - x1) <= handle { return .captionEnd(cue.id) }
-                if x >= x0, x <= x1 {
-                    return .captionBody(cue.id, start: cue.start, end: cue.end, grab: timeAt(x, width: width, duration: duration) - cue.start)
+            let items = session.document.captions.map {
+                TimelineHitRange(id: $0.id, start: $0.start, end: $0.end)
+            }
+            if let hit = rangeHit(items),
+               let cue = session.document.captions.first(where: { $0.id == hit.id })
+            {
+                switch hit {
+                case .start(let id): return .captionStart(id)
+                case .end(let id): return .captionEnd(id)
+                case .body(let id, let grab):
+                    return .captionBody(id, start: cue.start, end: cue.end, grab: grab)
                 }
             }
         }
 
         if point.y >= 58, point.y < 84 {
-            for range in session.document.zoomRanges.reversed() {
-                let x0 = xPosition(range.start, width: width)
-                let x1 = xPosition(range.end, width: width)
-                if abs(x - x0) <= handle { return .zoomStart(range.id) }
-                if abs(x - x1) <= handle { return .zoomEnd(range.id) }
-                if x >= x0, x <= x1 {
-                    let t = timeAt(x, width: width, duration: duration)
-                    return .zoomBody(
-                        range.id,
-                        start: range.start,
-                        end: range.end,
-                        grab: t - range.start
-                    )
+            let items = session.document.zoomRanges.map {
+                TimelineHitRange(id: $0.id, start: $0.start, end: $0.end)
+            }
+            if let hit = rangeHit(items),
+               let range = session.document.zoomRanges.first(where: { $0.id == hit.id })
+            {
+                switch hit {
+                case .start(let id): return .zoomStart(id)
+                case .end(let id): return .zoomEnd(id)
+                case .body(let id, let grab):
+                    return .zoomBody(id, start: range.start, end: range.end, grab: grab)
                 }
             }
+        }
+
+        // Track items win within their lanes so a range can still be selected
+        // when it touches a trim boundary. Elsewhere, choose the nearest trim
+        // handle deterministically when their hit regions overlap.
+        let trimInX = xPosition(session.document.trimIn, width: width)
+        let trimOutX = xPosition(session.effectiveTrimOut, width: width)
+        let trimInDistance = abs(x - trimInX)
+        let trimOutDistance = abs(x - trimOutX)
+        if min(trimInDistance, trimOutDistance) <= handle {
+            return trimInDistance <= trimOutDistance ? .trimIn : .trimOut
         }
         return .playhead
     }

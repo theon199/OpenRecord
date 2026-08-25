@@ -50,53 +50,60 @@ enum EditorExportKind: CaseIterable, Identifiable {
 
 @MainActor
 extension EditorSession {
-    func selectZoom(_ id: UUID?) {
-        selectedZoomID = id
-        if id != nil {
-            selectedSpeedID = nil
-            selectedCaptionID = nil
-            selectedAnnotationID = nil
-            isWebcamSelected = false
-        }
+    var documentSelection: EditorDocumentSelection? {
+        if let selectedZoomID { return .zoom(selectedZoomID) }
+        if let selectedSpeedID { return .speed(selectedSpeedID) }
+        if let selectedCaptionID { return .caption(selectedCaptionID) }
+        if let selectedAnnotationID { return .annotation(selectedAnnotationID) }
+        if isWebcamSelected { return .webcam }
+        return nil
     }
 
-    func selectSpeed(_ id: UUID?) {
-        selectedSpeedID = id
-        if id != nil {
-            selectedZoomID = nil
-            selectedCaptionID = nil
-            selectedAnnotationID = nil
-            isWebcamSelected = false
-        }
-    }
-
-    func selectCaption(_ id: UUID?) {
-        selectedCaptionID = id
-        if id != nil {
-            selectedZoomID = nil
-            selectedSpeedID = nil
-            selectedAnnotationID = nil
-            isWebcamSelected = false
-        }
-    }
-
-    func selectAnnotation(_ id: UUID?) {
-        selectedAnnotationID = id
-        if id != nil {
-            selectedZoomID = nil
-            selectedSpeedID = nil
-            selectedCaptionID = nil
-            isWebcamSelected = false
-        }
-    }
-
-    func selectWebcam() {
-        guard hasWebcamVideo, document.webcamOverlay.enabled else { return }
-        isWebcamSelected = true
+    func applyDocumentSelection(_ selection: EditorDocumentSelection?) {
         selectedZoomID = nil
         selectedSpeedID = nil
         selectedCaptionID = nil
         selectedAnnotationID = nil
+        isWebcamSelected = false
+        switch selection {
+        case .zoom(let id): selectedZoomID = id
+        case .speed(let id): selectedSpeedID = id
+        case .caption(let id): selectedCaptionID = id
+        case .annotation(let id): selectedAnnotationID = id
+        case .webcam: isWebcamSelected = true
+        case .none: break
+        }
+    }
+
+    func selectZoom(_ id: UUID?) {
+        applyDocumentSelection(id.map(EditorDocumentSelection.zoom))
+    }
+
+    func selectSpeed(_ id: UUID?) {
+        applyDocumentSelection(id.map(EditorDocumentSelection.speed))
+    }
+
+    func selectCaption(_ id: UUID?) {
+        applyDocumentSelection(id.map(EditorDocumentSelection.caption))
+    }
+
+    func selectAnnotation(_ id: UUID?) {
+        applyDocumentSelection(id.map(EditorDocumentSelection.annotation))
+    }
+
+    func selectWebcam() {
+        guard hasWebcamVideo, document.webcamOverlay.enabled else { return }
+        applyDocumentSelection(.webcam)
+    }
+
+    func deleteSelectedTimelineItem() {
+        switch documentSelection {
+        case .zoom: deleteSelectedZoom()
+        case .speed: deleteSelectedSpeedSegment()
+        case .caption: deleteSelectedCaption()
+        case .annotation: deleteSelectedAnnotation()
+        case .webcam, .none: break
+        }
     }
 
     func addCaptionAtPlayhead() {
@@ -161,6 +168,7 @@ extension EditorSession {
             isWebcamSelected = false
             documentDidChange(from: before, actionName: "Import Captions")
         } catch {
+            lastErrorCategory = .projectContent
             lastError = "Could not import captions: \(error.localizedDescription)"
         }
     }

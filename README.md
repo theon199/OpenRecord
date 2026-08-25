@@ -71,6 +71,22 @@ Open a project from the sidebar.
 
 The Export inspector also creates animated GIFs (up to 30 seconds), mixed-audio M4A files, and a PNG of the current playhead frame (⌘⇧E). **Batch Export** in the library exports every project in the current library as H.264 MP4.
 
+### Direct manipulation, parity, and recovery
+
+When a webcam overlay is enabled, visible at the playhead, and selected in the preview, click-drag it to move it and use its resize handle to change its size. The inspector position and size controls update live as the pointer moves. Choose **Circle** or **Rounded rectangle** for the shape; the preview updates immediately, keeps the overlay within the canvas, and preserves the normalized placement as the canvas aspect ratio changes. A continuous move or resize gesture is one undo step.
+
+Preview and export use the same normalized `WebcamOverlayLayout` geometry and timestamp mapping, and export renders the current in-memory document. Webcam position, size, shape, mirroring, and timing therefore carry through to the exported frame within the documented small pixel tolerance. The preview remains an interactive approximation rather than the full export compositor: codec/color conversion, frame rounding, antialiasing, and other final-encoding details can produce small pixel-level differences. Inspect the rendered file when exact final pixels matter.
+
+The timeline clamps the playhead and trim handles to the recording duration. Trim keeps at least 0.1 seconds; zoom and speed ranges keep at least 0.12 seconds and cannot cross neighboring ranges; caption and annotation cues keep at least 0.05 seconds. Moving a range preserves its duration and clamps it at the start/end or against its neighbors. These rules also apply when dragging across a trim boundary or when the playhead is exactly at the first or last timestamp. Timeline moves/resizes, webcam gestures, and other continuous edits coalesce into meaningful history entries; use **Undo** (⌘Z) and **Redo** (⇧⌘Z) to reverse a complete gesture.
+
+If capture is interrupted, OpenRecord keeps the usable display recording as the primary recovery criterion. When display media can be finalized, it opens a recovered `.openrecord` project with a warning and retains any healthy optional tracks; a missing or truncated webcam/audio track is reported rather than discarding the display session. Capture health and track timing are retained locally in `meta.json`. Free-space guardrails are conservative: OpenRecord warns at 2 GiB available, and at 512 MiB or below it stops early to preserve and recover the display recording. Those are safety floors, not recommended working space. For long or 4K captures, keep substantially more than 2 GiB free—enough for the expected source media, project overhead, and any export destination on the same volume.
+
+### Copy Diagnostics and privacy
+
+Use **Copy Diagnostics** in the editor toolbar, then paste the clipboard text into a support report. The report contains only local technical facts needed to troubleshoot: app version/build, macOS version and Apple Silicon architecture, project format version, capture-health warnings, track presence/durations/offsets, export settings, and the last local error category. It does not upload anything.
+
+Diagnostics never include recorded pixels, audio, keyboard content, captions, annotation text, other project content, device identifiers, project names, or file-system paths. Review the copied text before sharing it.
+
 ## Project format
 
 Each recording is a folder package:

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — v2.5 hardening (Phases 1–6)
+
+This is the unreleased v2.5 hardening scope through Phase 6. It does not include the Phase 7 release-candidate soak matrix, and v2.5 has not been released.
+
+### Improved
+
+- Expanded regression and CI coverage for webcam geometry, speed mapping, keyboard privacy, compositor golden frames, capture recovery, project migration, and document round trips.
+- Webcam direct manipulation now supports live move/resize/shape editing with coalesced undo, while shared geometry and timing paths keep preview and export aligned within the defined pixel tolerance.
+- Capture interruption and low-disk paths preserve usable display media, recover degraded projects with warnings, and retain local track-health and synchronization diagnostics.
+- Export hot-path work adds bounded frame preparation, progress/ETA and cancellation behavior, with performance measurements for long and high-resolution recordings.
+- Timeline edge cases are clamped to valid durations and neighboring ranges; move/resize gestures and other continuous edits form intentional undo/redo entries.
+- Local **Copy Diagnostics** is privacy-safe by default: it contains technical metadata only and excludes recorded media, keyboard content, captions, annotation text, and project content.
+
 ## 2.2.0 — 2026-08-24
 
 OpenRecord v2.2 completes the v2 roadmap for tutorial and marketing workflows.
