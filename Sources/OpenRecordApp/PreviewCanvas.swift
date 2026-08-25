@@ -430,20 +430,42 @@ struct PreviewCanvas: View {
             let rect = mapRect(geometry.frame, from: canvasSize, into: outer)
             let radius = geometry.cornerRadius * Double(viewScale)
             let shape = WebcamPreviewShape(kind: settings.shape, cornerRadius: radius)
+            let border = WebcamOverlayLayout.borderWidth(
+                settings: settings,
+                frame: geometry.frame
+            ) * viewScale
+            let contentSize = CGSize(
+                width: max(rect.width - border * 2, 1),
+                height: max(rect.height - border * 2, 1)
+            )
+            let contentShape = WebcamPreviewShape(
+                kind: settings.shape,
+                cornerRadius: max(radius - Double(border), 0)
+            )
 
             ZStack(alignment: .bottomTrailing) {
-                PlayerLayerView(player: player, videoGravity: .resizeAspectFill)
-                    .scaleEffect(x: mirror ? -1 : 1, y: 1)
+                ZStack {
+                    shape.fill(.white)
+                    PlayerLayerView(player: player, videoGravity: .resizeAspectFill)
+                        .scaleEffect(x: mirror ? -1 : 1, y: 1)
+                        .frame(width: contentSize.width, height: contentSize.height)
+                        .clipShape(contentShape)
+                }
                     .frame(width: rect.width, height: rect.height)
-                    .clipShape(shape)
                     .overlay(
                         shape.stroke(
-                            .white,
-                            lineWidth: settings.borderWidth * Double(viewScale)
+                            Color.accentColor,
+                            lineWidth: session.isWebcamSelected ? 2 : 0
                         )
                     )
                     .contentShape(shape)
-                    .gesture(webcamMoveGesture(outer: outer))
+                    .gesture(
+                        webcamMoveGesture(
+                            canvasSize: canvasSize,
+                            viewScale: viewScale
+                        )
+                    )
+                    .onTapGesture { session.selectWebcam() }
                     .onHover { hovering in
                         if webcamDrag != nil {
                             NSCursor.closedHand.set()
@@ -454,20 +476,22 @@ struct PreviewCanvas: View {
                         }
                     }
 
-                Circle()
-                    .fill(.white)
-                    .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
-                    .frame(width: 14, height: 14)
-                    .offset(x: 4, y: 4)
-                    .contentShape(Circle().inset(by: -6))
-                    .gesture(
-                        webcamResizeGesture(
-                            canvasSize: canvasSize,
-                            viewScale: viewScale
+                if session.isWebcamSelected {
+                    Circle()
+                        .fill(.white)
+                        .overlay(Circle().stroke(.black.opacity(0.45), lineWidth: 1))
+                        .frame(width: 14, height: 14)
+                        .offset(x: 4, y: 4)
+                        .contentShape(Circle().inset(by: -6))
+                        .gesture(
+                            webcamResizeGesture(
+                                canvasSize: canvasSize,
+                                viewScale: viewScale
+                            )
                         )
-                    )
-                    .help("Drag to resize the webcam overlay")
-                    .accessibilityLabel("Resize webcam overlay")
+                        .help("Drag to resize the webcam overlay")
+                        .accessibilityLabel("Resize webcam overlay")
+                }
             }
             .frame(width: rect.width, height: rect.height)
             .position(x: rect.midX, y: rect.midY)
@@ -481,23 +505,37 @@ struct PreviewCanvas: View {
         }
     }
 
-    private func webcamMoveGesture(outer: CGRect) -> some Gesture {
+    private func webcamMoveGesture(
+        canvasSize: CGSize,
+        viewScale: CGFloat
+    ) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 if webcamDrag == nil {
                     session.pause()
+                    session.selectWebcam()
                     session.beginDocumentEdit(actionName: "Move Webcam Overlay")
                     webcamDrag = WebcamOverlayDrag(
-                        originalPosition: session.document.webcamOverlay.position
+                        originalSettings: WebcamOverlayLayout.clampedSettings(
+                            session.document.webcamOverlay,
+                            canvasSize: canvasSize,
+                            sourceAspect: session.webcamAspect
+                        )
                     )
                 }
                 guard let webcamDrag else { return }
-                let x = webcamDrag.originalPosition.x
-                    + Double(value.translation.width / max(outer.width, 1))
-                let y = webcamDrag.originalPosition.y
-                    + Double(value.translation.height / max(outer.height, 1))
+                let translation = CGSize(
+                    width: value.translation.width / max(viewScale, 0.000_001),
+                    height: value.translation.height / max(viewScale, 0.000_001)
+                )
+                let next = WebcamOverlayLayout.moving(
+                    webcamDrag.originalSettings,
+                    translation: translation,
+                    canvasSize: canvasSize,
+                    sourceAspect: session.webcamAspect
+                )
                 session.updateWebcamOverlay(actionName: "Move Webcam Overlay") {
-                    $0.position = Point2D(x: x, y: y)
+                    $0 = next
                 }
                 NSCursor.closedHand.set()
             }
@@ -516,18 +554,29 @@ struct PreviewCanvas: View {
             .onChanged { value in
                 if webcamResize == nil {
                     session.pause()
+                    session.selectWebcam()
                     session.beginDocumentEdit(actionName: "Resize Webcam Overlay")
                     webcamResize = WebcamOverlayResize(
-                        originalSize: session.document.webcamOverlay.size
+                        originalSettings: WebcamOverlayLayout.clampedSettings(
+                            session.document.webcamOverlay,
+                            canvasSize: canvasSize,
+                            sourceAspect: session.webcamAspect
+                        )
                     )
                 }
                 guard let webcamResize else { return }
-                let denominator = max(min(canvasSize.width, canvasSize.height) * viewScale, 1)
-                let delta = Double(
-                    (value.translation.width + value.translation.height) / (2 * denominator)
+                let translation = CGSize(
+                    width: value.translation.width / max(viewScale, 0.000_001),
+                    height: value.translation.height / max(viewScale, 0.000_001)
+                )
+                let next = WebcamOverlayLayout.resizing(
+                    webcamResize.originalSettings,
+                    translation: translation,
+                    canvasSize: canvasSize,
+                    sourceAspect: session.webcamAspect
                 )
                 session.updateWebcamOverlay(actionName: "Resize Webcam Overlay") {
-                    $0.size = webcamResize.originalSize + delta
+                    $0 = next
                 }
             }
             .onEnded { _ in
@@ -829,11 +878,11 @@ private struct ZoomAnchorDrag {
 }
 
 private struct WebcamOverlayDrag {
-    var originalPosition: Point2D
+    var originalSettings: WebcamOverlaySettings
 }
 
 private struct WebcamOverlayResize {
-    var originalSize: Double
+    var originalSettings: WebcamOverlaySettings
 }
 
 private struct AnnotationDrag {

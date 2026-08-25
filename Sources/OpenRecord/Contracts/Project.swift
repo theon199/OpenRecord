@@ -459,6 +459,8 @@ public enum WebcamOverlayShape: String, Codable, CaseIterable, Sendable, Hashabl
 public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
     public static let sizeRange = 0.08...0.4
     public static let borderWidthRange = 0.0...12.0
+    public static let defaultPosition = Point2D(x: 0.85, y: 0.82)
+    public static let defaultSize = 0.18
 
     public var enabled: Bool
     public var shape: WebcamOverlayShape
@@ -472,8 +474,8 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
     public init(
         enabled: Bool = false,
         shape: WebcamOverlayShape = .circle,
-        position: Point2D = Point2D(x: 0.85, y: 0.82),
-        size: Double = 0.18,
+        position: Point2D = Self.defaultPosition,
+        size: Double = Self.defaultSize,
         borderWidth: Double = 3,
         shadow: Bool = true
     ) {
@@ -501,8 +503,8 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         shape = (try? container.decode(WebcamOverlayShape.self, forKey: .shape)) ?? .circle
         position = try container.decodeIfPresent(Point2D.self, forKey: .position)
-            ?? Point2D(x: 0.85, y: 0.82)
-        size = try container.decodeIfPresent(Double.self, forKey: .size) ?? 0.18
+            ?? Self.defaultPosition
+        size = try container.decodeIfPresent(Double.self, forKey: .size) ?? Self.defaultSize
         borderWidth = try container.decodeIfPresent(Double.self, forKey: .borderWidth) ?? 3
         shadow = try container.decodeIfPresent(Bool.self, forKey: .shadow) ?? true
     }

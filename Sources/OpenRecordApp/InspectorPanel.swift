@@ -191,6 +191,24 @@ struct InspectorPanel: View {
                         .pickerStyle(.segmented)
 
                         labeledSlider(
+                            "Horizontal position",
+                            value: webcamOverlayPositionX,
+                            range: 0...1,
+                            format: "%.0f%%",
+                            actionName: "Move Webcam Overlay",
+                            step: 0.01,
+                            displayScale: 100
+                        )
+                        labeledSlider(
+                            "Vertical position",
+                            value: webcamOverlayPositionY,
+                            range: 0...1,
+                            format: "%.0f%%",
+                            actionName: "Move Webcam Overlay",
+                            step: 0.01,
+                            displayScale: 100
+                        )
+                        labeledSlider(
                             "Size",
                             value: webcamOverlaySize,
                             range: WebcamOverlaySettings.sizeRange,
@@ -208,7 +226,13 @@ struct InspectorPanel: View {
                             step: 1
                         )
                         Toggle("Shadow", isOn: webcamOverlayShadow)
-                        Text("Drag the webcam in the preview to move it; use its lower-right handle to resize.")
+                        Button("Reset Position and Size") {
+                            session.updateWebcamOverlay(actionName: "Reset Webcam Overlay") {
+                                $0.position = WebcamOverlaySettings.defaultPosition
+                                $0.size = WebcamOverlaySettings.defaultSize
+                            }
+                        }
+                        Text("Click the webcam in the preview to select it, then drag it or use its lower-right resize handle.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -594,6 +618,9 @@ struct InspectorPanel: View {
                 session.updateWebcamOverlay(actionName: "Toggle Webcam Overlay") {
                     $0.enabled = enabled
                 }
+                if enabled {
+                    session.selectWebcam()
+                }
             }
         )
     }
@@ -615,6 +642,28 @@ struct InspectorPanel: View {
             set: { size in
                 session.updateWebcamOverlay(actionName: "Resize Webcam Overlay") {
                     $0.size = size
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayPositionX: Binding<Double> {
+        Binding(
+            get: { session.document.webcamOverlay.position.x },
+            set: { x in
+                session.updateWebcamOverlay(actionName: "Move Webcam Overlay") {
+                    $0.position.x = x
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayPositionY: Binding<Double> {
+        Binding(
+            get: { session.document.webcamOverlay.position.y },
+            set: { y in
+                session.updateWebcamOverlay(actionName: "Move Webcam Overlay") {
+                    $0.position.y = y
                 }
             }
         )

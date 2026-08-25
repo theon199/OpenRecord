@@ -56,6 +56,7 @@ extension EditorSession {
             selectedSpeedID = nil
             selectedCaptionID = nil
             selectedAnnotationID = nil
+            isWebcamSelected = false
         }
     }
 
@@ -65,6 +66,7 @@ extension EditorSession {
             selectedZoomID = nil
             selectedCaptionID = nil
             selectedAnnotationID = nil
+            isWebcamSelected = false
         }
     }
 
@@ -74,6 +76,7 @@ extension EditorSession {
             selectedZoomID = nil
             selectedSpeedID = nil
             selectedAnnotationID = nil
+            isWebcamSelected = false
         }
     }
 
@@ -83,7 +86,17 @@ extension EditorSession {
             selectedZoomID = nil
             selectedSpeedID = nil
             selectedCaptionID = nil
+            isWebcamSelected = false
         }
+    }
+
+    func selectWebcam() {
+        guard hasWebcamVideo, document.webcamOverlay.enabled else { return }
+        isWebcamSelected = true
+        selectedZoomID = nil
+        selectedSpeedID = nil
+        selectedCaptionID = nil
+        selectedAnnotationID = nil
     }
 
     func addCaptionAtPlayhead() {
@@ -145,6 +158,7 @@ extension EditorSession {
             selectedZoomID = nil
             selectedSpeedID = nil
             selectedAnnotationID = nil
+            isWebcamSelected = false
             documentDidChange(from: before, actionName: "Import Captions")
         } catch {
             lastError = "Could not import captions: \(error.localizedDescription)"
@@ -199,6 +213,7 @@ extension EditorSession {
     func updateVideoExportSettings(_ body: (inout VideoExportSettings) -> Void) {
         let before = document
         body(&document.videoExportSettings)
+        clampWebcamOverlayToCanvas()
         documentDidChange(from: before, actionName: "Change Export Settings")
     }
 

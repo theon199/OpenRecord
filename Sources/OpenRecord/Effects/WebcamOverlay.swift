@@ -14,6 +14,95 @@ public struct WebcamOverlayGeometry: Sendable, Hashable {
 
 /// Shared canvas-pixel geometry for the editor and export compositor.
 public enum WebcamOverlayLayout: Sendable {
+    /// Returns document settings whose stored center matches the fully-visible
+    /// center used by both preview and export. Keeping that canonical position
+    /// in the document prevents the overlay from jumping when a drag begins
+    /// after a canvas-aspect or overlay-size change.
+    public static func clampedSettings(
+        _ rawSettings: WebcamOverlaySettings,
+        canvasSize: CGSize,
+        sourceAspect: Double = 16.0 / 9.0
+    ) -> WebcamOverlaySettings {
+        var settings = rawSettings.normalized
+        guard canvasSize.width > 1, canvasSize.height > 1 else { return settings }
+
+        var layoutSettings = settings
+        layoutSettings.enabled = true
+        guard let geometry = geometry(
+            settings: layoutSettings,
+            canvasSize: canvasSize,
+            sourceAspect: sourceAspect
+        ) else { return settings }
+
+        settings.position = Point2D(
+            x: Double(geometry.frame.midX / canvasSize.width),
+            y: Double(geometry.frame.midY / canvasSize.height)
+        )
+        return settings
+    }
+
+    /// Applies a canvas-pixel drag to a stable starting snapshot. Callers keep
+    /// that snapshot for the duration of a gesture so each pointer update is
+    /// deterministic and the document can coalesce the gesture into one edit.
+    public static func moving(
+        _ originalSettings: WebcamOverlaySettings,
+        translation: CGSize,
+        canvasSize: CGSize,
+        sourceAspect: Double = 16.0 / 9.0
+    ) -> WebcamOverlaySettings {
+        var settings = clampedSettings(
+            originalSettings,
+            canvasSize: canvasSize,
+            sourceAspect: sourceAspect
+        )
+        guard canvasSize.width > 1, canvasSize.height > 1 else { return settings }
+        settings.position = Point2D(
+            x: settings.position.x + Double(translation.width / canvasSize.width),
+            y: settings.position.y + Double(translation.height / canvasSize.height)
+        )
+        return clampedSettings(
+            settings,
+            canvasSize: canvasSize,
+            sourceAspect: sourceAspect
+        )
+    }
+
+    /// Applies a lower-right handle drag in canvas pixels. Projecting both
+    /// pointer axes onto the handle's diagonal keeps the handle under the
+    /// pointer while preserving the shape's authored aspect ratio.
+    public static func resizing(
+        _ originalSettings: WebcamOverlaySettings,
+        translation: CGSize,
+        canvasSize: CGSize,
+        sourceAspect: Double = 16.0 / 9.0
+    ) -> WebcamOverlaySettings {
+        var settings = clampedSettings(
+            originalSettings,
+            canvasSize: canvasSize,
+            sourceAspect: sourceAspect
+        )
+        let shortEdge = min(canvasSize.width, canvasSize.height)
+        guard shortEdge > 1 else { return settings }
+        let widthFactor: CGFloat
+        switch settings.shape {
+        case .circle:
+            widthFactor = 1
+        case .roundedRectangle:
+            widthFactor = CGFloat(
+                min(max(sourceAspect.isFinite ? sourceAspect : 16.0 / 9.0, 1.2), 1.9)
+            )
+        }
+        settings.size += Double(
+            2 * (widthFactor * translation.width + translation.height)
+                / (shortEdge * (widthFactor * widthFactor + 1))
+        )
+        return clampedSettings(
+            settings,
+            canvasSize: canvasSize,
+            sourceAspect: sourceAspect
+        )
+    }
+
     public static func geometry(
         settings rawSettings: WebcamOverlaySettings,
         canvasSize: CGSize,
@@ -59,6 +148,16 @@ public enum WebcamOverlayLayout: Sendable {
             cornerRadius: cornerRadius
         )
     }
+
+    public static func borderWidth(
+        settings: WebcamOverlaySettings,
+        frame: CGRect
+    ) -> CGFloat {
+        min(
+            CGFloat(settings.normalized.borderWidth),
+            min(frame.width, frame.height) / 4
+        )
+    }
 }
 
 enum WebcamOverlayRenderer {
@@ -81,28 +180,11 @@ enum WebcamOverlayRenderer {
             fromTopLeft: geometry.frame,
             canvasHeight: canvasSize.height
         )
-        let border = min(
-            CGFloat(settings.normalized.borderWidth),
-            min(outerRect.width, outerRect.height) / 4
-        )
+        let border = WebcamOverlayLayout.borderWidth(settings: settings, frame: outerRect)
         let contentRect = outerRect.insetBy(dx: border, dy: border)
         guard contentRect.width > 1, contentRect.height > 1 else { return nil }
 
-        let source: CIImage
-        if mirror {
-            source = webcam.transformed(
-                by: CGAffineTransform(
-                    a: -1,
-                    b: 0,
-                    c: 0,
-                    d: 1,
-                    tx: extent.minX + extent.maxX,
-                    ty: 0
-                )
-            )
-        } else {
-            source = webcam
-        }
+        let source = webcam.transformed(by: sourceTransform(extent: extent, mirror: mirror))
 
         let placed = aspectFill(source, into: contentRect)
         let innerRadius = max(0, CGFloat(geometry.cornerRadius) - border)
@@ -138,6 +220,18 @@ enum WebcamOverlayRenderer {
             .applyingGaussianBlur(sigma: 12)
             .cropped(to: shadowExtent)
         return bubble.composited(over: shadow)
+    }
+
+    static func sourceTransform(extent: CGRect, mirror: Bool) -> CGAffineTransform {
+        guard mirror else { return .identity }
+        return CGAffineTransform(
+            a: -1,
+            b: 0,
+            c: 0,
+            d: 1,
+            tx: extent.minX + extent.maxX,
+            ty: 0
+        )
     }
 
     private static func aspectFill(_ image: CIImage, into destination: CGRect) -> CIImage {

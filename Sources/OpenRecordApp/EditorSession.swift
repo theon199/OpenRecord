@@ -54,6 +54,7 @@ final class EditorSession {
     var selectedSpeedID: UUID?
     var selectedCaptionID: UUID?
     var selectedAnnotationID: UUID?
+    var isWebcamSelected = false
     var copyExportToLibrary = false
     var exportProgress: Double?
     var lastError: String?
@@ -605,6 +606,7 @@ final class EditorSession {
         let before = document
         body(&document.canvas)
         document.stylePresetID = CanvasPreset.matching(document.canvas)?.id
+        clampWebcamOverlayToCanvas()
         documentDidChange(from: before, actionName: actionName)
     }
 
@@ -612,6 +614,7 @@ final class EditorSession {
         let before = document
         preset.apply(to: &document.canvas)
         document.stylePresetID = preset.id
+        clampWebcamOverlayToCanvas()
         documentDidChange(from: before, actionName: "Apply \(preset.name) Style")
     }
 
@@ -631,8 +634,26 @@ final class EditorSession {
     ) {
         let before = document
         body(&document.webcamOverlay)
-        document.webcamOverlay = document.webcamOverlay.normalized
+        clampWebcamOverlayToCanvas()
+        if !document.webcamOverlay.enabled {
+            isWebcamSelected = false
+        }
         documentDidChange(from: before, actionName: actionName)
+    }
+
+    func clampWebcamOverlayToCanvas() {
+        let outputSize = ExportLayout.outputPixelSize(
+            aspectWidth: document.canvas.aspectWidth,
+            aspectHeight: document.canvas.aspectHeight,
+            resolution: document.videoExportSettings.resolution,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight
+        )
+        document.webcamOverlay = WebcamOverlayLayout.clampedSettings(
+            document.webcamOverlay,
+            canvasSize: CGSize(width: outputSize.width, height: outputSize.height),
+            sourceAspect: webcamAspect
+        )
     }
 
     func updateAutoZoomSensitivity(_ sensitivity: AutoZoomSensitivity) {
@@ -803,6 +824,7 @@ final class EditorSession {
         selectedSpeedID = nil
         selectedCaptionID = nil
         selectedAnnotationID = nil
+        isWebcamSelected = false
         documentHistory.removeAll()
         rebuildEngine()
         // Serialize behind any save already in flight, then restore the last
