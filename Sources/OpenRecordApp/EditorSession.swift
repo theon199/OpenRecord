@@ -995,18 +995,12 @@ final class EditorSession {
     }
 
     private func webcamSourceTime(at screenTime: TimeInterval) -> TimeInterval? {
-        if let diagnostics = meta.captureDiagnostics,
-           let webcamDiagnostic = diagnostics.diagnostic(for: .webcam),
-           webcamDiagnostic.status == .complete
-               || webcamDiagnostic.status == .truncated
-        {
-            return diagnostics.sourceTime(
-                for: .webcam,
-                atTimelineTime: screenTime
-            )
-        }
-        let localTime = screenTime - (meta.captureTiming?.webcamOffset ?? 0)
-        return localTime >= 0 && localTime <= webcamDuration ? localTime : nil
+        WebcamTimeline.sourceTime(
+            atTimelineTime: screenTime,
+            sourceDuration: webcamDuration,
+            legacyOffset: meta.captureTiming?.webcamOffset ?? 0,
+            diagnostics: meta.captureDiagnostics
+        )
     }
 
     private var webcamTimelineOffset: TimeInterval {

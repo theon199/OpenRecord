@@ -139,6 +139,38 @@ public struct CaptureDiagnostics: Codable, Sendable, Hashable {
     }
 }
 
+/// Shared preview/export mapping for the optional webcam track. Keeping the
+/// legacy offset fallback here prevents the editor and compositor from
+/// disagreeing at the webcam's first or last frame.
+public enum WebcamTimeline: Sendable {
+    public static func sourceTime(
+        atTimelineTime timelineTime: TimeInterval,
+        sourceDuration: TimeInterval,
+        legacyOffset: TimeInterval = 0,
+        diagnostics: CaptureDiagnostics? = nil
+    ) -> TimeInterval? {
+        guard timelineTime.isFinite else { return nil }
+
+        if let diagnostics,
+           let webcamDiagnostic = diagnostics.diagnostic(for: .webcam),
+           webcamDiagnostic.status == .complete || webcamDiagnostic.status == .truncated
+        {
+            return diagnostics.sourceTime(
+                for: .webcam,
+                atTimelineTime: timelineTime
+            )
+        }
+
+        guard sourceDuration.isFinite,
+              sourceDuration >= 0,
+              legacyOffset.isFinite
+        else { return nil }
+        let offset = legacyOffset
+        let localTime = timelineTime - offset
+        return localTime >= 0 && localTime <= sourceDuration ? localTime : nil
+    }
+}
+
 /// Hardware-free observation used by the analyzer and accelerated soak tests.
 public struct CaptureTrackObservation: Sendable, Hashable {
     public var track: CaptureTrackKind

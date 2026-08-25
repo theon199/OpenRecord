@@ -344,22 +344,12 @@ private enum ExportSession {
 
             try autoreleasepool {
                 let source = try reader.image(at: t)
-                let webcamTime: TimeInterval?
-                if let captureDiagnostics,
-                   let webcamDiagnostic = captureDiagnostics.diagnostic(for: .webcam),
-                   webcamDiagnostic.status == .complete
-                       || webcamDiagnostic.status == .truncated
-                {
-                    webcamTime = captureDiagnostics.sourceTime(
-                        for: .webcam,
-                        atTimelineTime: t
-                    )
-                } else {
-                    let legacyTime = t - webcamOffset
-                    webcamTime = legacyTime >= 0 && legacyTime <= webcamDuration
-                        ? legacyTime
-                        : nil
-                }
+                let webcamTime = WebcamTimeline.sourceTime(
+                    atTimelineTime: t,
+                    sourceDuration: webcamDuration,
+                    legacyOffset: webcamOffset,
+                    diagnostics: captureDiagnostics
+                )
                 let webcamFrame: CIImage?
                 if let webcamReader,
                    let webcamTime,

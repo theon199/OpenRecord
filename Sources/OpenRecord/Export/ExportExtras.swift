@@ -246,22 +246,12 @@ private final class ExportFrameSession: @unchecked Sendable {
 
     func image(at time: TimeInterval) throws -> CGImage? {
         let source = try reader.image(at: time)
-        let webcamTime: TimeInterval?
-        if let captureDiagnostics,
-           let webcamDiagnostic = captureDiagnostics.diagnostic(for: .webcam),
-           webcamDiagnostic.status == .complete
-               || webcamDiagnostic.status == .truncated
-        {
-            webcamTime = captureDiagnostics.sourceTime(
-                for: .webcam,
-                atTimelineTime: time
-            )
-        } else {
-            let legacyTime = time - webcamOffset
-            webcamTime = legacyTime >= 0 && legacyTime <= webcamDuration
-                ? legacyTime
-                : nil
-        }
+        let webcamTime = WebcamTimeline.sourceTime(
+            atTimelineTime: time,
+            sourceDuration: webcamDuration,
+            legacyOffset: webcamOffset,
+            diagnostics: captureDiagnostics
+        )
         let webcam = webcamReader.flatMap { reader in
             webcamTime.flatMap { try? reader.image(at: $0) }
         }

@@ -54,19 +54,19 @@ public struct KeyboardOverlayTimeline: Sendable {
     ) -> KeyboardOverlayState {
         let settings = rawSettings.normalized
         guard settings.enabled, !presses.isEmpty else { return KeyboardOverlayState() }
-        let lifetime = settings.fadeDelay + Self.fadeDuration
         var visible: [KeyboardOverlayKey] = []
         visible.reserveCapacity(settings.maxVisibleKeys)
 
         var index = upperBound(for: time) - 1
         while index >= 0, visible.count < settings.maxVisibleKeys {
             let press = presses[index]
-            let age = time - press.sample.t
-            if age > lifetime { break }
-            if age >= 0 {
-                let opacity = age <= settings.fadeDelay
+            let fadeStart = press.sample.t + settings.fadeDelay
+            let fadeEnd = fadeStart + Self.fadeDuration
+            if time >= fadeEnd { break }
+            if time >= press.sample.t {
+                let opacity = time <= fadeStart
                     ? 1
-                    : 1 - (age - settings.fadeDelay) / Self.fadeDuration
+                    : 1 - (time - fadeStart) / Self.fadeDuration
                 visible.append(
                     KeyboardOverlayKey(
                         id: press.id,
