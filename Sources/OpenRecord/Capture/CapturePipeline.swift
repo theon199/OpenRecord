@@ -13,6 +13,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private let cursor = CursorMonitor()
     private let mic = MicrophoneRecorder()
     private let webcam = WebcamRecorder()
+    private let healthMonitor = CaptureHealthMonitor()
     private var stream: SCStream?
     private var videoWriter: SampleBufferWriter?
     private var systemAudioWriter: SampleBufferWriter?
@@ -24,15 +25,20 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private var createdAt = Date()
     private var cursorSprite: CursorSprite?
     private var streamError: Error?
+    private var componentError: Error?
     private var originHostTime: CFTimeInterval?
     private var systemAudioOffset: TimeInterval?
     private var originCMTime: CMTime?
     private var stopping = false
+    private var captureStarted = false
+    private var pendingUnexpectedError: Error?
     private var unexpectedNotified = false
     private var healthWarnings = Set<CaptureWarningCode>()
     private var targetInitialBounds: Rect2D?
     private var capturesWebcam = false
-    var onUnexpectedStop: ((Error) -> Void)?
+    private var webcamActive = false
+    private var microphoneActive = false
+    var onUnexpectedStop: (@Sendable (Error) -> Void)?
 
     func start(
         target: CaptureTarget,
@@ -49,27 +55,87 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         displayBounds = bounds; self.scale = scale; targetInitialBounds = bounds
         if case .window = target, let windowBounds = Self.windowBounds(for: target, content: content) { targetInitialBounds = windowBounds }
         try writeProvisionalMeta()
-        videoWriter = try SampleBufferWriter.video(url: ProjectLayout.displayVideoURL(in: projectURL), width: pixelWidth, height: pixelHeight, queue: videoQueue)
-        systemAudioWriter = try SampleBufferWriter.systemAudio(url: ProjectLayout.systemAudioURL(in: projectURL), queue: audioQueue)
+        try healthMonitor.start(
+            projectURL: projectURL,
+            capturesWebcam: capturesWebcam
+        ) { [weak self] event in
+            guard let self else { return }
+            switch event {
+            case .warning(let warning):
+                self.recordWarning(warning)
+            case .stop(let warning, let message):
+                self.recordWarning(warning)
+                self.requestUnexpectedStop(error: OpenRecordError.io(message))
+            }
+        }
+        do {
+            videoWriter = try SampleBufferWriter.video(url: ProjectLayout.displayVideoURL(in: projectURL), width: pixelWidth, height: pixelHeight, queue: videoQueue)
+        } catch {
+            _ = healthMonitor.stop()
+            throw error
+        }
+        videoWriter?.onFailure = { [weak self] error in
+            self?.recordWarning(.truncatedVideo)
+            self?.requestUnexpectedStop(error: error)
+        }
+        do {
+            systemAudioWriter = try SampleBufferWriter.systemAudio(
+                url: ProjectLayout.systemAudioURL(in: projectURL),
+                queue: audioQueue
+            )
+            systemAudioWriter?.onFailure = { [weak self] error in
+                self?.recordOptionalFailure(error, warning: .truncatedSystemAudio)
+            }
+        } catch {
+            systemAudioWriter = nil
+            recordOptionalFailure(error, warning: .missingSystemAudio)
+        }
         let targetURL = ProjectLayout.targetGeometryURL(in: projectURL)
         let keysURL = capturesKeyboardShortcuts ? ProjectLayout.keysURL(in: projectURL) : nil
+        cursor.onTargetUnavailable = { [weak self] in
+            guard let self else { return }
+            self.recordWarning(.captureTargetUnavailable)
+            self.requestUnexpectedStop(
+                error: OpenRecordError.io(
+                    "The captured window closed or became unavailable. OpenRecord is finalizing the display recording."
+                )
+            )
+        }
+        mic.onFailure = { [weak self] error in
+            self?.recordOptionalFailure(error, warning: .microphoneInterrupted)
+        }
+        webcam.onFailure = { [weak self] error in
+            self?.recordOptionalFailure(error, warning: .cameraInterrupted)
+        }
         do {
             try await MainActor.run {
                 try cursor.start(mouseURL: ProjectLayout.mouseURL(in: projectURL), clicksURL: ProjectLayout.clicksURL(in: projectURL), target: target, initialBounds: targetInitialBounds, targetURL: targetURL, keysURL: keysURL)
-                try mic.start(url: ProjectLayout.microphoneAudioURL(in: projectURL))
-            }
-            if capturesWebcam {
-                try await webcam.start(url: ProjectLayout.webcamVideoURL(in: projectURL))
             }
         } catch {
-            await teardownCaptureComponents()
-            try? cursor.closeFiles()
-            videoWriter = nil
-            systemAudioWriter = nil
-            throw error
+            recordWarning(.truncatedMouseTelemetry)
+            recordWarning(.truncatedClickTelemetry)
+            recordWarning(.truncatedTargetGeometry)
+            if capturesKeyboardShortcuts { recordWarning(.truncatedKeyboardTelemetry) }
+            recordComponentError(error)
+        }
+        do {
+            try await MainActor.run {
+                try mic.start(url: ProjectLayout.microphoneAudioURL(in: projectURL))
+            }
+            microphoneActive = true
+        } catch {
+            recordOptionalFailure(error, warning: .missingMicrophone)
+        }
+        if capturesWebcam {
+            do {
+                try await webcam.start(url: ProjectLayout.webcamVideoURL(in: projectURL))
+                webcamActive = true
+            } catch {
+                recordOptionalFailure(error, warning: .missingWebcam)
+            }
         }
         let configuration = SCStreamConfiguration()
-        configuration.capturesAudio = true; configuration.excludesCurrentProcessAudio = true; configuration.showsCursor = false
+        configuration.capturesAudio = systemAudioWriter != nil; configuration.excludesCurrentProcessAudio = true; configuration.showsCursor = false
         configuration.width = pixelWidth; configuration.height = pixelHeight
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CaptureMediaFormat.maxFrameRate)
         configuration.queueDepth = 8; configuration.pixelFormat = CaptureMediaFormat.videoPixelFormat
@@ -78,9 +144,18 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         do {
             try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
-            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
+            if systemAudioWriter != nil {
+                do {
+                    try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
+                } catch {
+                    try? await systemAudioWriter?.finish()
+                    systemAudioWriter = nil
+                    recordOptionalFailure(error, warning: .missingSystemAudio)
+                }
+            }
             self.stream = stream
             try await stream.startCapture()
+            notifyPendingUnexpectedStopAfterStart()
         } catch {
             await teardownAfterFailedStart(stream: stream)
             throw OpenRecordError.io("Could not start screen capture: \(error.localizedDescription)")
@@ -89,6 +164,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
 
     func stop(reason: CaptureStopReason = .manual) async throws -> CaptureStopResult {
         stateLock.withLock { stopping = true }
+        let minimumAvailableDiskBytes = healthMonitor.stop()
         await MainActor.run { cursor.stop() }
         if let stream {
             try? stream.removeStreamOutput(self, type: .screen); try? stream.removeStreamOutput(self, type: .audio)
@@ -101,47 +177,71 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             }
             self.stream = nil
         }
-        await MainActor.run { mic.stop() }
-        var finalError: Error?
-        if capturesWebcam {
+        if microphoneActive {
+            await MainActor.run { mic.stop() }
+        }
+        var finalError = stateLock.withLock { componentError }
+        var displayFinalizationError: Error?
+        if webcamActive {
             do {
                 try await webcam.stop()
             } catch {
                 finalError = finalError ?? error
-                healthWarnings.insert(.truncatedWebcam)
+                recordWarning(.truncatedWebcam)
             }
             if webcam.appendError != nil || webcam.droppedSamples {
-                healthWarnings.insert(.truncatedWebcam)
+                recordWarning(.truncatedWebcam)
                 finalError = finalError ?? webcam.appendError
             }
             if !webcam.didAppend {
-                healthWarnings.insert(.missingWebcam)
+                recordWarning(.missingWebcam)
             }
+        } else if capturesWebcam {
+            recordWarning(.missingWebcam)
         }
         let video = videoWriter
         let system = systemAudioWriter
-        do { try await video?.finish() } catch { finalError = error; healthWarnings.insert(.truncatedVideo) }
-        do { try await system?.finish() } catch { finalError = finalError ?? error; healthWarnings.insert(.truncatedSystemAudio) }
-        if video?.appendError != nil || video?.droppedSamples == true { healthWarnings.insert(.truncatedVideo) }
-        if system?.appendError != nil || system?.droppedSamples == true { healthWarnings.insert(.truncatedSystemAudio) }
+        do {
+            try await video?.finish()
+        } catch {
+            displayFinalizationError = error
+            finalError = error
+            recordWarning(.truncatedVideo)
+        }
+        do { try await system?.finish() } catch { finalError = finalError ?? error; recordWarning(.truncatedSystemAudio) }
+        if video?.appendError != nil || video?.droppedSamples == true { recordWarning(.truncatedVideo) }
+        if system?.appendError != nil || system?.droppedSamples == true { recordWarning(.truncatedSystemAudio) }
         videoWriter = nil; systemAudioWriter = nil
         do { try cursor.closeFiles() } catch { finalError = finalError ?? error }
-        healthWarnings.formUnion(cursor.closeWarnings)
-        if mic.writeError != nil { healthWarnings.insert(.truncatedMicrophone); finalError = finalError ?? mic.writeError }
-        if mic.firstBufferHostTime == nil { healthWarnings.insert(.missingMicrophone) }
-        if system?.didAppend != true { healthWarnings.insert(.missingSystemAudio) }
+        for warning in cursor.closeWarnings { recordWarning(warning) }
+        if mic.writeError != nil { recordWarning(.truncatedMicrophone); finalError = finalError ?? mic.writeError }
+        if mic.firstBufferHostTime == nil { recordWarning(.missingMicrophone) }
+        if system?.didAppend != true { recordWarning(.missingSystemAudio) }
         let capturedStreamError = stateLock.withLock { streamError }
         if let capturedStreamError {
-            healthWarnings.insert(.screenStoppedUnexpectedly)
+            recordWarning(.screenStoppedUnexpectedly)
+            recordWarning(.displayInterrupted)
             finalError = finalError ?? OpenRecordError.io("Screen capture stopped: \(capturedStreamError.localizedDescription)")
+            displayFinalizationError = displayFinalizationError ?? capturedStreamError
         }
         let hasUsableVideo = await Self.hasUsableVideo(at: ProjectLayout.displayVideoURL(in: projectURL!))
-        if !hasUsableVideo { healthWarnings.insert(.missingDisplayVideo) }
-        let recoveryWarnings = healthWarnings.subtracting([.keyboardSecureInputGap])
-        let recovered = reason != .manual || !recoveryWarnings.isEmpty
-        let health = CaptureHealth(state: recovered ? .recovered : .complete, warnings: healthWarnings.sorted { $0.rawValue < $1.rawValue })
-        do { try writeSidecars(health: health) } catch { finalError = finalError ?? error }
-        if let finalError, !hasUsableVideo { throw finalError }
+        if !hasUsableVideo { recordWarning(.missingDisplayVideo) }
+        let diagnostics = await makeDiagnostics(
+            minimumAvailableDiskBytes: minimumAvailableDiskBytes
+        )
+        recordDriftWarnings(from: diagnostics)
+        let health = CaptureRecovery.health(
+            reason: reason,
+            warnings: currentWarnings()
+        )
+        do { try writeSidecars(health: health, diagnostics: diagnostics) } catch { finalError = finalError ?? error }
+        if !hasUsableVideo {
+            throw displayFinalizationError
+                ?? video?.appendError
+                ?? OpenRecordError.io(
+                    "The display recording could not be finalized into a playable video."
+                )
+        }
         return CaptureStopResult(
             projectURL: projectURL!,
             reason: reason,
@@ -152,7 +252,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     }
 
     /// Kept for older internal callers; normal finalization uses `stop`.
-    func writeSidecars() throws { try writeSidecars(health: .complete) }
+    func writeSidecars() throws { try writeSidecars(health: .complete, diagnostics: nil) }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         switch outputType {
@@ -167,7 +267,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             if first, let origin {
                 videoWriter?.startSession(at: origin)
                 cursor.setRecordingStart(CMTimeGetSeconds(origin))
-                if capturesWebcam {
+                if webcamActive {
                     webcam.setRecordingStart(origin)
                 }
                 audioQueue.async { [weak self] in self?.flushPendingAudio(origin: origin) }
@@ -189,12 +289,10 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        stateLock.lock()
-        let notify = !stopping && !unexpectedNotified
-        if !stopping { streamError = error }
-        if notify { unexpectedNotified = true }
-        stateLock.unlock()
-        if notify { onUnexpectedStop?(error) }
+        stateLock.withLock {
+            if !stopping { streamError = error }
+        }
+        requestUnexpectedStop(error: error)
     }
 
     private func flushPendingAudio(origin: CMTime) {
@@ -211,14 +309,18 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
 
     private func teardownAfterFailedStart(stream: SCStream) async {
         try? stream.removeStreamOutput(self, type: .screen); try? stream.removeStreamOutput(self, type: .audio); try? await stream.stopCapture()
+        _ = healthMonitor.stop()
         await teardownCaptureComponents()
         try? cursor.closeFiles()
         videoWriter = nil; systemAudioWriter = nil; self.stream = nil
     }
 
     private func teardownCaptureComponents() async {
-        await MainActor.run { cursor.stop(); mic.stop() }
-        if capturesWebcam {
+        await MainActor.run {
+            cursor.stop()
+            if microphoneActive { mic.stop() }
+        }
+        if webcamActive {
             try? await webcam.stop()
         }
         try? await videoWriter?.finish()
@@ -233,7 +335,10 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         try FileManager.default.createDirectory(at: ProjectLayout.cursorsDirectory(in: projectURL), withIntermediateDirectories: true)
     }
 
-    private func writeSidecars(health: CaptureHealth) throws {
+    private func writeSidecars(
+        health: CaptureHealth,
+        diagnostics: CaptureDiagnostics?
+    ) throws {
         guard let projectURL, let captureTarget else { throw OpenRecordError.io("Capture has no project URL.") }
         var existingCreatedAt = createdAt
         let url = ProjectLayout.metaURL(in: projectURL)
@@ -257,6 +362,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             captureTarget: captureTarget,
             captureTiming: timing,
             captureHealth: health,
+            captureDiagnostics: diagnostics,
             webcam: capturesWebcam ? webcam.captureInfo : nil
         )
         try AtomicFileWrite.writeJSON(meta, to: url)
@@ -288,6 +394,140 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             )
         )
         try AtomicFileWrite.writeJSON(meta, to: metaURL)
+    }
+
+    private func makeDiagnostics(
+        minimumAvailableDiskBytes: Int64?
+    ) async -> CaptureDiagnostics {
+        guard let projectURL else {
+            return CaptureDiagnosticsAnalyzer.analyze(
+                referenceDuration: 0,
+                observations: [],
+                minimumAvailableDiskBytes: minimumAvailableDiskBytes
+            )
+        }
+        let displayDuration = await CaptureMediaProbe.duration(
+            at: ProjectLayout.displayVideoURL(in: projectURL),
+            track: .displayVideo
+        )
+        let systemDuration = await CaptureMediaProbe.duration(
+            at: ProjectLayout.systemAudioURL(in: projectURL),
+            track: .systemAudio
+        )
+        let microphoneDuration = await CaptureMediaProbe.duration(
+            at: ProjectLayout.microphoneAudioURL(in: projectURL),
+            track: .microphone
+        )
+        let webcamDuration = await CaptureMediaProbe.duration(
+            at: ProjectLayout.webcamVideoURL(in: projectURL),
+            track: .webcam
+        )
+        let microphoneOffset: TimeInterval?
+        if let originHostTime, let firstBufferHostTime = mic.firstBufferHostTime {
+            microphoneOffset = firstBufferHostTime - originHostTime
+        } else {
+            microphoneOffset = nil
+        }
+        let warnings = currentWarnings()
+        let observations = [
+            CaptureTrackObservation(
+                track: .displayVideo,
+                duration: displayDuration,
+                initialOffset: 0,
+                truncated: warnings.contains(.truncatedVideo)
+            ),
+            CaptureTrackObservation(
+                track: .systemAudio,
+                duration: systemDuration,
+                initialOffset: systemAudioOffset,
+                truncated: warnings.contains(.truncatedSystemAudio)
+            ),
+            CaptureTrackObservation(
+                track: .microphone,
+                duration: microphoneDuration,
+                initialOffset: microphoneOffset,
+                truncated: warnings.contains(.truncatedMicrophone)
+                    || warnings.contains(.microphoneInterrupted)
+            ),
+            CaptureTrackObservation(
+                track: .webcam,
+                requested: capturesWebcam,
+                duration: webcamDuration,
+                initialOffset: webcam.firstFrameOffset,
+                truncated: warnings.contains(.truncatedWebcam)
+                    || warnings.contains(.cameraInterrupted)
+            ),
+        ]
+        return CaptureDiagnosticsAnalyzer.analyze(
+            referenceDuration: displayDuration ?? 0,
+            observations: observations,
+            minimumAvailableDiskBytes: minimumAvailableDiskBytes
+        )
+    }
+
+    private func recordDriftWarnings(from diagnostics: CaptureDiagnostics) {
+        if diagnostics.correction(for: .systemAudio) != nil {
+            recordWarning(.systemAudioDriftCorrected)
+        }
+        if diagnostics.correction(for: .microphone) != nil {
+            recordWarning(.microphoneDriftCorrected)
+        }
+        if diagnostics.correction(for: .webcam) != nil {
+            recordWarning(.webcamDriftCorrected)
+        }
+    }
+
+    private func recordWarning(_ warning: CaptureWarningCode) {
+        _ = stateLock.withLock { healthWarnings.insert(warning) }
+    }
+
+    private func currentWarnings() -> Set<CaptureWarningCode> {
+        stateLock.withLock { healthWarnings }
+    }
+
+    private func recordComponentError(_ error: Error) {
+        stateLock.withLock {
+            if componentError == nil { componentError = error }
+        }
+    }
+
+    private func recordOptionalFailure(
+        _ error: Error,
+        warning: CaptureWarningCode
+    ) {
+        recordWarning(warning)
+        recordComponentError(error)
+    }
+
+    private func requestUnexpectedStop(error: Error) {
+        let callback = stateLock.withLock { () -> (@Sendable (Error) -> Void)? in
+            guard !stopping, !unexpectedNotified else { return nil }
+            guard captureStarted else {
+                if pendingUnexpectedError == nil { pendingUnexpectedError = error }
+                return nil
+            }
+            unexpectedNotified = true
+            if componentError == nil { componentError = error }
+            return onUnexpectedStop
+        }
+        callback?(error)
+    }
+
+    private func notifyPendingUnexpectedStopAfterStart() {
+        let pending = stateLock.withLock { () -> Error? in
+            captureStarted = true
+            guard !stopping,
+                  !unexpectedNotified,
+                  let error = pendingUnexpectedError
+            else {
+                return nil
+            }
+            pendingUnexpectedError = nil
+            unexpectedNotified = true
+            if componentError == nil { componentError = error }
+            return error
+        }
+        if let pending { onUnexpectedStop?(pending) }
     }
 
     private static func hasUsableVideo(at url: URL) async -> Bool {

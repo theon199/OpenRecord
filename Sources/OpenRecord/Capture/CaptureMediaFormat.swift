@@ -15,7 +15,8 @@ public enum CaptureMediaFormat: Sendable {
     public static let maxFrameRate: Int32 = 60
 
     /// `recording/webcam.mp4` — optional H.264 camera track. Samples share the
-    /// display host clock; `CaptureTiming.webcamOffset` records its first frame.
+    /// display host clock; `CaptureTiming.webcamOffset` records its first frame
+    /// and `CaptureDiagnostics` records any long-session time-scale correction.
 
     /// `recording/system.m4a` — AAC, stereo, 48 kHz (ScreenCaptureKit `capturesAudio`).
     public static let systemAudioSampleRate: Double = 48_000

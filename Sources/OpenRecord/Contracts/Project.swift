@@ -287,6 +287,8 @@ public struct ProjectMeta: Codable, Sendable, Hashable {
     public var captureTiming: CaptureTiming?
     /// Capture completion/recovery state. Missing on legacy projects means complete.
     public var captureHealth: CaptureHealth?
+    /// Non-sensitive per-track health and long-session synchronization data.
+    public var captureDiagnostics: CaptureDiagnostics?
     /// Camera selected for the optional picture-in-picture track.
     public var webcam: WebcamCaptureInfo?
 
@@ -298,6 +300,7 @@ public struct ProjectMeta: Codable, Sendable, Hashable {
         captureTarget: CaptureTarget,
         captureTiming: CaptureTiming? = nil,
         captureHealth: CaptureHealth? = nil,
+        captureDiagnostics: CaptureDiagnostics? = nil,
         webcam: WebcamCaptureInfo? = nil
     ) {
         self.createdAt = createdAt
@@ -307,6 +310,7 @@ public struct ProjectMeta: Codable, Sendable, Hashable {
         self.captureTarget = captureTarget
         self.captureTiming = captureTiming
         self.captureHealth = captureHealth
+        self.captureDiagnostics = captureDiagnostics
         self.webcam = webcam
     }
 }
@@ -358,6 +362,19 @@ public enum CaptureWarningCode: String, Codable, Sendable, Hashable {
     case truncatedKeyboardTelemetry
     case truncatedTargetGeometry
     case keyboardSecureInputGap
+    case lowDiskSpace
+    case captureStoppedForLowDiskSpace
+    case captureTargetUnavailable
+    case displayInterrupted
+    case screenPermissionLost
+    case microphonePermissionLost
+    case cameraPermissionLost
+    case accessibilityPermissionLost
+    case microphoneInterrupted
+    case cameraInterrupted
+    case systemAudioDriftCorrected
+    case microphoneDriftCorrected
+    case webcamDriftCorrected
 }
 
 public enum KeyboardOverlayStyle: String, Codable, CaseIterable, Sendable, Hashable {

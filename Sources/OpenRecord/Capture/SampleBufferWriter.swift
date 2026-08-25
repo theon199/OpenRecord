@@ -14,6 +14,7 @@ final class SampleBufferWriter: @unchecked Sendable {
     private(set) var didAppend = false
     private(set) var appendError: Error?
     private(set) var droppedSamples = false
+    var onFailure: (@Sendable (Error) -> Void)?
 
     static func video(url: URL, width: Int, height: Int, queue: DispatchQueue) throws -> SampleBufferWriter {
         let bitRate = min(80_000_000, max(10_000_000, width * height * 10))
@@ -77,7 +78,9 @@ final class SampleBufferWriter: @unchecked Sendable {
         }
         if writer.status == .unknown {
             guard writer.startWriting() else {
-                appendError = writer.error ?? OpenRecordError.io("Could not start \(url.lastPathComponent).")
+                recordFailure(
+                    writer.error ?? OpenRecordError.io("Could not start \(url.lastPathComponent).")
+                )
                 return
             }
         }
@@ -97,8 +100,10 @@ final class SampleBufferWriter: @unchecked Sendable {
         }
         if input.append(sampleBuffer) {
             didAppend = true
-        } else if appendError == nil {
-            appendError = writer.error ?? OpenRecordError.io("Could not append to \(url.lastPathComponent).")
+        } else {
+            recordFailure(
+                writer.error ?? OpenRecordError.io("Could not append to \(url.lastPathComponent).")
+            )
         }
     }
 
@@ -106,6 +111,12 @@ final class SampleBufferWriter: @unchecked Sendable {
     /// Must be called on `queue`, before the first append.
     func startSession(at sourceTime: CMTime) {
         requestedSessionTime = sourceTime
+    }
+
+    private func recordFailure(_ error: Error) {
+        guard appendError == nil else { return }
+        appendError = error
+        onFailure?(error)
     }
 
     func finish() async throws {

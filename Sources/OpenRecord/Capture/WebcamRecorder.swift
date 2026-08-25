@@ -14,9 +14,11 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private var recordingOrigin: CMTime?
     private var pendingFrames: [CMSampleBuffer] = []
     private var failure: Error?
+    private var notificationObservers: [NSObjectProtocol] = []
 
     private(set) var captureInfo: WebcamCaptureInfo?
     private(set) var firstFrameOffset: TimeInterval?
+    var onFailure: (@Sendable (Error) -> Void)?
 
     var didAppend: Bool { writer?.didAppend == true }
     var appendError: Error? { failure ?? writer?.appendError }
@@ -62,6 +64,39 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.addOutput(output)
         session.commitConfiguration()
 
+        let center = NotificationCenter.default
+        notificationObservers = [
+            center.addObserver(
+                forName: AVCaptureSession.runtimeErrorNotification,
+                object: session,
+                queue: nil
+            ) { [weak self] notification in
+                let detail = (notification.userInfo?[AVCaptureSessionErrorKey] as? Error)?
+                    .localizedDescription ?? "unknown camera error"
+                self?.recordFailure(
+                    OpenRecordError.io("Webcam capture failed: \(detail)")
+                )
+            },
+            center.addObserver(
+                forName: AVCaptureSession.wasInterruptedNotification,
+                object: session,
+                queue: nil
+            ) { [weak self] _ in
+                self?.recordFailure(
+                    OpenRecordError.io("The webcam became unavailable during recording.")
+                )
+            },
+            center.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification,
+                object: device,
+                queue: nil
+            ) { [weak self] _ in
+                self?.recordFailure(
+                    OpenRecordError.io("The webcam was disconnected during recording.")
+                )
+            },
+        ]
+
         self.session = session
         outputURL = url
         captureInfo = WebcamCaptureInfo(deviceID: device.uniqueID, mirror: mirror)
@@ -77,6 +112,17 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             }
         }
         guard session.isRunning else {
+            await withCheckedContinuation { continuation in
+                queue.async {
+                    self.session = nil
+                    for observer in self.notificationObservers {
+                        NotificationCenter.default.removeObserver(observer)
+                    }
+                    self.notificationObservers.removeAll(keepingCapacity: false)
+                    self.pendingFrames.removeAll(keepingCapacity: false)
+                    continuation.resume()
+                }
+            }
             throw OpenRecordError.io("The webcam capture session did not start.")
         }
     }
@@ -98,6 +144,10 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             queue.async {
                 self.session?.stopRunning()
                 self.session = nil
+                for observer in self.notificationObservers {
+                    NotificationCenter.default.removeObserver(observer)
+                }
+                self.notificationObservers.removeAll(keepingCapacity: false)
                 self.pendingFrames.removeAll(keepingCapacity: false)
                 continuation.resume(returning: self.writer)
             }
@@ -137,16 +187,20 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
                 return
             }
             do {
-                writer = try SampleBufferWriter.video(
+                let writer = try SampleBufferWriter.video(
                     url: outputURL,
                     width: CVPixelBufferGetWidth(buffer),
                     height: CVPixelBufferGetHeight(buffer),
                     queue: queue
                 )
+                writer.onFailure = { [weak self] error in
+                    self?.recordFailure(error)
+                }
+                self.writer = writer
             } catch {
-                failure = OpenRecordError.io(
+                recordFailure(OpenRecordError.io(
                     "Could not create recording/webcam.mp4: \(error.localizedDescription)"
-                )
+                ))
                 return
             }
         }
@@ -156,5 +210,13 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
         writer?.startSession(at: origin)
         writer?.append(sampleBuffer)
+    }
+
+    private func recordFailure(_ error: Error) {
+        queue.async { [weak self] in
+            guard let self, self.failure == nil else { return }
+            self.failure = error
+            self.onFailure?(error)
+        }
     }
 }

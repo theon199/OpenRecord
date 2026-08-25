@@ -25,6 +25,7 @@ final class CursorMonitor: @unchecked Sendable {
     private var pendingGeometry: TargetGeometrySample?
     private var pressedKeys: [UInt16: PressedKey] = [:]
     private(set) var closeWarnings = Set<CaptureWarningCode>()
+    var onTargetUnavailable: (@Sendable () -> Void)?
 
     func start(mouseURL: URL, clicksURL: URL) throws {
         try start(mouseURL: mouseURL, clicksURL: clicksURL, target: nil, initialBounds: nil, targetURL: nil)
@@ -239,6 +240,7 @@ final class CursorMonitor: @unchecked Sendable {
         if start == nil {
             stateLock.lock(); pendingGeometry = sample; stateLock.unlock()
         } else { targetWriter?.write(sample) }
+        if bounds == nil { onTargetUnavailable?() }
         if oldVisible != newVisible, let location, start != nil { mouseWriter?.write(CursorSample(t: t, x: Double(location.x), y: Double(location.y), cursorId: CaptureMediaFormat.defaultCursorSpriteID, visible: newVisible)) }
     }
 

@@ -35,7 +35,12 @@ public final class CaptureSession: @unchecked Sendable {
         capturesKeyboardShortcuts: Bool = true,
         capturesWebcam: Bool = false
     ) async throws {
-        try await CapturePermissions.ensureGranted(includeCamera: capturesWebcam)
+        try await CapturePermissions.ensureGranted(includeCamera: false)
+        if capturesWebcam, !CapturePermissions.isGranted(.camera) {
+            // Webcam is optional. Prompt when possible, then let the pipeline
+            // continue as a degraded display capture if access stays denied.
+            _ = await CapturePermissions.request(.camera)
+        }
         let reserved = unfairLock.withLock { () -> Bool in
             guard sessionState == .idle || sessionState == .finalized else { return false }
             sessionState = .starting

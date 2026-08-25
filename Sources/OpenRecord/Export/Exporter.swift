@@ -207,7 +207,8 @@ private enum ExportSession {
                 ExportAudioMux.Source(
                     url: micURL,
                     offset: meta.captureTiming?.microphoneOffset ?? 0,
-                    gain: project.audioCleanup.microphoneGain
+                    gain: project.audioCleanup.microphoneGain,
+                    correction: meta.captureDiagnostics?.correction(for: .microphone)
                 )
             )
         }
@@ -216,7 +217,8 @@ private enum ExportSession {
                 ExportAudioMux.Source(
                     url: systemURL,
                     offset: meta.captureTiming?.systemAudioOffset ?? 0,
-                    gain: project.audioCleanup.systemGain
+                    gain: project.audioCleanup.systemGain,
+                    correction: meta.captureDiagnostics?.correction(for: .systemAudio)
                 )
             )
         }
@@ -247,6 +249,7 @@ private enum ExportSession {
             webcamReader = nil
         }
         let webcamOffset = meta.captureTiming?.webcamOffset ?? 0
+        let captureDiagnostics = meta.captureDiagnostics
         let sourceWidth = reader.sourceWidth
         let sourceHeight = reader.sourceHeight
 
@@ -341,9 +344,25 @@ private enum ExportSession {
 
             try autoreleasepool {
                 let source = try reader.image(at: t)
-                let webcamTime = t - webcamOffset
+                let webcamTime: TimeInterval?
+                if let captureDiagnostics,
+                   let webcamDiagnostic = captureDiagnostics.diagnostic(for: .webcam),
+                   webcamDiagnostic.status == .complete
+                       || webcamDiagnostic.status == .truncated
+                {
+                    webcamTime = captureDiagnostics.sourceTime(
+                        for: .webcam,
+                        atTimelineTime: t
+                    )
+                } else {
+                    let legacyTime = t - webcamOffset
+                    webcamTime = legacyTime >= 0 && legacyTime <= webcamDuration
+                        ? legacyTime
+                        : nil
+                }
                 let webcamFrame: CIImage?
                 if let webcamReader,
+                   let webcamTime,
                    webcamTime >= 0,
                    webcamTime <= webcamDuration
                 {

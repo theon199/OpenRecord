@@ -230,11 +230,18 @@ enum ExportAudioMux {
         /// Position of the first source sample relative to the first video frame.
         var offset: TimeInterval
         var gain: Double
+        var correction: CaptureTrackCorrection?
 
-        init(url: URL, offset: TimeInterval = 0, gain: Double = 1) {
+        init(
+            url: URL,
+            offset: TimeInterval = 0,
+            gain: Double = 1,
+            correction: CaptureTrackCorrection? = nil
+        ) {
             self.url = url
             self.offset = offset.isFinite ? offset : 0
             self.gain = gain.isFinite ? min(max(gain, 0), 2) : 1
+            self.correction = correction
         }
     }
 
@@ -294,7 +301,16 @@ enum ExportAudioMux {
             }
             let timescale = max(trackRange.duration.timescale, 48_000)
             let sourceGlobalStart = source.offset
-            let sourceGlobalEnd = source.offset + trackRange.duration.seconds
+            let sourceTimelineDuration: TimeInterval
+            if let correction = source.correction,
+               correction.sourceDuration > 0,
+               correction.timelineDuration > 0
+            {
+                sourceTimelineDuration = correction.timelineDuration
+            } else {
+                sourceTimelineDuration = trackRange.duration.seconds
+            }
+            let sourceGlobalEnd = source.offset + sourceTimelineDuration
 
             for slice in speedTimeline.slices(sourceStart: start, sourceEnd: start + duration) {
                 if muteAudioWhenSpedUp, slice.rate > 1.000_001 { continue }
@@ -302,8 +318,20 @@ enum ExportAudioMux {
                 let intersectionEnd = min(slice.sourceEnd, sourceGlobalEnd)
                 guard intersectionEnd - intersectionStart > 0.01 else { continue }
 
-                let localStart = intersectionStart - source.offset
-                let localDuration = intersectionEnd - intersectionStart
+                let timelineLocalStart = intersectionStart - source.offset
+                let timelineLocalEnd = intersectionEnd - source.offset
+                let localStart = source.correction?.sourceTime(
+                    forTimelineOffset: timelineLocalStart
+                ) ?? timelineLocalStart
+                let localEnd = source.correction?.sourceTime(
+                    forTimelineOffset: timelineLocalEnd
+                ) ?? timelineLocalEnd
+                let localDuration = min(
+                    max(0, localEnd - localStart),
+                    max(0, trackRange.duration.seconds - localStart)
+                )
+                let timelineDuration = intersectionEnd - intersectionStart
+                guard localDuration > 0, timelineDuration > 0 else { continue }
                 let destinationSeconds = slice.outputStart
                     + (intersectionStart - slice.sourceStart) / slice.rate
                 let destination = CMTime(
@@ -326,7 +354,7 @@ enum ExportAudioMux {
                         at: destination
                     )
                     let outputDuration = CMTime(
-                        seconds: localDuration / slice.rate,
+                        seconds: timelineDuration / slice.rate,
                         preferredTimescale: timescale
                     )
                     dest.scaleTimeRange(

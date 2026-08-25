@@ -138,8 +138,22 @@ private enum ExportAlternateSession {
         }
         let system = await ExportMediaIO.usableAudioURL(ProjectLayout.systemAudioURL(in: bundleURL))
         var sources: [ExportAudioMux.Source] = []
-        if let mic { sources.append(.init(url: mic, offset: meta.captureTiming?.microphoneOffset ?? 0, gain: project.audioCleanup.microphoneGain)) }
-        if let system { sources.append(.init(url: system, offset: meta.captureTiming?.systemAudioOffset ?? 0, gain: project.audioCleanup.systemGain)) }
+        if let mic {
+            sources.append(.init(
+                url: mic,
+                offset: meta.captureTiming?.microphoneOffset ?? 0,
+                gain: project.audioCleanup.microphoneGain,
+                correction: meta.captureDiagnostics?.correction(for: .microphone)
+            ))
+        }
+        if let system {
+            sources.append(.init(
+                url: system,
+                offset: meta.captureTiming?.systemAudioOffset ?? 0,
+                gain: project.audioCleanup.systemGain,
+                correction: meta.captureDiagnostics?.correction(for: .systemAudio)
+            ))
+        }
         guard let prepared = try await ExportAudioMux.makeComposition(sources: sources, start: trim.start, duration: trim.end - trim.start, speedTimeline: speed, muteAudioWhenSpedUp: project.muteAudioWhenSpedUp) else {
             throw OpenRecordError.io("This project has no audio tracks to export.")
         }
@@ -179,6 +193,7 @@ private final class ExportFrameSession: @unchecked Sendable {
     let webcamReader: ExportVideoReader?
     let webcamDuration: TimeInterval
     let webcamOffset: TimeInterval
+    let captureDiagnostics: CaptureDiagnostics?
     let engine: ZoomEngine
     let keyboardTimeline: KeyboardOverlayTimeline
     let compositor: ExportCompositor
@@ -223,7 +238,7 @@ private final class ExportFrameSession: @unchecked Sendable {
         let layout = ExportLayout.canvasLayout(canvas: project.canvas, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, resolution: project.videoExportSettings.resolution)
         let cursor = ExportCursorImage.load(document: project, bundleURL: bundleURL)
         let compositor = ExportCompositor(context: ci, colorSpace: colorSpace, canvas: project.canvas, keyboardOverlay: project.keyboardOverlay, webcamOverlay: project.webcamOverlay, webcamMirror: meta.webcam?.mirror ?? false, layout: layout, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, displayScale: meta.scale, cursorImage: cursor?.image, cursorSprite: cursor?.sprite, captions: project.captions, annotations: project.annotations)
-        self.reader = reader; self.webcamReader = webcamReader; self.webcamDuration = webcamDuration; self.webcamOffset = webcamOffset
+        self.reader = reader; self.webcamReader = webcamReader; self.webcamDuration = webcamDuration; self.webcamOffset = webcamOffset; self.captureDiagnostics = meta.captureDiagnostics
         self.engine = ZoomEngine(document: project, samples: mouse, clicks: clicks, displayBounds: meta.displayBounds, targetGeometry: target)
         self.keyboardTimeline = KeyboardOverlayTimeline(samples: keys); self.compositor = compositor; self.speedTimeline = speed; self.trimStart = trim.start; self.trimEnd = trim.end
         self.outputDuration = speed.outputDuration(sourceStart: trim.start, sourceEnd: trim.end); self.fps = fps; self.context = ci; self.width = layout.width; self.height = layout.height
@@ -231,8 +246,25 @@ private final class ExportFrameSession: @unchecked Sendable {
 
     func image(at time: TimeInterval) throws -> CGImage? {
         let source = try reader.image(at: time)
-        let webcamTime = time - webcamOffset
-        let webcam = webcamReader.flatMap { webcamTime >= 0 && webcamTime <= webcamDuration ? try? $0.image(at: webcamTime) : nil }
+        let webcamTime: TimeInterval?
+        if let captureDiagnostics,
+           let webcamDiagnostic = captureDiagnostics.diagnostic(for: .webcam),
+           webcamDiagnostic.status == .complete
+               || webcamDiagnostic.status == .truncated
+        {
+            webcamTime = captureDiagnostics.sourceTime(
+                for: .webcam,
+                atTimelineTime: time
+            )
+        } else {
+            let legacyTime = time - webcamOffset
+            webcamTime = legacyTime >= 0 && legacyTime <= webcamDuration
+                ? legacyTime
+                : nil
+        }
+        let webcam = webcamReader.flatMap { reader in
+            webcamTime.flatMap { try? reader.image(at: $0) }
+        }
         let crop = engine.crop(at: time)
         let clicking = engine.isClicking(at: time)
         let buffer = try ExportMediaIO.makePixelBuffer(width: width, height: height)

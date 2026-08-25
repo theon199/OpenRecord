@@ -91,7 +91,7 @@ final class EditorSession {
 
     func webcamIsVisible(at time: TimeInterval) -> Bool {
         guard hasWebcamVideo else { return false }
-        let localTime = time - (meta.captureTiming?.webcamOffset ?? 0)
+        guard let localTime = webcamSourceTime(at: time) else { return false }
         return localTime >= 0 && localTime <= webcamDuration
     }
 
@@ -962,10 +962,12 @@ final class EditorSession {
 
     private func syncWebcam(to screenTime: TimeInterval, playing: Bool) {
         guard let webcamPlayer else { return }
-        let localTime = screenTime - (meta.captureTiming?.webcamOffset ?? 0)
-        guard localTime >= 0, localTime <= webcamDuration else {
+        guard let localTime = webcamSourceTime(at: screenTime),
+              localTime >= 0,
+              localTime <= webcamDuration
+        else {
             webcamPlayer.pause()
-            if localTime < 0 {
+            if screenTime < webcamTimelineOffset {
                 webcamPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             return
@@ -979,14 +981,38 @@ final class EditorSession {
                 toleranceAfter: .zero
             )
         }
+        let desiredRate = activePlaybackRate * Float(
+            meta.captureDiagnostics?.sourceRate(for: .webcam) ?? 1
+        )
         if playing,
            webcamPlayer.timeControlStatus != .playing
-                || abs(webcamPlayer.rate - activePlaybackRate) > 0.001
+                || abs(webcamPlayer.rate - desiredRate) > 0.001
         {
-            webcamPlayer.playImmediately(atRate: activePlaybackRate)
+            webcamPlayer.playImmediately(atRate: desiredRate)
         } else if !playing {
             webcamPlayer.pause()
         }
+    }
+
+    private func webcamSourceTime(at screenTime: TimeInterval) -> TimeInterval? {
+        if let diagnostics = meta.captureDiagnostics,
+           let webcamDiagnostic = diagnostics.diagnostic(for: .webcam),
+           webcamDiagnostic.status == .complete
+               || webcamDiagnostic.status == .truncated
+        {
+            return diagnostics.sourceTime(
+                for: .webcam,
+                atTimelineTime: screenTime
+            )
+        }
+        let localTime = screenTime - (meta.captureTiming?.webcamOffset ?? 0)
+        return localTime >= 0 && localTime <= webcamDuration ? localTime : nil
+    }
+
+    private var webcamTimelineOffset: TimeInterval {
+        meta.captureDiagnostics?.diagnostic(for: .webcam)?.initialOffset
+            ?? meta.captureTiming?.webcamOffset
+            ?? 0
     }
 
     private func applyPlaybackRate(force: Bool = false) {
@@ -996,7 +1022,10 @@ final class EditorSession {
         activePlaybackRate = next
         player.playImmediately(atRate: next)
         if webcamIsVisible(at: playhead) {
-            webcamPlayer?.playImmediately(atRate: next)
+            let webcamRate = next * Float(
+                meta.captureDiagnostics?.sourceRate(for: .webcam) ?? 1
+            )
+            webcamPlayer?.playImmediately(atRate: webcamRate)
         }
     }
 

@@ -7,8 +7,10 @@ final class MicrophoneRecorder: @unchecked Sendable {
     private var file: AVAudioFile?
     private let writeLock = NSLock()
     private var tapInstalled = false
+    private var configurationObserver: NSObjectProtocol?
     private(set) var firstBufferHostTime: CFTimeInterval?
     private(set) var writeError: Error?
+    var onFailure: (@Sendable (Error) -> Void)?
 
     func start(url: URL) throws {
         firstBufferHostTime = nil
@@ -50,15 +52,43 @@ final class MicrophoneRecorder: @unchecked Sendable {
             do {
                 try self.file?.write(from: buffer)
             } catch {
-                if self.writeError == nil { self.writeError = error }
+                if self.writeError == nil {
+                    self.writeError = error
+                    self.onFailure?(error)
+                }
             }
         }
         tapInstalled = true
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            tapInstalled = false
+            self.file = nil
+            throw error
+        }
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name.AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            let error = OpenRecordError.io(
+                "The microphone input changed or became unavailable during recording."
+            )
+            self.writeLock.withLock {
+                if self.writeError == nil { self.writeError = error }
+            }
+            self.onFailure?(error)
+        }
     }
 
     func stop() {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
         if tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
