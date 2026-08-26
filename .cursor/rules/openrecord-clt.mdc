@@ -1,0 +1,32 @@
+---
+description: Build, test, and run OpenRecord using standalone Apple Command Line Tools without Xcode
+globs: *
+alwaysApply: true
+---
+
+# OpenRecord Developer Rules
+
+## CRITICAL: Toolchain Error Handling & No Self-Installations
+- **NEVER attempt to download or install new toolchain versions, compilers, Xcode, SDKs, Homebrew packages, CocoaPods, or external tools yourself.**
+- If any build environment problem, toolchain mismatch, or missing tool occurs: **STOP immediately, explain the issue clearly, and ask the user for guidance before doing anything else.**
+
+## Environment & Toolchain Constraints
+- **Toolchain**: macOS Apple Silicon (`arm64`), Apple Command Line Tools (`/Library/Developer/CommandLineTools`) ONLY.
+- **NO Full Xcode**: Full Xcode is not installed. NEVER run `xcodebuild`, `xcodegen`, or Xcode-specific CLI tools.
+- **NO External Dependencies**: Do NOT install CocoaPods, Carthage, Homebrew dependencies, or external SPM packages.
+
+## Standard Commands
+- **Debug build**: `swift build`
+- **Release build**: `swift build -c release --arch arm64`
+- **Unit & Contract tests**: `swift test`
+- **Package .app**: `./scripts/package-app.sh` (assembles `dist/OpenRecord.app` with `OpenRecord Dev` keychain signing)
+- **Run & test the app**: `./scripts/run.sh`
+- **Release gate validation**: `./scripts/verify-v2_5-release.sh`
+
+## Testing Framework Rules
+- Use Apple Swift **`Testing`** framework (`import Testing`, `@Test`, `#expect(...)`).
+- NEVER use `import XCTest` or `XCTestCase`. Standalone Command Line Tools does not include `XCTest.framework`.
+
+## App Permissions (TCC)
+- Never run raw Mach-O executables directly from `.build/.../OpenRecordApp`.
+- Screen recording, microphone, and accessibility event taps are bound to the signed `dist/OpenRecord.app` bundle. Always run via `./scripts/run.sh` or `open dist/OpenRecord.app`.

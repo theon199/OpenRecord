@@ -1,0 +1,28 @@
+# OpenRecord - Agent & Cursor Rules
+
+## CRITICAL: Toolchain Error Handling & No Self-Installations
+- **NEVER attempt to install or download new tools, toolchain versions, Xcode, SDKs, Homebrew formulas, CocoaPods, or external packages on your own.**
+- If you encounter a toolchain mismatch, missing CLI tool, or build environment failure: **STOP IMMEDIATELY, do not attempt automated workarounds or downloads, and notify the user with the exact error.**
+
+## Environment & Toolchain
+- **Toolchain**: macOS Apple Silicon (`arm64`), Apple Command Line Tools (`/Library/Developer/CommandLineTools`) ONLY.
+- **NO Full Xcode**: Full Xcode and `xcodebuild` are NOT installed and must NEVER be invoked.
+- **NO External Dependencies**: This project has ZERO third-party dependencies. Do NOT add external SPM packages, CocoaPods, or Carthage dependencies.
+
+## Build, Test & Packaging Commands
+- **Debug build**: `swift build`
+- **Release build**: `swift build -c release --arch arm64`
+- **Run Unit Tests**: `swift test`
+- **Package App Bundle**: `./scripts/package-app.sh` (assembles `dist/OpenRecord.app` and codesigns it with the local `OpenRecord Dev` keychain identity)
+- **Run/Launch App**: `./scripts/run.sh` (builds, packages, and launches `dist/OpenRecord.app`)
+- **Release Verification**: `./scripts/verify-v2_5-release.sh`
+
+## Testing Guidelines
+- Use Apple's modern Swift **`Testing`** framework (`import Testing`, `@Test`, `#expect(...)`).
+- **NEVER use `import XCTest`** or `XCTestCase`. Standalone Command Line Tools does not include `XCTest.framework`.
+- `Package.swift` is already configured with linker and compiler search paths for CLT's `Testing.framework` and `libTestingMacros.dylib`.
+
+## Permissions & App Bundle Guidelines
+- macOS TCC privacy permissions (Screen Recording / ScreenCaptureKit, Microphone, Accessibility event taps) attach to the signed `.app` bundle.
+- **NEVER run the raw Mach-O binary directly** from `.build/.../OpenRecordApp`. Running the raw binary breaks TCC privacy permissions.
+- Always test and launch via `./scripts/run.sh` or `open dist/OpenRecord.app`.

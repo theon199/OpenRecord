@@ -13,7 +13,8 @@ DerivedData/
 xcuserdata/
 
 # OS / editor
-.cursor/
+.cursor/*
+!.cursor/rules/
 .DS_Store
 Thumbs.db
 *.swp
