@@ -1,0 +1,86 @@
+name: Prepare OpenRecord v2.5.0 Draft Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v2_5.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      RELEASE_TAG: v2.5.0
+      RELEASE_COMMIT: 42242cad6d9a0320aba3ddc231f03d069ed81d09
+      ZIP_NAME: OpenRecord-v2.5.0-macos-arm64.zip
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+
+    steps:
+      - name: Check out v2.5 completion commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_COMMIT }}
+
+      - name: Build and test
+        run: |
+          swift build -c release
+          swift test
+
+      - name: Package Apple Silicon app
+        env:
+          CONFIGURATION: release
+          CODESIGN_IDENTITY: '-'
+          ARCH: arm64
+        run: ./scripts/package-app.sh
+
+      - name: Verify packaged app
+        run: ./scripts/verify-v2_5-release.sh --static-only
+
+      - name: Archive app and write release notes
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/OpenRecord.app "$ZIP_NAME"
+          SHA256=$(shasum -a 256 "$ZIP_NAME" | awk '{print $1}')
+          cat > release-notes.md <<EOF
+          OpenRecord v2.5 is the reliability and production-readiness release between the completed v2 roadmap and the larger v3 expansion.
+
+          ### Highlights
+
+          - Hardened long-session capture, interruption recovery, low-disk handling, and local capture diagnostics.
+          - Live webcam move/resize/shape editing with coalesced undo and shared preview/export geometry.
+          - Expanded preview/export parity and regression coverage across timing, overlays, migration, and project round trips.
+          - Faster and more transparent export with bounded frame preparation, progress/ETA, and cancellation improvements.
+          - Stronger timeline edge-case handling, save integrity, migration behavior, and privacy-safe Copy Diagnostics.
+
+          ### Requirements
+
+          - macOS 15 or later
+          - Apple Silicon (arm64)
+
+          ### Release status
+
+          This release is prepared as a draft because the repository's hardware/manual release checklist still requires recorded evidence. Do not publish the draft until those manual gates are complete.
+
+          The attached app is ad-hoc signed and is not notarized.
+
+          SHA-256 ($ZIP_NAME): $SHA256
+          EOF
+
+      - name: Create or refresh draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$ZIP_NAME" --clobber
+            gh release edit "$RELEASE_TAG" --draft --title "OpenRecord v2.5.0" --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" "$ZIP_NAME" \
+              --draft \
+              --target "$RELEASE_COMMIT" \
+              --title "OpenRecord v2.5.0" \
+              --notes-file release-notes.md
+          fi
