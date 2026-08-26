@@ -26,6 +26,38 @@ jobs:
         with:
           ref: ${{ env.RELEASE_COMMIT }}
 
+      - name: Create draft release shell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            cat > draft-notes.md <<'EOF'
+          OpenRecord v2.5 is the reliability and production-readiness release between the completed v2 roadmap and the larger v3 expansion.
+
+          ### Highlights
+
+          - Hardened long-session capture, interruption recovery, low-disk handling, and local capture diagnostics.
+          - Live webcam move/resize/shape editing with coalesced undo and shared preview/export geometry.
+          - Expanded preview/export parity and regression coverage across timing, overlays, migration, and project round trips.
+          - Faster and more transparent export with bounded frame preparation, progress/ETA, and cancellation improvements.
+          - Stronger timeline edge-case handling, save integrity, migration behavior, and privacy-safe Copy Diagnostics.
+
+          ### Requirements
+
+          - macOS 15 or later
+          - Apple Silicon (arm64)
+
+          ### Release status
+
+          This release is a draft because the repository's hardware/manual release checklist still requires recorded evidence. Do not publish it until those manual gates are complete.
+          EOF
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --target "$RELEASE_COMMIT" \
+              --title "OpenRecord v2.5.0" \
+              --notes-file draft-notes.md
+          fi
+
       - name: Build and test
         run: |
           swift build -c release
@@ -70,17 +102,9 @@ jobs:
           SHA-256 ($ZIP_NAME): $SHA256
           EOF
 
-      - name: Create or refresh draft release
+      - name: Attach verified artifact and final notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$ZIP_NAME" --clobber
-            gh release edit "$RELEASE_TAG" --draft --title "OpenRecord v2.5.0" --notes-file release-notes.md
-          else
-            gh release create "$RELEASE_TAG" "$ZIP_NAME" \
-              --draft \
-              --target "$RELEASE_COMMIT" \
-              --title "OpenRecord v2.5.0" \
-              --notes-file release-notes.md
-          fi
+          gh release upload "$RELEASE_TAG" "$ZIP_NAME" --clobber
+          gh release edit "$RELEASE_TAG" --draft --title "OpenRecord v2.5.0" --notes-file release-notes.md
