@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.5.0</string>
+	<string>3.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>250</string>
+	<string>300</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
@@ -38,5 +38,7 @@
 	<string>OpenRecord records system audio alongside the screen capture.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>OpenRecord records an optional webcam video for a picture-in-picture overlay.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>OpenRecord transcribes recorded project audio locally using on-device speech recognition.</string>
 </dict>
 </plist>

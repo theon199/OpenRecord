@@ -11,7 +11,10 @@ enum ProjectDocumentJSONRoundTrip {
               ProjectDocument().webcamOverlay == .disabled,
               ProjectDocument().speedSegments.isEmpty,
               ProjectDocument().audioCleanup == .default,
-              ProjectDocument().editDecisions.isEmpty
+              ProjectDocument().editDecisions.isEmpty,
+              ProjectDocument().transcript.isEmpty,
+              ProjectDocument().cursorEffects.isEmpty,
+              ProjectDocument().appliedPresetIDs.isEmpty
         else {
             throw OpenRecordError.io("Canvas cursor defaults are incorrect")
         }
@@ -27,7 +30,10 @@ enum ProjectDocumentJSONRoundTrip {
             start: 1.25,
             end: 3.5,
             amount: 2,
-            anchor: Point2D(x: 0.5, y: 0.25)
+            anchor: Point2D(x: 0.5, y: 0.25),
+            tracking: .fixed,
+            isLocked: true,
+            source: .automatic
         )
         let original = ProjectDocument(
             formatVersion: ProjectDocument.currentFormatVersion,
@@ -118,7 +124,30 @@ enum ProjectDocumentJSONRoundTrip {
                     start: 7.5,
                     end: 8.25
                 )
-            ]
+            ],
+            transcript: [
+                TranscriptSegment(
+                    id: UUID(uuidString: "dddddddd-dddd-dddd-dddd-dddddddddddd")!,
+                    start: 2.25,
+                    end: 4.5,
+                    recognizedText: "  recognized words  ",
+                    editedText: " corrected words ",
+                    confidence: 0.87,
+                    source: .mixed
+                )
+            ],
+            cursorEffects: [
+                CursorEffectRange(
+                    id: UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!,
+                    start: 4,
+                    end: 6,
+                    visible: false,
+                    scale: 1.4,
+                    clickEmphasis: true,
+                    halo: true
+                )
+            ],
+            appliedPresetIDs: ["dark", "custom-demo"]
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -151,7 +180,11 @@ enum ProjectDocumentJSONRoundTrip {
               legacy.captions.isEmpty,
               legacy.annotations.isEmpty,
               legacy.videoExportSettings == .default,
-              legacy.editDecisions.isEmpty
+              legacy.editDecisions.isEmpty,
+              legacy.transcript.isEmpty,
+              legacy.cursorEffects.isEmpty,
+              legacy.appliedPresetIDs.isEmpty,
+              legacy.zoomRanges.isEmpty
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
         }
@@ -173,9 +206,12 @@ enum ProjectDocumentJSONRoundTrip {
               upgraded.stylePresetID == CanvasPreset.defaultStyle.id,
               upgraded.canvas.cursorMotionBlur == .disabled,
               upgraded.captions.isEmpty,
-              upgraded.annotations.isEmpty
+              upgraded.annotations.isEmpty,
+              upgraded.transcript.isEmpty,
+              upgraded.cursorEffects.isEmpty,
+              upgraded.appliedPresetIDs.isEmpty
         else {
-            throw OpenRecordError.io("The first-save migration did not produce the v4 defaults")
+            throw OpenRecordError.io("The first-save migration did not produce the v5 defaults")
         }
 
         let futureJSON = Data(

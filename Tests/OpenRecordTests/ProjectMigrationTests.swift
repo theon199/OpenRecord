@@ -114,6 +114,22 @@ enum ProjectMigrationFixtureTests {
             else {
                 throw OpenRecordError.io("The v4 fixture lost edit decisions while decoding")
             }
+        case 5:
+            guard document.transcript.count == 2,
+                  document.transcript[0].recognizedText == "Let's open the settings panel.",
+                  document.transcript[1].displayText == "Open Settings.",
+                  document.transcript[1].recognizedText == "Open the preference window.",
+                  document.transcript[1].source == .mixed,
+                  document.cursorEffects.count == 1,
+                  document.cursorEffects[0].clickEmphasis,
+                  document.cursorEffects[0].halo,
+                  document.zoomRanges.first?.tracking == .fixed,
+                  document.zoomRanges.first?.isLocked == true,
+                  document.zoomRanges.first?.source == .automatic,
+                  document.appliedPresetIDs == ["dark", "tutorial"]
+            else {
+                throw OpenRecordError.io("The v5 fixture lost smart-editing fields while decoding")
+            }
         default:
             throw OpenRecordError.io("Unexpected migration fixture version \(version)")
         }

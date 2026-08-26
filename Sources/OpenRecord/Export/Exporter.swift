@@ -349,6 +349,7 @@ private enum ExportSession {
             displayScale: meta.scale,
             cursorImage: cursor?.image,
             cursorSprite: cursor?.sprite,
+            cursorEffects: project.cursorEffects,
             captions: project.captions,
             annotations: project.annotations
         )

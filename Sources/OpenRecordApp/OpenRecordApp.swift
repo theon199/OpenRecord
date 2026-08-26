@@ -49,6 +49,58 @@ struct OpenRecordApp: App {
                 }
                 .disabled(model.countdownRemaining == nil)
             }
+            CommandMenu("Timeline") {
+                Button("Split at Playhead") {
+                    model.editor?.splitSelectedTimelineItemsAtPlayhead()
+                }
+                .keyboardShortcut("b", modifiers: .command)
+                .disabled(model.editor == nil)
+
+                Divider()
+                Button("Copy Timeline Items") {
+                    model.editor?.copyTimelineSelection()
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(model.editor?.timelineSelection.isEmpty != false)
+                Button("Paste Timeline Items") {
+                    model.editor?.pasteTimelineItems()
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                .disabled(model.editor?.timelineClipboard.isEmpty != false)
+                Button("Duplicate Timeline Items") {
+                    model.editor?.duplicateTimelineSelection()
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(model.editor?.timelineSelection.isEmpty != false)
+
+                Divider()
+                Button("Nudge Left") { model.editor?.nudgeTimelineSelection(by: -1.0 / 30.0) }
+                    .keyboardShortcut(.leftArrow, modifiers: .option)
+                    .disabled(model.editor?.timelineSelection.isEmpty != false)
+                Button("Nudge Right") { model.editor?.nudgeTimelineSelection(by: 1.0 / 30.0) }
+                    .keyboardShortcut(.rightArrow, modifiers: .option)
+                    .disabled(model.editor?.timelineSelection.isEmpty != false)
+                Button("Previous Edit Point") { model.editor?.jumpToAdjacentEditPoint(forward: false) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.control, .option])
+                    .disabled(model.editor == nil)
+                Button("Next Edit Point") { model.editor?.jumpToAdjacentEditPoint(forward: true) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.control, .option])
+                    .disabled(model.editor == nil)
+                Button("Select Previous Item") { model.editor?.selectAdjacentTimelineItem(forward: false) }
+                    .keyboardShortcut("[", modifiers: [.command, .option])
+                    .disabled(model.editor == nil)
+                Button("Select Next Item") { model.editor?.selectAdjacentTimelineItem(forward: true) }
+                    .keyboardShortcut("]", modifiers: [.command, .option])
+                    .disabled(model.editor == nil)
+
+                Divider()
+                Button("Zoom Timeline In") { model.editor?.changeTimelineZoom(by: 1.25) }
+                    .keyboardShortcut("+", modifiers: .command)
+                    .disabled(model.editor == nil)
+                Button("Zoom Timeline Out") { model.editor?.changeTimelineZoom(by: 0.8) }
+                    .keyboardShortcut("-", modifiers: .command)
+                    .disabled(model.editor == nil)
+            }
             CommandGroup(after: .newItem) {
                 Button("Export…") {
                     model.editor?.presentExportPanel()

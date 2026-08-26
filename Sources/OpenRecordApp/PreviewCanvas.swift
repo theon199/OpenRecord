@@ -25,6 +25,14 @@ struct PreviewCanvas: View {
             let cursorVelocity = session.engine.cursorVelocity(at: sourceTime)
             let clicking = session.engine.isClicking(at: sourceTime)
             let canvas = session.document.canvas
+            let cursorTreatment = CursorTreatmentEvaluator(
+                ranges: session.document.cursorEffects
+            ).state(
+                at: sourceTime,
+                baseScale: canvas.cursorScale,
+                baseClickEmphasis: canvas.cursorClickEmphasis,
+                baseHalo: canvas.cursorHalo
+            )
             let sourceWidth = session.sourceWidth
             let sourceHeight = session.sourceHeight
             let layout = ExportLayout.canvasLayout(
@@ -73,16 +81,16 @@ struct PreviewCanvas: View {
                     )
                 }
 
-                if let cursor {
+                if cursorTreatment.visible, let cursor {
                     cursorOverlay(
                         cursor: cursor,
-                        clicking: clicking,
+                        clicking: clicking && cursorTreatment.clickEmphasis,
                         clickAge: clickAge,
+                        treatment: cursorTreatment,
                         crop: crop,
                         canvasVideo: layout.videoRect,
                         viewVideo: video,
                         viewScale: viewScale,
-                        canvas: canvas,
                         sourceWidth: sourceWidth,
                         motionBlur: cursorMotionBlur
                     )
@@ -765,11 +773,11 @@ struct PreviewCanvas: View {
         cursor: Point2D,
         clicking: Bool,
         clickAge: TimeInterval?,
+        treatment: CursorTreatmentState,
         crop: CGRect,
         canvasVideo: CGRect,
         viewVideo: CGRect,
         viewScale: CGFloat,
-        canvas: CanvasSettings,
         sourceWidth: Int,
         motionBlur: CursorMotionBlurState
     ) -> some View {
@@ -791,13 +799,21 @@ struct PreviewCanvas: View {
                 let ripple = ExportLayout.clickRipple(
                     age: clickAge ?? 0,
                     canvasPixelsPerPoint: pixelsPerPoint,
-                    cursorScale: canvas.cursorScale
+                    cursorScale: treatment.scale
                 )
                 Circle()
                     .stroke(.white.opacity(ripple.opacity), lineWidth: 2)
                     .frame(
                         width: ripple.radius * 2 * Double(viewScale),
                         height: ripple.radius * 2 * Double(viewScale)
+                    )
+            }
+            if treatment.halo {
+                Circle()
+                    .stroke(.white.opacity(0.42), lineWidth: max(1, viewScale))
+                    .frame(
+                        width: 34 * treatment.scale * viewPixelsPerPoint,
+                        height: 34 * treatment.scale * viewPixelsPerPoint
                     )
             }
             Group {
@@ -808,14 +824,14 @@ struct PreviewCanvas: View {
                         CursorSpriteLayout.placement(
                             sprite: $0,
                             imagePixelSize: pixelSize,
-                            cursorScale: canvas.cursorScale,
+                            cursorScale: treatment.scale,
                             pixelsPerPoint: viewPixelsPerPoint
                         )
                     }
                     let width = placement?.drawSize.width
-                        ?? image.size.width * canvas.cursorScale * viewPixelsPerPoint
+                        ?? image.size.width * treatment.scale * viewPixelsPerPoint
                     let height = placement?.drawSize.height
-                        ?? image.size.height * canvas.cursorScale * viewPixelsPerPoint
+                        ?? image.size.height * treatment.scale * viewPixelsPerPoint
                     let hotspot = placement?.hotspot ?? Point2D(x: 1, y: 1)
                     Image(nsImage: image)
                         .resizable()
@@ -829,8 +845,8 @@ struct PreviewCanvas: View {
                     CursorPointerShape()
                         .fill(.white)
                         .overlay(CursorPointerShape().stroke(.black, lineWidth: 1))
-                        .frame(width: 14 * canvas.cursorScale, height: 20 * canvas.cursorScale)
-                        .offset(x: 7 * canvas.cursorScale, y: 10 * canvas.cursorScale)
+                        .frame(width: 14 * treatment.scale, height: 20 * treatment.scale)
+                        .offset(x: 7 * treatment.scale, y: 10 * treatment.scale)
                 }
             }
             .blur(radius: CGFloat(motionBlur.previewRadius) * viewScale)

@@ -154,11 +154,23 @@ public enum AutoZoom: Sendable {
                 displayBounds: displayBounds,
                 targetGeometry: targetGeometry
             )
+            // Keep generated viewport centers away from the canvas edge. This
+            // is intentionally applied after interpolation so sparse legacy
+            // telemetry receives the same safety treatment as v3 telemetry.
+            let safeAnchor = Point2D(
+                x: min(0.86, max(0.14, anchor.x)),
+                y: min(0.86, max(0.14, anchor.y))
+            )
+            let tracking: ZoomTrackingMode = downs.contains { $0.t >= island.start && $0.t <= island.end }
+                ? .fixed
+                : .followCursor
             return ZoomRange(
                 start: island.start,
                 end: island.end,
                 amount: amount,
-                anchor: anchor
+                anchor: safeAnchor,
+                tracking: tracking,
+                source: .automatic
             )
         }
     }

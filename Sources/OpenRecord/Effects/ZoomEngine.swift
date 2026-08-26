@@ -242,6 +242,7 @@ private struct ZoomEvaluator {
     func evaluateLive(at time: TimeInterval) -> CGRect {
         let sorted = ranges.sorted { $0.start < $1.start }
         let cursor = segmentCursor(at: time, ranges: sorted)
+        let activeRange = cursor.segment ?? cursor.prevSegment
         let center: Point2D?
         if cursor.segment == nil,
            let prev = cursor.prevSegment,
@@ -250,10 +251,14 @@ private struct ZoomEvaluator {
         {
             center = nil
         } else {
-            center = (cursor.segment ?? cursor.prevSegment)?.anchor
+            center = activeRange?.tracking == .followCursor
+                ? smoother.interpolateIfVisible(at: time) ?? activeRange?.anchor
+                : activeRange?.anchor
         }
         let zoom = interpolatedZoom(cursor: cursor, cursorCenter: center, ranges: sorted)
-        if let live = smoother.interpolateIfVisible(at: time) {
+        if activeRange?.tracking == .followCursor,
+           let live = smoother.interpolateIfVisible(at: time)
+        {
             return boundsToCrop(ensureCursorVisible(zoom, cursorX: live.x, cursorY: live.y).bounds)
         }
         return boundsToCrop(zoom.bounds)
@@ -290,7 +295,8 @@ private struct ZoomEvaluator {
         }
         state.lastTime = time
 
-        let isAuto = !smoother.isEmpty
+        let activeRange = cursor.segment ?? cursor.prevSegment
+        let isAuto = !smoother.isEmpty && activeRange?.tracking == .followCursor
         let liveCursor: Point2D? = isAuto ? smoother.interpolate(at: time) : nil
 
         var zoomCenter: Point2D?
@@ -505,7 +511,10 @@ private struct ZoomEvaluator {
     }
 
     func zoomFocus(_ range: ZoomRange, cursorCenter: Point2D?) -> Point2D {
-        cursorCenter ?? range.anchor
+        switch range.tracking {
+        case .fixed: range.anchor
+        case .followCursor: cursorCenter ?? range.anchor
+        }
     }
 
     func segmentBounds(amount: Double, cx: Double, cy: Double) -> SegmentBounds {

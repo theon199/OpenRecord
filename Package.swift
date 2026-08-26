@@ -28,6 +28,7 @@ let appleFrameworks: [LinkerSetting] = [
     .linkedFramework("ApplicationServices"),
     .linkedFramework("ImageIO"),
     .linkedFramework("CoreVideo"),
+    .linkedFramework("Speech"),
 ]
 
 let package = Package(

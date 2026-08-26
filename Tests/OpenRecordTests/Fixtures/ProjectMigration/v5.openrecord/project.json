@@ -1,0 +1,61 @@
+{
+  "formatVersion" : 5,
+  "trimIn" : 0.75,
+  "trimOut" : 45,
+  "zoomRanges" : [
+    {
+      "id" : "99999999-9999-9999-9999-999999999999",
+      "start" : 4,
+      "end" : 8,
+      "amount" : 1.8,
+      "anchor" : { "x" : 0.4, "y" : 0.6 },
+      "tracking" : "fixed",
+      "isLocked" : true,
+      "source" : "automatic"
+    }
+  ],
+  "canvas" : { },
+  "cursorSprites" : [ ],
+  "keyboardOverlay" : { },
+  "webcamOverlay" : { },
+  "autoZoomSensitivity" : "normal",
+  "zoomEasing" : "smooth",
+  "speedSegments" : [ ],
+  "muteAudioWhenSpedUp" : false,
+  "audioCleanup" : { },
+  "captions" : [ ],
+  "annotations" : [ ],
+  "videoExportSettings" : { },
+  "editDecisions" : [ ],
+  "transcript" : [
+    {
+      "id" : "aaaaaaaa-1111-2222-3333-aaaaaaaaaaaa",
+      "start" : 12.42,
+      "end" : 14.88,
+      "recognizedText" : "Let's open the settings panel.",
+      "confidence" : 0.94,
+      "source" : "microphone"
+    },
+    {
+      "id" : "bbbbbbbb-1111-2222-3333-bbbbbbbbbbbb",
+      "start" : 20,
+      "end" : 22.5,
+      "recognizedText" : "Open the preference window.",
+      "editedText" : "Open Settings.",
+      "confidence" : 0.71,
+      "source" : "mixed"
+    }
+  ],
+  "cursorEffects" : [
+    {
+      "id" : "cccccccc-1111-2222-3333-cccccccccccc",
+      "start" : 9,
+      "end" : 12,
+      "visible" : true,
+      "scale" : 1.25,
+      "clickEmphasis" : true,
+      "halo" : true
+    }
+  ],
+  "appliedPresetIDs" : [ "dark", "tutorial" ]
+}

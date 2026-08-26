@@ -18,6 +18,7 @@ final class ExportCompositor {
     private let background: CIImage
     private let cursorImage: CIImage?
     private let cursorSprite: CursorSprite?
+    private let cursorTreatmentEvaluator: CursorTreatmentEvaluator
     private let displayScale: Double
     private let sourceWidth: Int
     private let sourceHeight: Int
@@ -51,6 +52,7 @@ final class ExportCompositor {
         displayScale: Double,
         cursorImage: CIImage?,
         cursorSprite: CursorSprite?,
+        cursorEffects: [CursorEffectRange] = [],
         captions: [CaptionCue] = [],
         annotations: [Annotation] = []
     ) {
@@ -66,6 +68,7 @@ final class ExportCompositor {
         self.displayScale = displayScale
         self.cursorImage = cursorImage
         self.cursorSprite = cursorSprite
+        self.cursorTreatmentEvaluator = CursorTreatmentEvaluator(ranges: cursorEffects)
         self.captions = captions.map(\.normalized)
         self.annotations = annotations.map(\.normalized)
         self.canvasExtent = CGRect(x: 0, y: 0, width: layout.width, height: layout.height)
@@ -112,7 +115,13 @@ final class ExportCompositor {
             output = overlay.composited(over: output)
         }
 
-        if let cursorUV {
+        let cursorTreatment = cursorTreatmentEvaluator.state(
+            at: sourceTime,
+            baseScale: canvas.cursorScale,
+            baseClickEmphasis: canvas.cursorClickEmphasis,
+            baseHalo: canvas.cursorHalo
+        )
+        if cursorTreatment.visible, let cursorUV {
             let hotspot = ExportLayout.mapSourceUVToCanvas(
                 cursorUV,
                 cropUV: cropUV,
@@ -129,18 +138,26 @@ final class ExportCompositor {
                 canvasSize: layout.size,
                 settings: canvas.cursorMotionBlur
             )
-            if clicking, let clickAge {
+            if clicking, cursorTreatment.clickEmphasis, let clickAge {
                 let ripple = ExportLayout.clickRipple(
                     age: clickAge,
                     canvasPixelsPerPoint: pxPerPoint,
-                    cursorScale: canvas.cursorScale
+                    cursorScale: cursorTreatment.scale
                 )
                 output = makeRipple(at: hotspot, ripple: ripple).composited(over: output)
+            }
+            if cursorTreatment.halo {
+                output = makeHalo(
+                    at: hotspot,
+                    pixelsPerPoint: pxPerPoint,
+                    cursorScale: cursorTreatment.scale
+                ).composited(over: output)
             }
             if let cursor = makeCursor(
                 hotspot: hotspot,
                 pixelsPerPoint: pxPerPoint,
-                motionBlur: motionBlur
+                motionBlur: motionBlur,
+                cursorScale: cursorTreatment.scale
             ) {
                 output = cursor.composited(over: output)
             }
@@ -386,7 +403,8 @@ final class ExportCompositor {
     private func makeCursor(
         hotspot: CGPoint,
         pixelsPerPoint: Double,
-        motionBlur: CursorMotionBlurState
+        motionBlur: CursorMotionBlurState,
+        cursorScale: Double
     ) -> CIImage? {
         guard let cursorImage, let sprite = cursorSprite else { return nil }
         let extent = cursorImage.extent
@@ -395,7 +413,7 @@ final class ExportCompositor {
         let placement = CursorSpriteLayout.placement(
             sprite: sprite,
             imagePixelSize: Size2D(width: extent.width, height: extent.height),
-            cursorScale: canvas.cursorScale,
+            cursorScale: cursorScale,
             pixelsPerPoint: pixelsPerPoint
         )
         let drawWidth = placement.drawSize.width
@@ -418,6 +436,31 @@ final class ExportCompositor {
         )
         let placed = cursorImage.transformed(by: transform)
         return CursorMotionBlurRenderer.image(placed, state: motionBlur)
+    }
+
+    private func makeHalo(
+        at hotspot: CGPoint,
+        pixelsPerPoint: Double,
+        cursorScale: Double
+    ) -> CIImage {
+        let center = ExportLayout.ciPoint(fromTopLeft: hotspot, canvasHeight: canvasExtent.height)
+        let outerRadius = CGFloat(max(17 * cursorScale * pixelsPerPoint, 1))
+        let innerRadius = outerRadius * 0.86
+        let filter = CIFilter.radialGradient()
+        filter.center = center
+        filter.radius0 = Float(innerRadius)
+        filter.radius1 = Float(outerRadius)
+        filter.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 0)
+        filter.color1 = CIColor(red: 1, green: 1, blue: 1, alpha: 0.42)
+        let pad = outerRadius + 2
+        return (filter.outputImage ?? CIImage.empty()).cropped(
+            to: CGRect(
+                x: center.x - pad,
+                y: center.y - pad,
+                width: pad * 2,
+                height: pad * 2
+            )
+        )
     }
 
     private func makeRipple(at hotspot: CGPoint, ripple: ExportClickRipple) -> CIImage {

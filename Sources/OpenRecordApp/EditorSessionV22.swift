@@ -66,12 +66,23 @@ extension EditorSession {
         selectedAnnotationID = nil
         isWebcamSelected = false
         switch selection {
-        case .zoom(let id): selectedZoomID = id
-        case .speed(let id): selectedSpeedID = id
-        case .caption(let id): selectedCaptionID = id
-        case .annotation(let id): selectedAnnotationID = id
-        case .webcam: isWebcamSelected = true
-        case .none: break
+        case .zoom(let id):
+            selectedZoomID = id
+            timelineSelection = TimelineSelection(items: [.zoom(id)], primary: .zoom(id))
+        case .speed(let id):
+            selectedSpeedID = id
+            timelineSelection = TimelineSelection(items: [.speed(id)], primary: .speed(id))
+        case .caption(let id):
+            selectedCaptionID = id
+            timelineSelection = TimelineSelection(items: [.caption(id)], primary: .caption(id))
+        case .annotation(let id):
+            selectedAnnotationID = id
+            timelineSelection = TimelineSelection(items: [.annotation(id)], primary: .annotation(id))
+        case .webcam:
+            isWebcamSelected = true
+            timelineSelection.clear()
+        case .none:
+            timelineSelection.clear()
         }
     }
 
@@ -97,6 +108,10 @@ extension EditorSession {
     }
 
     func deleteSelectedTimelineItem() {
+        if !timelineSelection.isEmpty {
+            deleteTimelineSelection()
+            return
+        }
         switch documentSelection {
         case .zoom: deleteSelectedZoom()
         case .speed: deleteSelectedSpeedSegment()
@@ -161,11 +176,7 @@ extension EditorSession {
             let before = document
             document.captions.append(contentsOf: imported.map(normalizedCaption))
             document.captions.sort { $0.start < $1.start }
-            selectedCaptionID = imported.first?.id
-            selectedZoomID = nil
-            selectedSpeedID = nil
-            selectedAnnotationID = nil
-            isWebcamSelected = false
+            selectCaption(imported.first?.id)
             documentDidChange(from: before, actionName: "Import Captions")
         } catch {
             lastErrorCategory = .projectContent

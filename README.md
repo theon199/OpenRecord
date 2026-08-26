@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it generates Screen Studio–style auto-zooms from clicks and cursor activity, lets you trim, restyle, and retime the recording, adds captions, callouts, cursor motion blur, and a movable picture-in-picture overlay, cleans up audio locally, and exports polished video, GIF, audio, or still-image deliverables.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it can transcribe recorded audio on device, suggest pause cuts and smart auto-zooms, edit through multiple non-destructive cuts, style captions/callouts/cursor treatments, and export polished video, GIF, audio, or still-image deliverables.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -103,7 +103,7 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # capture target/timing/health and optional webcam device metadata
-  project.json              # v3: edits, captions, annotations, overlays, and export settings
+  project.json              # format v5: edits, transcript, captions, overlays, and export settings
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     webcam.mp4              # optional H.264 face-camera track
@@ -119,10 +119,10 @@ Each recording is a folder package:
 
 Coordinates are **points** (Quartz, origin top-left of the main display). Cursor samples may include `visible: false` while the pointer is outside the captured target. New window recordings use `target.jsonl` to map global cursor points through the window bounds at each timestamp; older projects fall back to `meta.json` bounds. Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
 
-Opening a v1 or v2 project is read-only until the first save, which migrates a
-copy of every supported field to the current v3 schema. Projects with a newer
+Opening an older supported project is read-only until the first save, which migrates a
+copy of every supported field to the current format-v5 schema. Projects with a newer
 format version, or unknown top-level fields in the current format, are rejected
-with an update-required error instead of risking silent data loss. Legacy v1/v2
+with an update-required error instead of risking silent data loss. Legacy pre-v5
 files with unknown top-level fields may open read-only, but cannot be migrated
 until those fields are supported. Unknown nested fields in an otherwise valid
 current document are preserved across library saves; unknown enum values may

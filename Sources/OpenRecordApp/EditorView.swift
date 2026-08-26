@@ -18,8 +18,13 @@ struct EditorView: View {
             }
             .frame(minWidth: 560)
 
-            InspectorPanel(session: session)
-                .frame(minWidth: 240, idealWidth: 268, maxWidth: 300)
+            VSplitView {
+                InspectorPanel(session: session)
+                    .frame(minHeight: 280)
+                TranscriptPanel(session: session)
+                    .frame(minHeight: 250)
+            }
+            .frame(minWidth: 260, idealWidth: 300, maxWidth: 340)
         }
         .navigationTitle(session.title)
         .safeAreaInset(edge: .top, spacing: 0) {

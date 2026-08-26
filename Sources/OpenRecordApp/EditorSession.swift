@@ -55,6 +55,22 @@ final class EditorSession {
     var selectedCaptionID: UUID?
     var selectedAnnotationID: UUID?
     var isWebcamSelected = false
+    var timelineSelection = TimelineSelection()
+    var timelineClipboard = TimelineClipboard()
+    var timelineZoom: Double = 1
+    var transcriptSearchText = ""
+    var selectedTranscriptSegmentIDs = Set<UUID>()
+    var isTranscribing = false
+    var transcriptionStatus: String?
+    var silencePreset: SilencePreset = .natural
+    var silenceMinimumPause: TimeInterval = SilencePreset.natural.minimumPause
+    var silenceBreathingRoom: TimeInterval = SilencePreset.natural.breathingRoom
+    var silenceSuggestions: [PauseSuggestion] = []
+    var acceptedSilenceSuggestionIDs = Set<UUID>()
+    var isAnalyzingSilence = false
+    var isPreviewingSilenceSuggestions = false
+    var localStylePresets: [EditorStylePreset] = []
+    var presetStatus: String?
     var copyExportToLibrary = false
     var exportProgress: ExportProgress?
     private(set) var isCancellingExport = false
@@ -124,8 +140,27 @@ final class EditorSession {
     /// The single timing authority shared with every export path. Editor
     /// lanes remain authored in source time, while this mapper supplies the
     /// ripple/output position and canonical source frame for the playhead.
-    var projectTimeMapper: ProjectTimeMapper {
+    var committedProjectTimeMapper: ProjectTimeMapper {
         ProjectTimeMapper(project: document, sourceDuration: duration)
+    }
+
+    var projectTimeMapper: ProjectTimeMapper {
+        guard isPreviewingSilenceSuggestions else {
+            return committedProjectTimeMapper
+        }
+        let accepted = silenceSuggestions.filter {
+            acceptedSilenceSuggestionIDs.contains($0.id)
+        }
+        guard !accepted.isEmpty else { return committedProjectTimeMapper }
+        var preview = document
+        let proposed = accepted.map {
+            EditDecision(start: $0.cutStart, end: $0.cutEnd)
+        }
+        preview.editDecisions = ProjectTimeMapper.normalizedDecisions(
+            document.editDecisions + proposed,
+            sourceDuration: duration
+        )
+        return ProjectTimeMapper(project: preview, sourceDuration: duration)
     }
 
     var outputDuration: TimeInterval {
@@ -323,6 +358,7 @@ final class EditorSession {
             }
         }
         session.loadCursorSprite()
+        session.reloadLocalStylePresets()
         session.playhead = editorDocument.trimIn
         if hasVideo {
             session.attachPlayer()
@@ -385,15 +421,29 @@ final class EditorSession {
         webcamPlayer?.pause()
     }
 
-    func applyAutoZoomsAndSave() async throws {
-        document.zoomRanges = ZoomEngine.generateAutoZooms(
-            samples: samples,
-            clicks: clicks,
-            duration: max(duration, 0.01),
-            displayBounds: meta.displayBounds,
-            config: document.autoZoomSensitivity.config,
-            targetGeometry: targetGeometry
-        )
+    func applyAutoZoomsAndSave(preserveExisting: Bool = false) async throws {
+        let config = SmartAutoZoomConfig(base: document.autoZoomSensitivity.config)
+        if preserveExisting {
+            document.zoomRanges = SmartAutoZoom.regenerateRanges(
+                existing: document.zoomRanges,
+                samples: samples,
+                clicks: clicks,
+                duration: max(duration, 0.01),
+                displayBounds: meta.displayBounds,
+                config: config,
+                targetGeometry: targetGeometry,
+                preserveLockedAndManual: true
+            )
+        } else {
+            document.zoomRanges = SmartAutoZoom.generateRanges(
+                samples: samples,
+                clicks: clicks,
+                duration: max(duration, 0.01),
+                displayBounds: meta.displayBounds,
+                config: config,
+                targetGeometry: targetGeometry
+            )
+        }
         if document.trimOut == nil, duration > 0 {
             document.trimOut = duration
         }
@@ -409,7 +459,7 @@ final class EditorSession {
             let previousSelection = selectedZoomID
             selectedZoomID = nil
             do {
-                try await applyAutoZoomsAndSave()
+                try await applyAutoZoomsAndSave(preserveExisting: true)
                 documentHistory.record(
                     before: before,
                     after: document,
@@ -760,6 +810,7 @@ final class EditorSession {
         rebuildZoomEngine: Bool = false
     ) {
         guard before != document else { return }
+        isPreviewingSilenceSuggestions = false
         documentHistory.record(before: before, after: document, actionName: actionName)
         markDirty()
         if rebuildZoomEngine {
@@ -769,7 +820,9 @@ final class EditorSession {
     }
 
     private func restoreHistorySnapshot(_ snapshot: ProjectDocument) {
+        isPreviewingSilenceSuggestions = false
         let previousDocument = document
+        let previousTimelineSelection = timelineSelection
         let restoredDocument = snapshot.normalizedForTimelineEditing(
             sourceDuration: timelineDuration
         )
@@ -779,7 +832,12 @@ final class EditorSession {
             restoredDocument: restoredDocument
         )
         document = restoredDocument
-        applyDocumentSelection(selection)
+        timelineSelection = previousTimelineSelection.reconciled(with: restoredDocument)
+        if timelineSelection.isEmpty {
+            applyDocumentSelection(selection)
+        } else {
+            applyPrimaryTimelineSelection()
+        }
         let clampedPlayhead = min(max(playhead, document.trimIn), effectiveTrimOut)
         // Seeking through the mapper also moves a restored playhead out of a
         // newly excluded range, even when it is already inside the trim.

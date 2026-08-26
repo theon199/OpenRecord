@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// Same-directory temp file + `replaceItemAt` / `rename` so a crash cannot
@@ -251,6 +252,16 @@ private enum ProjectDocumentPersistence {
             issues.append("\(path)=\(rawValue)")
         }
 
+        func isJSONBool(_ value: Any?) -> Bool {
+            guard let number = value as? NSNumber else { return false }
+            return CFGetTypeID(number) == CFBooleanGetTypeID()
+        }
+
+        func finiteNumber(_ value: Any?) -> Bool {
+            guard let number = value as? NSNumber, !isJSONBool(number) else { return false }
+            return number.doubleValue.isFinite
+        }
+
         check(
             root["autoZoomSensitivity"],
             at: "autoZoomSensitivity",
@@ -334,10 +345,7 @@ private enum ProjectDocumentPersistence {
                     issues.append("\(prefix).id=<missing-or-invalid>")
                 }
                 for field in ["start", "end"] {
-                    guard let number = decision[field] as? NSNumber,
-                          !(number is Bool),
-                          number.doubleValue.isFinite
-                    else {
+                    guard finiteNumber(decision[field]) else {
                         issues.append("\(prefix).\(field)=<missing-or-non-number>")
                         continue
                     }
@@ -347,6 +355,152 @@ private enum ProjectDocumentPersistence {
                 } else {
                     issues.append("\(prefix).kind=<missing-or-non-string>")
                 }
+            }
+        }
+
+        func checkRequiredBool(_ object: [String: Any], _ key: String, at path: String) {
+            guard isJSONBool(object[key]) else {
+                issues.append("\(path)=<missing-or-non-bool>")
+                return
+            }
+        }
+
+        if let rawZooms = root["zoomRanges"] {
+            guard let zooms = rawZooms as? [Any] else {
+                issues.append("zoomRanges=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawZoom) in zooms.enumerated() {
+                guard let zoom = rawZoom as? [String: Any] else {
+                    issues.append("zoomRanges[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "zoomRanges[\(index)]"
+                if let id = zoom["id"] as? String, UUID(uuidString: id) != nil {
+                    // Stable identity is required to merge the range safely.
+                } else {
+                    issues.append("\(prefix).id=<missing-or-invalid>")
+                }
+                for field in ["start", "end", "amount"] {
+                    if let number = zoom[field], !finiteNumber(number) {
+                        issues.append("\(prefix).\(field)=<missing-or-non-number>")
+                    } else if zoom[field] == nil {
+                        issues.append("\(prefix).\(field)=<missing-or-non-number>")
+                    }
+                }
+                if let anchor = zoom["anchor"] as? [String: Any] {
+                    for field in ["x", "y"] {
+                        if let number = anchor[field], !finiteNumber(number) {
+                            issues.append("\(prefix).anchor.\(field)=<missing-or-non-number>")
+                        } else if anchor[field] == nil {
+                            issues.append("\(prefix).anchor.\(field)=<missing-or-non-number>")
+                        }
+                    }
+                } else {
+                    issues.append("\(prefix).anchor=<missing-or-non-object>")
+                }
+                if let tracking = zoom["tracking"] as? String {
+                    check(tracking, at: "\(prefix).tracking", allowed: ["fixed", "followCursor"])
+                } else if zoom["tracking"] != nil {
+                    issues.append("\(prefix).tracking=<missing-or-non-string>")
+                }
+                if let source = zoom["source"] as? String {
+                    check(source, at: "\(prefix).source", allowed: ["manual", "automatic"])
+                } else if zoom["source"] != nil {
+                    issues.append("\(prefix).source=<missing-or-non-string>")
+                }
+            }
+        }
+
+        if let rawTranscript = root["transcript"] {
+            guard let segments = rawTranscript as? [Any] else {
+                issues.append("transcript=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawSegment) in segments.enumerated() {
+                guard let segment = rawSegment as? [String: Any] else {
+                    issues.append("transcript[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "transcript[\(index)]"
+                if let rawID = segment["id"] as? String, UUID(uuidString: rawID) != nil {
+                    // Stable identity is required to merge the segment safely.
+                } else {
+                    issues.append("\(prefix).id=<missing-or-invalid>")
+                }
+                if let start = segment["start"], !finiteNumber(start) {
+                    issues.append("\(prefix).start=<missing-or-non-number>")
+                } else if segment["start"] == nil {
+                    issues.append("\(prefix).start=<missing-or-non-number>")
+                }
+                if let end = segment["end"], !finiteNumber(end) {
+                    issues.append("\(prefix).end=<missing-or-non-number>")
+                } else if segment["end"] == nil {
+                    issues.append("\(prefix).end=<missing-or-non-number>")
+                }
+                if let recognized = segment["recognizedText"], !(recognized is String) {
+                    issues.append("\(prefix).recognizedText=<missing-or-non-string>")
+                } else if segment["recognizedText"] == nil {
+                    issues.append("\(prefix).recognizedText=<missing-or-non-string>")
+                }
+                if let edited = segment["editedText"], !(edited is String || edited is NSNull) {
+                    issues.append("\(prefix).editedText=<missing-or-non-string>")
+                }
+                if let confidence = segment["confidence"], !finiteNumber(confidence) {
+                    issues.append("\(prefix).confidence=<missing-or-non-number>")
+                }
+                if let source = segment["source"] as? String {
+                    check(source, at: "\(prefix).source", allowed: ["microphone", "systemAudio", "mixed"])
+                } else {
+                    issues.append("\(prefix).source=<missing-or-non-string>")
+                }
+            }
+        }
+
+        if let rawCursorEffects = root["cursorEffects"] {
+            guard let effects = rawCursorEffects as? [Any] else {
+                issues.append("cursorEffects=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawEffect) in effects.enumerated() {
+                guard let effect = rawEffect as? [String: Any] else {
+                    issues.append("cursorEffects[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "cursorEffects[\(index)]"
+                if let rawID = effect["id"] as? String, UUID(uuidString: rawID) != nil {
+                    // Stable identity is required to merge the effect safely.
+                } else {
+                    issues.append("\(prefix).id=<missing-or-invalid>")
+                }
+                if let start = effect["start"], !finiteNumber(start) {
+                    issues.append("\(prefix).start=<missing-or-non-number>")
+                } else if effect["start"] == nil {
+                    issues.append("\(prefix).start=<missing-or-non-number>")
+                }
+                if let end = effect["end"], !finiteNumber(end) {
+                    issues.append("\(prefix).end=<missing-or-non-number>")
+                } else if effect["end"] == nil {
+                    issues.append("\(prefix).end=<missing-or-non-number>")
+                }
+                if let scale = effect["scale"], !finiteNumber(scale) {
+                    issues.append("\(prefix).scale=<missing-or-non-number>")
+                } else if effect["scale"] == nil {
+                    issues.append("\(prefix).scale=<missing-or-non-number>")
+                }
+                checkRequiredBool(effect, "visible", at: "\(prefix).visible")
+                checkRequiredBool(effect, "clickEmphasis", at: "\(prefix).clickEmphasis")
+                checkRequiredBool(effect, "halo", at: "\(prefix).halo")
+            }
+        }
+
+        if let rawPresetIDs = root["appliedPresetIDs"] {
+            guard let presetIDs = rawPresetIDs as? [Any] else {
+                issues.append("appliedPresetIDs=<non-array>")
+                return issues.sorted()
+            }
+            for (index, presetID) in presetIDs.enumerated() where !(presetID is String) {
+                issues.append("appliedPresetIDs[\(index)]=<non-string>")
             }
         }
 

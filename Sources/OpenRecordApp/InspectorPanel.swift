@@ -4,6 +4,7 @@ import SwiftUI
 struct InspectorPanel: View {
     @Bindable var session: EditorSession
     @State private var confirmRegenerateZooms = false
+    @State private var newPresetName = ""
 
     var body: some View {
         Form {
@@ -22,13 +23,18 @@ struct InspectorPanel: View {
                             setEditing(editing, actionName: "Adjust Zoom")
                         }
                     )
+                    Picker("Framing", selection: zoomTracking) {
+                        Text("Follow Cursor").tag(ZoomTrackingMode.followCursor)
+                        Text("Fixed Anchor").tag(ZoomTrackingMode.fixed)
+                    }
+                    Toggle("Lock during regeneration", isOn: zoomLocked)
                     Text("Drag the focal-point handle in the preview to reframe this zoom.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     LabeledContent("Start", value: Timecode.string(session.selectedZoom?.start ?? 0))
                     LabeledContent("End", value: Timecode.string(session.selectedZoom?.end ?? 0))
                     Button("Delete Zoom", role: .destructive) {
-                        session.deleteSelectedZoom()
+                        session.deleteSelectedTimelineItem()
                     }
                     autoZoomControls
                 }
@@ -42,6 +48,41 @@ struct InspectorPanel: View {
                     }
                     .disabled(!session.canAddZoomAtPlayhead)
                     autoZoomControls
+                }
+            }
+
+            Section("Cursor Treatment") {
+                if session.selectedCursorEffect != nil {
+                    Toggle("Show cursor", isOn: selectedCursorVisible)
+                    labeledSlider(
+                        "Scale",
+                        value: selectedCursorScale,
+                        range: CursorEffectRange.scaleRange,
+                        format: "%.2f×",
+                        actionName: "Change Cursor Treatment Scale",
+                        step: 0.05
+                    )
+                    Toggle("Emphasize clicks", isOn: selectedCursorClickEmphasis)
+                    Toggle("Highlight halo", isOn: selectedCursorHalo)
+                    Button("Delete Cursor Treatment", role: .destructive) {
+                        session.deleteTimelineSelection()
+                    }
+                } else {
+                    HStack {
+                        Button("Hide at Playhead") {
+                            session.addCursorEffectAtPlayhead(visible: false)
+                        }
+                        Button("Highlight") {
+                            session.addCursorEffectAtPlayhead(
+                                visible: true,
+                                clickEmphasis: true,
+                                halo: true
+                            )
+                        }
+                    }
+                    Text("Cursor treatments are source-timed and remain non-destructive.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -68,7 +109,7 @@ struct InspectorPanel: View {
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
-                    Button("Delete Caption", role: .destructive) { session.deleteSelectedCaption() }
+                    Button("Delete Caption", role: .destructive) { session.deleteSelectedTimelineItem() }
                 } else {
                     Text("Add or import timed captions, then edit their style here.")
                         .font(.caption)
@@ -96,7 +137,7 @@ struct InspectorPanel: View {
                         labeledSlider("Dim amount", value: annotationDimAmount, range: Annotation.dimAmountRange, format: "%.0f%%", actionName: "Change Spotlight Dim", step: 0.01, displayScale: 100)
                     }
                     ColorPicker("Color", selection: annotationColor)
-                    Button("Delete Annotation", role: .destructive) { session.deleteSelectedAnnotation() }
+                    Button("Delete Annotation", role: .destructive) { session.deleteSelectedTimelineItem() }
                     Text("Drag active annotations in the preview to position them.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -166,6 +207,8 @@ struct InspectorPanel: View {
                     actionName: "Change Cursor Scale",
                     step: 0.05
                 )
+                Toggle("Emphasize cursor clicks", isOn: cursorClickEmphasis)
+                Toggle("Cursor highlight halo", isOn: cursorHalo)
                 Toggle("Cursor motion blur", isOn: cursorMotionBlurEnabled)
                 if session.document.canvas.cursorMotionBlur.enabled {
                     labeledSlider(
@@ -178,6 +221,41 @@ struct InspectorPanel: View {
                         displayScale: 100
                     )
                 }
+            }
+
+            Section("Reusable Presets") {
+                ForEach(EditorStylePreset.builtIns) { preset in
+                    Button("Apply \(preset.name)") {
+                        session.applyStylePreset(preset)
+                    }
+                }
+                ForEach(session.localStylePresets) { preset in
+                    Button("Apply \(preset.name)") {
+                        session.applyStylePreset(preset)
+                    }
+                }
+                HStack {
+                    TextField("Preset name", text: $newPresetName)
+                    Button("Save Current") {
+                        session.saveCurrentStylePreset(named: newPresetName)
+                        newPresetName = ""
+                    }
+                    .disabled(newPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let status = session.presetStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !session.document.appliedPresetIDs.isEmpty {
+                    LabeledContent("Applied") {
+                        Text(session.document.appliedPresetIDs.joined(separator: ", "))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Preset values are copied into the project for portability; optional IDs record provenance.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Webcam") {
@@ -289,7 +367,7 @@ struct InspectorPanel: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Delete Speed Region", role: .destructive) {
-                        session.deleteSelectedSpeedSegment()
+                        session.deleteSelectedTimelineItem()
                     }
                 } else {
                     Text("Add a speed region at the playhead, then choose 0.25×–4× playback.")
@@ -389,15 +467,15 @@ struct InspectorPanel: View {
         .formStyle(.grouped)
         .controlSize(.small)
         .confirmationDialog(
-            "Replace Existing Zooms?",
+            "Regenerate Automatic Zooms?",
             isPresented: $confirmRegenerateZooms,
             titleVisibility: .visible
         ) {
-            Button("Regenerate", role: .destructive) {
+            Button("Regenerate") {
                 session.regenerateAutoZooms()
             }
         } message: {
-            Text("Auto-zooms from cursor activity will replace the current zoom ranges using the selected sensitivity.")
+            Text("Automatic zooms will be regenerated from clicks, dwell, and cursor activity. Locked and manual zooms are preserved.")
         }
     }
 
@@ -441,6 +519,48 @@ struct InspectorPanel: View {
             set: { value in
                 session.updateSelectedZoom { $0.amount = value }
             }
+        )
+    }
+
+    private var zoomTracking: Binding<ZoomTrackingMode> {
+        Binding(
+            get: { session.selectedZoom?.tracking ?? .followCursor },
+            set: { value in session.updateSelectedZoom { $0.tracking = value } }
+        )
+    }
+
+    private var zoomLocked: Binding<Bool> {
+        Binding(
+            get: { session.selectedZoom?.isLocked ?? false },
+            set: { value in session.updateSelectedZoom { $0.isLocked = value } }
+        )
+    }
+
+    private var selectedCursorVisible: Binding<Bool> {
+        Binding(
+            get: { session.selectedCursorEffect?.visible ?? true },
+            set: { value in session.updateSelectedCursorEffect { $0.visible = value } }
+        )
+    }
+
+    private var selectedCursorScale: Binding<Double> {
+        Binding(
+            get: { session.selectedCursorEffect?.scale ?? session.document.canvas.cursorScale },
+            set: { value in session.updateSelectedCursorEffect { $0.scale = value } }
+        )
+    }
+
+    private var selectedCursorClickEmphasis: Binding<Bool> {
+        Binding(
+            get: { session.selectedCursorEffect?.clickEmphasis ?? true },
+            set: { value in session.updateSelectedCursorEffect { $0.clickEmphasis = value } }
+        )
+    }
+
+    private var selectedCursorHalo: Binding<Bool> {
+        Binding(
+            get: { session.selectedCursorEffect?.halo ?? false },
+            set: { value in session.updateSelectedCursorEffect { $0.halo = value } }
         )
     }
 
@@ -555,6 +675,28 @@ struct InspectorPanel: View {
             set: { enabled in
                 session.updateCanvas(actionName: "Toggle Cursor Motion Blur") {
                     $0.cursorMotionBlur.enabled = enabled
+                }
+            }
+        )
+    }
+
+    private var cursorClickEmphasis: Binding<Bool> {
+        Binding(
+            get: { session.document.canvas.cursorClickEmphasis },
+            set: { enabled in
+                session.updateCanvas(actionName: "Toggle Cursor Click Emphasis") {
+                    $0.cursorClickEmphasis = enabled
+                }
+            }
+        )
+    }
+
+    private var cursorHalo: Binding<Bool> {
+        Binding(
+            get: { session.document.canvas.cursorHalo },
+            set: { enabled in
+                session.updateCanvas(actionName: "Toggle Cursor Halo") {
+                    $0.cursorHalo = enabled
                 }
             }
         )

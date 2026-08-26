@@ -110,6 +110,8 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
     public var aspectWidth: Double
     public var aspectHeight: Double
     public var cursorMotionBlur: CursorMotionBlurSettings
+    public var cursorClickEmphasis: Bool
+    public var cursorHalo: Bool
 
     public init(
         background: CanvasBackground = .solid(.canvasDefault),
@@ -118,7 +120,9 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
         cursorScale: Double = 0.5,
         aspectWidth: Double = 16,
         aspectHeight: Double = 9,
-        cursorMotionBlur: CursorMotionBlurSettings = .default
+        cursorMotionBlur: CursorMotionBlurSettings = .default,
+        cursorClickEmphasis: Bool = true,
+        cursorHalo: Bool = false
     ) {
         self.background = background
         self.padding = padding
@@ -127,6 +131,8 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
         self.aspectWidth = aspectWidth
         self.aspectHeight = aspectHeight
         self.cursorMotionBlur = cursorMotionBlur
+        self.cursorClickEmphasis = cursorClickEmphasis
+        self.cursorHalo = cursorHalo
     }
 
     public static let `default` = CanvasSettings()
@@ -140,6 +146,8 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
         case aspectWidth
         case aspectHeight
         case cursorMotionBlur
+        case cursorClickEmphasis
+        case cursorHalo
     }
 
     public init(from decoder: Decoder) throws {
@@ -155,6 +163,11 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
             CursorMotionBlurSettings.self,
             forKey: .cursorMotionBlur
         )) ?? .disabled
+        cursorClickEmphasis = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .cursorClickEmphasis
+        ) ?? true
+        cursorHalo = try container.decodeIfPresent(Bool.self, forKey: .cursorHalo) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -166,6 +179,8 @@ public struct CanvasSettings: Codable, Sendable, Hashable {
         try container.encode(aspectWidth, forKey: .aspectWidth)
         try container.encode(aspectHeight, forKey: .aspectHeight)
         try container.encode(cursorMotionBlur, forKey: .cursorMotionBlur)
+        try container.encode(cursorClickEmphasis, forKey: .cursorClickEmphasis)
+        try container.encode(cursorHalo, forKey: .cursorHalo)
     }
 }
 
@@ -254,6 +269,16 @@ public struct CanvasPreset: Sendable, Hashable, Identifiable {
     public static let builtIns: [CanvasPreset] = [defaultStyle, dark, light, minimal]
 }
 
+public enum ZoomTrackingMode: String, Codable, Sendable, Hashable, CaseIterable {
+    case fixed
+    case followCursor
+}
+
+public enum ZoomRangeSource: String, Codable, Sendable, Hashable, CaseIterable {
+    case manual
+    case automatic
+}
+
 public struct ZoomRange: Codable, Sendable, Hashable, Identifiable {
     public var id: UUID
     public var start: TimeInterval
@@ -261,19 +286,70 @@ public struct ZoomRange: Codable, Sendable, Hashable, Identifiable {
     public var amount: Double
     /// Normalized anchor in UV space (0...1), origin top-left.
     public var anchor: Point2D
+    public var tracking: ZoomTrackingMode
+    public var isLocked: Bool
+    public var source: ZoomRangeSource
 
     public init(
         id: UUID = UUID(),
         start: TimeInterval,
         end: TimeInterval,
         amount: Double,
-        anchor: Point2D
+        anchor: Point2D,
+        tracking: ZoomTrackingMode = .followCursor,
+        isLocked: Bool = false,
+        source: ZoomRangeSource = .manual
     ) {
         self.id = id
         self.start = start
         self.end = end
         self.amount = amount
         self.anchor = anchor
+        self.tracking = tracking
+        self.isLocked = isLocked
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, start, end, amount, anchor, tracking, isLocked, source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        start = try container.decodeIfPresent(TimeInterval.self, forKey: .start) ?? 0
+        end = try container.decodeIfPresent(TimeInterval.self, forKey: .end) ?? start
+        amount = try container.decodeIfPresent(Double.self, forKey: .amount) ?? 1.8
+        anchor = try container.decodeIfPresent(Point2D.self, forKey: .anchor)
+            ?? Point2D(x: 0.5, y: 0.5)
+        // Legacy zoom ranges did not carry these fields.  Their historical
+        // behavior was cursor-following, manually authored, and unlocked.
+        tracking = (try? container.decode(ZoomTrackingMode.self, forKey: .tracking))
+            ?? .followCursor
+        isLocked = try container.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
+        source = (try? container.decode(ZoomRangeSource.self, forKey: .source)) ?? .manual
+    }
+
+    public var normalized: ZoomRange {
+        var value = self
+        value.start = value.start.isFinite ? max(value.start, 0) : 0
+        value.end = value.end.isFinite ? max(value.end, value.start) : value.start
+        value.amount = value.amount.isFinite ? min(max(value.amount, 1), 5) : 1.8
+        value.anchor.x = value.anchor.x.isFinite ? min(max(value.anchor.x, 0), 1) : 0.5
+        value.anchor.y = value.anchor.y.isFinite ? min(max(value.anchor.y, 0), 1) : 0.5
+        return value
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(start, forKey: .start)
+        try container.encode(end, forKey: .end)
+        try container.encode(amount, forKey: .amount)
+        try container.encode(anchor, forKey: .anchor)
+        try container.encode(tracking, forKey: .tracking)
+        try container.encode(isLocked, forKey: .isLocked)
+        try container.encode(source, forKey: .source)
     }
 }
 
@@ -662,9 +738,10 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {
-    /// v4 adds the non-destructive edit-decision lane. Older documents remain
+    /// v5 adds durable smart-editing data (transcript and cursor effects) and
+    /// richer zoom metadata. Older documents remain
     /// readable and are upgraded when they are first saved.
-    public static let currentFormatVersion = 4
+    public static let currentFormatVersion = 5
 
     public var formatVersion: Int
     public var trimIn: TimeInterval
@@ -684,6 +761,11 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var annotations: [Annotation]
     public var videoExportSettings: VideoExportSettings
     public var editDecisions: [EditDecision]
+    public var transcript: [TranscriptSegment]
+    public var cursorEffects: [CursorEffectRange]
+    /// Presets applied to this document, in application order. Empty is the
+    /// default and is omitted from the wire format for compact legacy output.
+    public var appliedPresetIDs: [String]
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -703,7 +785,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         captions: [CaptionCue] = [],
         annotations: [Annotation] = [],
         videoExportSettings: VideoExportSettings = .default,
-        editDecisions: [EditDecision] = []
+        editDecisions: [EditDecision] = [],
+        transcript: [TranscriptSegment] = [],
+        cursorEffects: [CursorEffectRange] = [],
+        appliedPresetIDs: [String] = []
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -723,6 +808,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.annotations = annotations
         self.videoExportSettings = videoExportSettings
         self.editDecisions = editDecisions
+        self.transcript = transcript
+        self.cursorEffects = cursorEffects
+        self.appliedPresetIDs = appliedPresetIDs
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -744,6 +832,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case annotations
         case videoExportSettings
         case editDecisions
+        case transcript
+        case cursorEffects
+        case appliedPresetIDs
     }
 
     private struct AnyCodingKey: CodingKey {
@@ -798,7 +889,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         }
         trimIn = try container.decodeIfPresent(TimeInterval.self, forKey: .trimIn) ?? 0
         trimOut = try container.decodeIfPresent(TimeInterval.self, forKey: .trimOut)
-        zoomRanges = try container.decodeIfPresent([ZoomRange].self, forKey: .zoomRanges) ?? []
+        zoomRanges = (try? container.decode([LossyDecodable<ZoomRange>].self, forKey: .zoomRanges))?
+            .compactMap(\.value) ?? []
         canvas = try container.decodeIfPresent(CanvasSettings.self, forKey: .canvas) ?? .legacyDefault
         cursorSprites = try container.decodeIfPresent([CursorSprite].self, forKey: .cursorSprites) ?? []
         keyboardOverlay = try container.decodeIfPresent(
@@ -835,6 +927,15 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             [LossyDecodable<EditDecision>].self,
             forKey: .editDecisions
         ))?.compactMap(\.value) ?? []
+        transcript = (try? container.decode(
+            [LossyDecodable<TranscriptSegment>].self,
+            forKey: .transcript
+        ))?.compactMap(\.value) ?? []
+        cursorEffects = (try? container.decode(
+            [LossyDecodable<CursorEffectRange>].self,
+            forKey: .cursorEffects
+        ))?.compactMap(\.value) ?? []
+        appliedPresetIDs = (try? container.decode([String].self, forKey: .appliedPresetIDs)) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -857,6 +958,11 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encode(annotations, forKey: .annotations)
         try container.encode(videoExportSettings, forKey: .videoExportSettings)
         try container.encode(editDecisions, forKey: .editDecisions)
+        try container.encode(transcript, forKey: .transcript)
+        try container.encode(cursorEffects, forKey: .cursorEffects)
+        if !appliedPresetIDs.isEmpty {
+            try container.encode(appliedPresetIDs, forKey: .appliedPresetIDs)
+        }
     }
 
     /// Opening a legacy project is read-only. Supported write paths call this
@@ -868,6 +974,16 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         value.keyboardOverlay = value.keyboardOverlay.normalized
         value.webcamOverlay = value.webcamOverlay.normalized
         value.canvas.cursorMotionBlur = value.canvas.cursorMotionBlur.normalized
+        value.zoomRanges = value.zoomRanges.map(\.normalized)
+        value.transcript = value.transcript.map(\.normalized).sorted {
+            $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
+        }
+        value.cursorEffects = value.cursorEffects.map(\.normalized).sorted {
+            $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
+        }
+        value.appliedPresetIDs = value.appliedPresetIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         value.speedSegments = SpeedTimeline.normalizedSegments(value.speedSegments)
         value.audioCleanup = value.audioCleanup.normalized
         value.captions = value.captions.map(\.normalized).sorted {
