@@ -21,6 +21,9 @@ enum CompositorGoldenSuite {
         "webcam-rounded-mirrored",
         "authored-overlays",
         "combined-speed-time",
+        "redactions-blur-pixelate",
+        "drawings-rich-annotations",
+        "device-frame-webcam-squircle",
     ]
 
     static func run() throws {
@@ -101,6 +104,9 @@ enum CompositorGoldenSuite {
         var webcamMirror = false
         var captions: [CaptionCue] = []
         var annotations: [Annotation] = []
+        var redactions: [RedactionRegion] = []
+        var drawings: [DrawingStroke] = []
+        var deviceFrame = DeviceFrameSettings.none
         var sourceTime: TimeInterval = 0
         var cursorImage: CIImage?
         var cursorSprite: CursorSprite?
@@ -226,6 +232,121 @@ enum CompositorGoldenSuite {
             webcamMirror = true
             captions = [goldenCaption]
             annotations = goldenAnnotations
+        case "redactions-blur-pixelate":
+            sourceTime = 1.25
+            redactions = [
+                RedactionRegion(
+                    id: UUID(uuidString: "30000000-0000-0000-0000-000000000001")!,
+                    start: 1,
+                    end: 2,
+                    rect: Rect2D(x: 0.08, y: 0.12, width: 0.28, height: 0.28),
+                    mode: .blur,
+                    strength: 0.72
+                ),
+                RedactionRegion(
+                    id: UUID(uuidString: "30000000-0000-0000-0000-000000000002")!,
+                    start: 1,
+                    end: 2,
+                    rect: Rect2D(x: 0.64, y: 0.58, width: 0.27, height: 0.25),
+                    mode: .pixelate,
+                    strength: 0.86
+                ),
+            ]
+        case "drawings-rich-annotations":
+            sourceTime = 1.7
+            drawings = [
+                DrawingStroke(
+                    id: UUID(uuidString: "40000000-0000-0000-0000-000000000001")!,
+                    start: 1,
+                    end: 2.5,
+                    tool: .pen,
+                    points: [
+                        Point2D(x: 0.08, y: 0.78),
+                        Point2D(x: 0.18, y: 0.67),
+                        Point2D(x: 0.29, y: 0.73),
+                        Point2D(x: 0.39, y: 0.6),
+                    ],
+                    color: RGBAColor(r: 0.98, g: 0.26, b: 0.12),
+                    width: 7
+                ),
+                DrawingStroke(
+                    id: UUID(uuidString: "40000000-0000-0000-0000-000000000002")!,
+                    start: 1,
+                    end: 2.5,
+                    tool: .highlighter,
+                    points: [
+                        Point2D(x: 0.58, y: 0.76),
+                        Point2D(x: 0.68, y: 0.7),
+                        Point2D(x: 0.78, y: 0.76),
+                        Point2D(x: 0.89, y: 0.69),
+                    ],
+                    color: RGBAColor(r: 0.24, g: 0.9, b: 1, a: 0.92),
+                    width: 12
+                ),
+            ]
+            annotations = [
+                Annotation(
+                    id: UUID(uuidString: "50000000-0000-0000-0000-000000000001")!,
+                    start: 1,
+                    end: 2.5,
+                    kind: .box,
+                    rect: Rect2D(x: 0.06, y: 0.08, width: 0.34, height: 0.28),
+                    color: RGBAColor(r: 1, g: 0.78, b: 0.16),
+                    fontSize: 30,
+                    animation: AnnotationAnimation(entrance: .pop, exit: .fade, duration: 0.4)
+                ),
+                Annotation(
+                    id: UUID(uuidString: "50000000-0000-0000-0000-000000000002")!,
+                    start: 1,
+                    end: 2.5,
+                    kind: .underline,
+                    position: Point2D(x: 0.45, y: 0.32),
+                    endPosition: Point2D(x: 0.73, y: 0.32),
+                    color: RGBAColor(r: 0.68, g: 0.42, b: 1),
+                    fontSize: 26,
+                    animation: AnnotationAnimation(entrance: .fade, duration: 0.3)
+                ),
+                Annotation(
+                    id: UUID(uuidString: "50000000-0000-0000-0000-000000000003")!,
+                    start: 1,
+                    end: 2.5,
+                    kind: .stepMarker,
+                    text: "2",
+                    position: Point2D(x: 0.84, y: 0.28),
+                    color: RGBAColor(r: 0.2, g: 0.72, b: 0.38),
+                    background: RGBAColor(r: 1, g: 1, b: 1),
+                    fontSize: 25,
+                    animation: AnnotationAnimation(entrance: .pop, duration: 0.35)
+                ),
+                Annotation(
+                    id: UUID(uuidString: "50000000-0000-0000-0000-000000000004")!,
+                    start: 1,
+                    end: 2.5,
+                    kind: .label,
+                    text: "Important",
+                    position: Point2D(x: 0.61, y: 0.48),
+                    endPosition: Point2D(x: 0.72, y: 0.42),
+                    color: RGBAColor(r: 1, g: 1, b: 1),
+                    background: RGBAColor(r: 0.14, g: 0.16, b: 0.22, a: 0.94),
+                    fontSize: 21,
+                    animation: AnnotationAnimation(entrance: .fade, exit: .fade, duration: 0.25)
+                ),
+            ]
+        case "device-frame-webcam-squircle":
+            deviceFrame = DeviceFrameSettings(id: .genericLaptopDark, scale: 0.86, shadow: true)
+            webcamSettings = WebcamOverlaySettings(
+                enabled: true,
+                shape: .squircle,
+                position: Point2D(x: 0.79, y: 0.26),
+                size: 0.22,
+                borderWidth: 5,
+                borderColor: RGBAColor(r: 0.94, g: 0.72, b: 0.22),
+                shadow: true,
+                shadowOpacity: 0.5,
+                shadowRadius: 10
+            )
+            webcam = makeWebcamImage()
+            webcamMirror = true
         default:
             throw OpenRecordError.io("Unknown compositor golden case \(caseID)")
         }
@@ -259,7 +380,10 @@ enum CompositorGoldenSuite {
             cursorImage: cursorImage,
             cursorSprite: cursorSprite,
             captions: captions,
-            annotations: annotations
+            annotations: annotations,
+            redactions: redactions,
+            drawings: drawings,
+            deviceFrame: deviceFrame
         )
         let pixelBuffer = try makePixelBuffer()
         compositor.render(
@@ -357,7 +481,6 @@ enum CompositorGoldenSuite {
         let attributes: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true,
-            kCVPixelBufferIOSurfacePropertiesKey: [CFString: Any](),
         ]
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault,
@@ -533,7 +656,7 @@ struct CompositorGoldenRecorder {
 }
 #else
 @Test
-func compositorGoldenFramesCoverTheV2OverlayStack() throws {
+func compositorGoldenFramesCoverTheV3VisualStack() throws {
     try CompositorGoldenSuite.run()
 }
 

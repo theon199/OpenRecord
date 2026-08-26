@@ -55,15 +55,20 @@ extension EditorSession {
         if let selectedSpeedID { return .speed(selectedSpeedID) }
         if let selectedCaptionID { return .caption(selectedCaptionID) }
         if let selectedAnnotationID { return .annotation(selectedAnnotationID) }
+        if let selectedRedactionID { return .redaction(selectedRedactionID) }
+        if let selectedDrawingID { return .drawing(selectedDrawingID) }
         if isWebcamSelected { return .webcam }
         return nil
     }
 
     func applyDocumentSelection(_ selection: EditorDocumentSelection?) {
+        selectedSourceRange = nil
         selectedZoomID = nil
         selectedSpeedID = nil
         selectedCaptionID = nil
         selectedAnnotationID = nil
+        selectedRedactionID = nil
+        selectedDrawingID = nil
         isWebcamSelected = false
         switch selection {
         case .zoom(let id):
@@ -78,6 +83,12 @@ extension EditorSession {
         case .annotation(let id):
             selectedAnnotationID = id
             timelineSelection = TimelineSelection(items: [.annotation(id)], primary: .annotation(id))
+        case .redaction(let id):
+            selectedRedactionID = id
+            timelineSelection = TimelineSelection(items: [.redaction(id)], primary: .redaction(id))
+        case .drawing(let id):
+            selectedDrawingID = id
+            timelineSelection = TimelineSelection(items: [.drawing(id)], primary: .drawing(id))
         case .webcam:
             isWebcamSelected = true
             timelineSelection.clear()
@@ -117,6 +128,8 @@ extension EditorSession {
         case .speed: deleteSelectedSpeedSegment()
         case .caption: deleteSelectedCaption()
         case .annotation: deleteSelectedAnnotation()
+        case .redaction, .drawing:
+            deleteTimelineSelection()
         case .webcam, .none: break
         }
     }
@@ -194,6 +207,24 @@ extension EditorSession {
         case .text: annotation = .textCallout(start: start, end: end)
         case .arrow: annotation = .arrow(start: start, end: end)
         case .spotlight: annotation = .spotlight(start: start, end: end)
+        case .box:
+            annotation = Annotation(start: start, end: end, kind: .box)
+        case .underline:
+            annotation = Annotation(start: start, end: end, kind: .underline)
+        case .stepMarker:
+            annotation = Annotation(
+                start: start,
+                end: end,
+                kind: .stepMarker,
+                text: "1"
+            )
+        case .label:
+            annotation = Annotation(
+                start: start,
+                end: end,
+                kind: .label,
+                text: "Label"
+            )
         }
         document.annotations.append(annotation)
         document.annotations.sort { $0.start < $1.start }

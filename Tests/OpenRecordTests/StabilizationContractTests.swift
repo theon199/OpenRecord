@@ -56,8 +56,8 @@ enum StabilizationContractSuite {
             ProjectMeta.self,
             from: ProjectJSON.encoder.encode(meta)
         )
-        guard decoded == meta, ProjectDocument.currentFormatVersion == 5 else {
-            throw OpenRecordError.io("capture metadata did not round-trip at project format v5")
+        guard decoded == meta, ProjectDocument.currentFormatVersion == 6 else {
+            throw OpenRecordError.io("capture metadata did not round-trip at project format v6")
         }
     }
 

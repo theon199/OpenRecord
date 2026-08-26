@@ -107,6 +107,10 @@ public enum AnnotationKind: String, Codable, CaseIterable, Sendable, Hashable {
     case text
     case arrow
     case spotlight
+    case box
+    case underline
+    case stepMarker = "step-marker"
+    case label
 }
 
 /// A source-timed canvas annotation. Coordinates are normalized canvas UV,
@@ -128,6 +132,7 @@ public struct Annotation: Codable, Sendable, Hashable, Identifiable {
     public var background: RGBAColor
     public var fontSize: Double
     public var dimAmount: Double
+    public var animation: AnnotationAnimation
 
     public init(
         id: UUID = UUID(),
@@ -141,7 +146,8 @@ public struct Annotation: Codable, Sendable, Hashable, Identifiable {
         color: RGBAColor = RGBAColor(r: 1, g: 0.25, b: 0.16),
         background: RGBAColor = RGBAColor(r: 0.03, g: 0.03, b: 0.04, a: 0.88),
         fontSize: Double = 42,
-        dimAmount: Double = 0.58
+        dimAmount: Double = 0.58,
+        animation: AnnotationAnimation = .none
     ) {
         self.id = id
         self.start = start
@@ -155,6 +161,56 @@ public struct Annotation: Codable, Sendable, Hashable, Identifiable {
         self.background = background
         self.fontSize = fontSize
         self.dimAmount = dimAmount
+        self.animation = animation
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, start, end, kind, text, position, endPosition, rect
+        case color, background, fontSize, dimAmount, animation
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        start = try container.decodeIfPresent(TimeInterval.self, forKey: .start) ?? 0
+        end = try container.decodeIfPresent(TimeInterval.self, forKey: .end) ?? start + 2
+        kind = try container.decodeIfPresent(AnnotationKind.self, forKey: .kind) ?? .text
+        text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
+        position = try container.decodeIfPresent(Point2D.self, forKey: .position)
+            ?? Point2D(x: 0.5, y: 0.5)
+        endPosition = try container.decodeIfPresent(Point2D.self, forKey: .endPosition)
+            ?? Point2D(x: 0.7, y: 0.5)
+        rect = try container.decodeIfPresent(Rect2D.self, forKey: .rect)
+            ?? Rect2D(x: 0.3, y: 0.3, width: 0.4, height: 0.3)
+        color = try container.decodeIfPresent(RGBAColor.self, forKey: .color)
+            ?? RGBAColor(r: 1, g: 0.25, b: 0.16)
+        background = try container.decodeIfPresent(RGBAColor.self, forKey: .background)
+            ?? RGBAColor(r: 0.03, g: 0.03, b: 0.04, a: 0.88)
+        fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize) ?? 42
+        dimAmount = try container.decodeIfPresent(Double.self, forKey: .dimAmount) ?? 0.58
+        animation = try container.decodeIfPresent(
+            AnnotationAnimation.self,
+            forKey: .animation
+        ) ?? .none
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(start, forKey: .start)
+        try container.encode(end, forKey: .end)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(text, forKey: .text)
+        try container.encode(position, forKey: .position)
+        try container.encode(endPosition, forKey: .endPosition)
+        try container.encode(rect, forKey: .rect)
+        try container.encode(color, forKey: .color)
+        try container.encode(background, forKey: .background)
+        try container.encode(fontSize, forKey: .fontSize)
+        try container.encode(dimAmount, forKey: .dimAmount)
+        if animation != .none {
+            try container.encode(animation, forKey: .animation)
+        }
     }
 
     public static func textCallout(
@@ -209,6 +265,7 @@ public struct Annotation: Codable, Sendable, Hashable, Identifiable {
         value.dimAmount = value.dimAmount.isFinite
             ? min(max(value.dimAmount, Self.dimAmountRange.lowerBound), Self.dimAmountRange.upperBound)
             : 0.58
+        value.animation = value.animation.normalized
         return value
     }
 

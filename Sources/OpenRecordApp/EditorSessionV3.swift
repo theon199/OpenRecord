@@ -16,10 +16,10 @@ extension EditorSession {
     }
 
     var selectedTranscriptRange: TimelineEditRange? {
-        let selected = document.transcript.filter { selectedTranscriptSegmentIDs.contains($0.id) }
-        guard let start = selected.map(\.start).min(), let end = selected.map(\.end).max()
-        else { return nil }
-        return TimelineEditRange(start: start, end: end)
+        TranscriptTimelineSelection.range(
+            in: document.transcript,
+            selectedIDs: selectedTranscriptSegmentIDs
+        )
     }
 
     var selectedCursorEffect: CursorEffectRange? {
@@ -28,6 +28,7 @@ extension EditorSession {
     }
 
     func selectTimelineItem(_ item: TimelineItemID, extending: Bool = false) {
+        selectedSourceRange = nil
         timelineSelection.select(item, extending: extending)
         applyPrimaryTimelineSelection()
     }
@@ -37,12 +38,16 @@ extension EditorSession {
         selectedSpeedID = nil
         selectedCaptionID = nil
         selectedAnnotationID = nil
+        selectedRedactionID = nil
+        selectedDrawingID = nil
         isWebcamSelected = false
         switch timelineSelection.primary {
         case .zoom(let id): selectedZoomID = id
         case .speed(let id): selectedSpeedID = id
         case .caption(let id): selectedCaptionID = id
         case .annotation(let id): selectedAnnotationID = id
+        case .redaction(let id): selectedRedactionID = id
+        case .drawing(let id): selectedDrawingID = id
         case .cursorEffect, .none: break
         }
     }
@@ -181,7 +186,26 @@ extension EditorSession {
         } else {
             selectedTranscriptSegmentIDs = [id]
         }
+        selectedSourceRange = selectedTranscriptRange
         seek(to: segment.start)
+    }
+
+    func deleteSelectedSourceRange() {
+        guard let selectedSourceRange,
+              selectedSourceRange.end - selectedSourceRange.start
+                >= ProjectTimeMapper.minimumDecisionDuration
+        else { return }
+        let before = document
+        document.editDecisions = ProjectTimeMapper.normalizedDecisions(
+            document.editDecisions + [EditDecision(
+                start: selectedSourceRange.start,
+                end: selectedSourceRange.end
+            )],
+            sourceDuration: timelineDuration
+        )
+        self.selectedSourceRange = nil
+        documentDidChange(from: before, actionName: "Delete Selected Range")
+        seek(to: selectedSourceRange.start)
     }
 
     func updateTranscriptSegmentText(_ id: UUID, text: String) {
@@ -289,7 +313,10 @@ extension EditorSession {
         let systemURL = hasSystemAudio ? ProjectLayout.systemAudioURL(in: projectURL) : nil
         let microphoneTiming = trackTiming(for: .microphone)
         let systemTiming = trackTiming(for: .systemAudio)
-        let transcript = document.transcript
+        let transcript = TranscriptTimelineSelection.segments(
+            in: document.transcript,
+            for: source
+        )
         let duration = duration
         Task { @MainActor in
             defer { isAnalyzingSilence = false }
@@ -381,7 +408,7 @@ extension EditorSession {
         seek(to: playhead)
     }
 
-    func nudgeTimelineSelection(by delta: TimeInterval, snappingDisabled: Bool = true) {
+    func nudgeTimelineSelection(by delta: TimeInterval, snappingDisabled: Bool = false) {
         guard !timelineSelection.isEmpty else { return }
         let before = document
         let result = ProjectTimelineOperations.moving(
@@ -522,6 +549,24 @@ extension EditorSession {
                 var copy = value; copy.id = id; copy.start = start; return copy
             },
             reference: TimelineItemID.cursorEffect
+        )
+        splitRange(
+            &document.redactions,
+            id: { $0.id }, start: { $0.start }, end: { $0.end },
+            setEnd: { $0.end = $1 },
+            clone: { value, id, start in
+                var copy = value; copy.id = id; copy.start = start; return copy
+            },
+            reference: TimelineItemID.redaction
+        )
+        splitRange(
+            &document.drawings,
+            id: { $0.id }, start: { $0.start }, end: { $0.end },
+            setEnd: { $0.end = $1 },
+            clone: { value, id, start in
+                var copy = value; copy.id = id; copy.start = start; return copy
+            },
+            reference: TimelineItemID.drawing
         )
         guard before != document else { return }
         timelineSelection = TimelineSelection(items: selected.union(inserted), primary: inserted.first)
@@ -711,6 +756,8 @@ extension EditorSession {
         values += document.captions.map { (.caption($0.id), $0.start) }
         values += document.annotations.map { (.annotation($0.id), $0.start) }
         values += document.cursorEffects.map { (.cursorEffect($0.id), $0.start) }
+        values += document.redactions.map { (.redaction($0.id), $0.start) }
+        values += document.drawings.map { (.drawing($0.id), $0.start) }
         return values.sorted {
             if $0.1 != $1.1 { return $0.1 < $1.1 }
             if $0.0.kind.rawValue != $1.0.kind.rawValue {
@@ -728,6 +775,8 @@ extension EditorSession {
         points += document.captions.flatMap { [$0.start, $0.end] }
         points += document.annotations.flatMap { [$0.start, $0.end] }
         points += document.cursorEffects.flatMap { [$0.start, $0.end] }
+        points += document.redactions.flatMap { [$0.start, $0.end] }
+        points += document.drawings.flatMap { [$0.start, $0.end] }
         return Array(Set(points.filter(\.isFinite))).sorted()
     }
 }

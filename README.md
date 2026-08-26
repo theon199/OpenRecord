@@ -64,8 +64,9 @@ Sidebar context menu → **Reveal in Finder**. An editor export can optionally b
 Open a project from the sidebar.
 
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
-- **Timeline**: playhead, trim handles, zoom blocks, color-coded 0.25×–4× speed regions, caption cues, and annotation ranges. Drag a block or either edge to move or resize it. Space plays/pauses; Delete removes the selected timeline item.
-- **Inspector**: zoom amount, auto-zoom sensitivity, camera easing, canvas/cursor styling, webcam and keyboard overlays, speed controls, captions, text/arrow/spotlight annotations, microphone normalization/noise gate/de-click, microphone/system balance, and export.
+- **Timeline**: playhead, trim/cut decisions, zoom and speed blocks, captions, annotations, cursor treatments, privacy regions, and vector drawings. Compatible items support multi-select, copy/paste, duplicate, snapping, split, nudge, and grouped undo.
+- **Transcript**: on-device mic/system transcription, search, phrase navigation/range selection, caption generation, non-destructive text cuts, and locally analyzed pause suggestions.
+- **Inspector**: smart zoom/cursor styling, captions and richer annotations, blur/pixelate privacy regions, pen/highlighter drawing, generic laptop/phone/browser frames, expanded webcam styling, keyboard overlays, and local audio normalization/compression/limiting/fades.
 
 **Export Video…** (⌘E) renders the **in-memory** document — not a stale re-read from disk. Choose H.264 or HEVC in MP4, or ProRes 422 in MOV, at 720p, 1080p, 4K, or source-sized resolution. Output is Rec.709 and 60 fps if the source averages ≥ 45 fps, otherwise 30 fps. Speed regions remap every visual and telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
 
@@ -73,7 +74,7 @@ The Export inspector also creates animated GIFs (up to 30 seconds), mixed-audio 
 
 ### Direct manipulation, parity, and recovery
 
-When a webcam overlay is enabled, visible at the playhead, and selected in the preview, click-drag it to move it and use its resize handle to change its size. The inspector position and size controls update live as the pointer moves. Choose **Circle** or **Rounded rectangle** for the shape; the preview updates immediately, keeps the overlay within the canvas, and preserves the normalized placement as the canvas aspect ratio changes. A continuous move or resize gesture is one undo step.
+When a webcam overlay is enabled, visible at the playhead, and selected in the preview, click-drag it to move it and use its resize handle to change its size. The inspector position and size controls update live as the pointer moves. Choose **Circle**, **Rounded rectangle**, or **Squircle**, then customize border color, corner radius, and shadow treatment. The preview updates immediately, keeps the overlay within the canvas, and preserves normalized placement as the canvas aspect ratio changes. A continuous move or resize gesture is one undo step.
 
 Preview and export use the same normalized `WebcamOverlayLayout` geometry and timestamp mapping, and export renders the current in-memory document. Webcam position, size, shape, mirroring, and timing therefore carry through to the exported frame within the documented small pixel tolerance. The preview remains an interactive approximation rather than the full export compositor: codec/color conversion, frame rounding, antialiasing, and other final-encoding details can produce small pixel-level differences. Inspect the rendered file when exact final pixels matter.
 
@@ -103,7 +104,7 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # capture target/timing/health and optional webcam device metadata
-  project.json              # format v5: edits, transcript, captions, overlays, and export settings
+  project.json              # format v6: edits, transcript, visual stack, audio polish, and export settings
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     webcam.mp4              # optional H.264 face-camera track
@@ -120,9 +121,9 @@ Each recording is a folder package:
 Coordinates are **points** (Quartz, origin top-left of the main display). Cursor samples may include `visible: false` while the pointer is outside the captured target. New window recordings use `target.jsonl` to map global cursor points through the window bounds at each timestamp; older projects fall back to `meta.json` bounds. Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
 
 Opening an older supported project is read-only until the first save, which migrates a
-copy of every supported field to the current format-v5 schema. Projects with a newer
+copy of every supported field to the current format-v6 schema. Projects with a newer
 format version, or unknown top-level fields in the current format, are rejected
-with an update-required error instead of risking silent data loss. Legacy pre-v5
+with an update-required error instead of risking silent data loss. Legacy pre-v6
 files with unknown top-level fields may open read-only, but cannot be migrated
 until those fields are supported. Unknown nested fields in an otherwise valid
 current document are preserved across library saves; unknown enum values may
@@ -134,4 +135,4 @@ atomic replacement.
 
 ## Out of scope
 
-No automatic speech-to-text, freehand drawing, blur regions, animated stickers, device frames, iPhone capture, shareable links, advanced voice isolation, or in-app OAuth yet.
+No cloud-required speech service, automatic sensitive-content detection, arbitrary animation curves, webcam background removal, iPhone capture, hosted share links, collaboration accounts, advanced DAW/NLE tooling, or in-app OAuth yet.

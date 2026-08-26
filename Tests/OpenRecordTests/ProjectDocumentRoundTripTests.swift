@@ -211,7 +211,7 @@ enum ProjectDocumentJSONRoundTrip {
               upgraded.cursorEffects.isEmpty,
               upgraded.appliedPresetIDs.isEmpty
         else {
-            throw OpenRecordError.io("The first-save migration did not produce the v5 defaults")
+            throw OpenRecordError.io("The first-save migration did not produce the v6 defaults")
         }
 
         let futureJSON = Data(

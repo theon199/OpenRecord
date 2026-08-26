@@ -5,6 +5,37 @@ import AVFoundation
 import Speech
 #endif
 
+/// Pure transcript selection/source rules shared by transcript UI and silence
+/// analysis. Keeping them in the core module makes mixed-track behavior and
+/// phrase-to-range selection deterministic and testable without SwiftUI.
+public enum TranscriptTimelineSelection: Sendable {
+    public static func segments(
+        in transcript: [TranscriptSegment],
+        for source: TranscriptSource
+    ) -> [TranscriptSegment] {
+        switch source {
+        case .microphone:
+            transcript.filter { $0.source == .microphone }
+        case .systemAudio:
+            transcript.filter { $0.source == .systemAudio }
+        case .mixed:
+            transcript
+        }
+    }
+
+    public static func range(
+        in transcript: [TranscriptSegment],
+        selectedIDs: Set<UUID>
+    ) -> TimelineEditRange? {
+        let selected = transcript.filter { selectedIDs.contains($0.id) }
+        guard let start = selected.map(\.start).min(),
+              let end = selected.map(\.end).max(),
+              end > start
+        else { return nil }
+        return TimelineEditRange(start: start, end: end)
+    }
+}
+
 /// A request for a local transcription operation.  The request deliberately
 /// contains a local file URL only; no provider is given credentials or a
 /// network client.

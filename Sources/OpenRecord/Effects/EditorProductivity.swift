@@ -11,6 +11,8 @@ public enum TimelineItemID: Sendable, Hashable {
     case caption(UUID)
     case annotation(UUID)
     case cursorEffect(UUID)
+    case redaction(UUID)
+    case drawing(UUID)
 
     public enum Kind: String, CaseIterable, Sendable, Hashable {
         case zoom
@@ -18,12 +20,15 @@ public enum TimelineItemID: Sendable, Hashable {
         case caption
         case annotation
         case cursorEffect
+        case redaction
+        case drawing
     }
 
     public var id: UUID {
         switch self {
         case .zoom(let id), .speed(let id), .caption(let id),
-             .annotation(let id), .cursorEffect(let id):
+             .annotation(let id), .cursorEffect(let id),
+             .redaction(let id), .drawing(let id):
             id
         }
     }
@@ -35,6 +40,8 @@ public enum TimelineItemID: Sendable, Hashable {
         case .caption: .caption
         case .annotation: .annotation
         case .cursorEffect: .cursorEffect
+        case .redaction: .redaction
+        case .drawing: .drawing
         }
     }
 }
@@ -105,30 +112,38 @@ public struct TimelineClipboard: Sendable, Hashable {
     public var captions: [CaptionCue]
     public var annotations: [Annotation]
     public var cursorEffects: [CursorEffectRange]
+    public var redactions: [RedactionRegion]
+    public var drawings: [DrawingStroke]
 
     public init(
         zooms: [ZoomRange] = [],
         speeds: [SpeedSegment] = [],
         captions: [CaptionCue] = [],
         annotations: [Annotation] = [],
-        cursorEffects: [CursorEffectRange] = []
+        cursorEffects: [CursorEffectRange] = [],
+        redactions: [RedactionRegion] = [],
+        drawings: [DrawingStroke] = []
     ) {
         self.zooms = zooms
         self.speeds = speeds
         self.captions = captions
         self.annotations = annotations
         self.cursorEffects = cursorEffects
+        self.redactions = redactions
+        self.drawings = drawings
     }
 
     public var isEmpty: Bool {
         zooms.isEmpty && speeds.isEmpty && captions.isEmpty
             && annotations.isEmpty && cursorEffects.isEmpty
+            && redactions.isEmpty && drawings.isEmpty
     }
 
     public var earliestStart: TimeInterval? {
         let starts = zooms.map(\.start) + speeds.map(\.start)
             + captions.map(\.start) + annotations.map(\.start)
             + cursorEffects.map(\.start)
+            + redactions.map(\.start) + drawings.map(\.start)
         return starts.min()
     }
 }
@@ -237,6 +252,14 @@ public enum TimelineSnapping: Sendable {
             values.append(TimelineSnapTarget(time: value.start, kind: .timelineItem))
             values.append(TimelineSnapTarget(time: value.end, kind: .timelineItem))
         }
+        for value in document.redactions where !excluded.contains(.redaction(value.id)) {
+            values.append(TimelineSnapTarget(time: value.start, kind: .timelineItem))
+            values.append(TimelineSnapTarget(time: value.end, kind: .timelineItem))
+        }
+        for value in document.drawings where !excluded.contains(.drawing(value.id)) {
+            values.append(TimelineSnapTarget(time: value.start, kind: .timelineItem))
+            values.append(TimelineSnapTarget(time: value.end, kind: .timelineItem))
+        }
         return values
     }
 }
@@ -252,7 +275,9 @@ public enum ProjectTimelineOperations: Sendable {
             speeds: document.speedSegments.filter { items.contains(.speed($0.id)) },
             captions: document.captions.filter { items.contains(.caption($0.id)) },
             annotations: document.annotations.filter { items.contains(.annotation($0.id)) },
-            cursorEffects: document.cursorEffects.filter { items.contains(.cursorEffect($0.id)) }
+            cursorEffects: document.cursorEffects.filter { items.contains(.cursorEffect($0.id)) },
+            redactions: document.redactions.filter { items.contains(.redaction($0.id)) },
+            drawings: document.drawings.filter { items.contains(.drawing($0.id)) }
         )
     }
 
@@ -267,6 +292,8 @@ public enum ProjectTimelineOperations: Sendable {
         value.captions.removeAll { items.contains(.caption($0.id)) }
         value.annotations.removeAll { items.contains(.annotation($0.id)) }
         value.cursorEffects.removeAll { items.contains(.cursorEffect($0.id)) }
+        value.redactions.removeAll { items.contains(.redaction($0.id)) }
+        value.drawings.removeAll { items.contains(.drawing($0.id)) }
         return value
     }
 
@@ -317,6 +344,20 @@ public enum ProjectTimelineOperations: Sendable {
             shift(&item.start, &item.end, delta: delta, sourceDuration: sourceDuration)
             value.cursorEffects.append(item)
             inserted.append(.cursorEffect(item.id))
+        }
+        for raw in clipboard.redactions {
+            var item = raw
+            item.id = UUID()
+            shift(&item.start, &item.end, delta: delta, sourceDuration: sourceDuration)
+            value.redactions.append(item)
+            inserted.append(.redaction(item.id))
+        }
+        for raw in clipboard.drawings {
+            var item = raw
+            item.id = UUID()
+            shift(&item.start, &item.end, delta: delta, sourceDuration: sourceDuration)
+            value.drawings.append(item)
+            inserted.append(.drawing(item.id))
         }
 
         value = sorted(value).normalizedForTimelineEditing(sourceDuration: sourceDuration)
@@ -377,6 +418,14 @@ public enum ProjectTimelineOperations: Sendable {
             value.cursorEffects[index].start += delta
             value.cursorEffects[index].end += delta
         }
+        for index in value.redactions.indices where items.contains(.redaction(value.redactions[index].id)) {
+            value.redactions[index].start += delta
+            value.redactions[index].end += delta
+        }
+        for index in value.drawings.indices where items.contains(.drawing(value.drawings[index].id)) {
+            value.drawings[index].start += delta
+            value.drawings[index].end += delta
+        }
         value = sorted(value).normalizedForTimelineEditing(sourceDuration: sourceDuration)
         return TimelinePasteResult(
             document: value,
@@ -411,6 +460,7 @@ public enum ProjectTimelineOperations: Sendable {
         let ends = clipboard.zooms.map(\.end) + clipboard.speeds.map(\.end)
             + clipboard.captions.map(\.end) + clipboard.annotations.map(\.end)
             + clipboard.cursorEffects.map(\.end)
+            + clipboard.redactions.map(\.end) + clipboard.drawings.map(\.end)
         return ends.max()
     }
 
@@ -421,6 +471,8 @@ public enum ProjectTimelineOperations: Sendable {
         value.captions.sort(by: rangeOrder)
         value.annotations.sort(by: rangeOrder)
         value.cursorEffects.sort(by: rangeOrder)
+        value.redactions.sort(by: rangeOrder)
+        value.drawings.sort(by: rangeOrder)
         return value
     }
 
@@ -433,6 +485,8 @@ public enum ProjectTimelineOperations: Sendable {
             case let value as CaptionCue: (value.start, value.end)
             case let value as Annotation: (value.start, value.end)
             case let value as CursorEffectRange: (value.start, value.end)
+            case let value as RedactionRegion: (value.start, value.end)
+            case let value as DrawingStroke: (value.start, value.end)
             default: (0, 0)
             }
         }
@@ -451,6 +505,8 @@ public extension ProjectDocument {
         case .caption(let id): captions.contains { $0.id == id }
         case .annotation(let id): annotations.contains { $0.id == id }
         case .cursorEffect(let id): cursorEffects.contains { $0.id == id }
+        case .redaction(let id): redactions.contains { $0.id == id }
+        case .drawing(let id): drawings.contains { $0.id == id }
         }
     }
 }

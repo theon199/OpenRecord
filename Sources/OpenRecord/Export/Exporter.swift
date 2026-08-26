@@ -240,6 +240,10 @@ private enum ExportSession {
            project.audioCleanup.noiseGateEnabled
                 || project.audioCleanup.normalizeEnabled
                 || project.audioCleanup.deClickEnabled
+                || project.audioCleanup.compressorEnabled
+                || project.audioCleanup.limiterEnabled
+                || project.audioCleanup.fadeInDuration > 0
+                || project.audioCleanup.fadeOutDuration > 0
         {
             let cleanupURL = parent.appendingPathComponent(
                 ".\(outputURL.lastPathComponent).mic-cleanup-\(UUID().uuidString).m4a",
@@ -351,7 +355,10 @@ private enum ExportSession {
             cursorSprite: cursor?.sprite,
             cursorEffects: project.cursorEffects,
             captions: project.captions,
-            annotations: project.annotations
+            annotations: project.annotations,
+            redactions: project.redactions,
+            drawings: project.drawings,
+            deviceFrame: project.deviceFrame
         )
 
         let writerParts: (

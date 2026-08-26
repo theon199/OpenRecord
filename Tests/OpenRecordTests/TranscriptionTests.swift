@@ -43,3 +43,21 @@ func captionRegenerationPreservesEdits() throws {
         throw OpenRecordError.io("explicit caption overwrite did not regenerate")
     }
 }
+
+@Test("transcript source filtering and phrase range selection stay deterministic")
+func transcriptSourceFilteringAndRangeSelection() throws {
+    let mic = TranscriptSegment(start: 1, end: 2, recognizedText: "Mic", source: .microphone)
+    let system = TranscriptSegment(start: 3, end: 5, recognizedText: "System", source: .systemAudio)
+    let mixed = TranscriptSegment(start: 6, end: 7, recognizedText: "Mixed", source: .mixed)
+    let transcript = [system, mixed, mic]
+    guard TranscriptTimelineSelection.segments(in: transcript, for: .microphone) == [mic],
+          TranscriptTimelineSelection.segments(in: transcript, for: .systemAudio) == [system],
+          TranscriptTimelineSelection.segments(in: transcript, for: .mixed) == transcript,
+          TranscriptTimelineSelection.range(
+            in: transcript,
+            selectedIDs: [mic.id, system.id]
+          ) == TimelineEditRange(start: 1, end: 5)
+    else {
+        throw OpenRecordError.io("transcript source/range selection contract failed")
+    }
+}

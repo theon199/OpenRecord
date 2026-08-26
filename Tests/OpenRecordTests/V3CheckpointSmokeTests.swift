@@ -7,11 +7,12 @@ import Testing
 /// constructor-backed suite keeps the Checkpoint-2 contracts active alongside
 /// the ordinary `@Test` cases above.
 enum V3CheckpointSmokeSuite {
-    static let testCount = 11
+    static let testCount = 12
 
     static func run() throws {
         try transcriptionNormalizationAndDisplay()
         try captionRegenerationPreservesEdits()
+        try transcriptSourceFilteringAndRangeSelection()
         try silencePresetsAndBreathingRoom()
         try transcriptGapsAndAcceptedDecisions()
         try audioLevelTimelineMappingUsesCaptureRate()
@@ -239,7 +240,7 @@ enum V3CheckpointSmokeSuite {
               decoded.transcript[0].recognizedText == "recognized",
               decoded.transcript[0].editedText == "corrected"
         else {
-            throw OpenRecordError.io("Format-v5 smart-editing fields did not round-trip")
+            throw OpenRecordError.io("Format-v6 smart-editing fields did not round-trip")
         }
     }
 }

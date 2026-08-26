@@ -285,7 +285,14 @@ private enum ProjectDocumentPersistence {
             check(
                 webcam["shape"],
                 at: "webcamOverlay.shape",
-                allowed: ["circle", "rounded-rectangle"]
+                allowed: ["circle", "rounded-rectangle", "squircle"]
+            )
+        }
+        if let deviceFrame = root["deviceFrame"] as? [String: Any] {
+            check(
+                deviceFrame["id"],
+                at: "deviceFrame.id",
+                allowed: ["none", "generic-laptop-dark", "generic-phone-dark", "generic-browser-light"]
             )
         }
         if let canvas = root["canvas"] as? [String: Any],
@@ -322,7 +329,37 @@ private enum ProjectDocumentPersistence {
                 check(
                     annotation["kind"],
                     at: "annotations[\(index)].kind",
-                    allowed: ["text", "arrow", "spotlight"]
+                    allowed: ["text", "arrow", "spotlight", "box", "underline", "step-marker", "label"]
+                )
+                if let animation = annotation["animation"] as? [String: Any] {
+                    check(
+                        animation["entrance"],
+                        at: "annotations[\(index)].animation.entrance",
+                        allowed: ["none", "fade", "pop"]
+                    )
+                    check(
+                        animation["exit"],
+                        at: "annotations[\(index)].animation.exit",
+                        allowed: ["none", "fade", "pop"]
+                    )
+                }
+            }
+        }
+        if let redactions = root["redactions"] as? [[String: Any]] {
+            for (index, redaction) in redactions.enumerated() {
+                check(
+                    redaction["mode"],
+                    at: "redactions[\(index)].mode",
+                    allowed: ["blur", "pixelate"]
+                )
+            }
+        }
+        if let drawings = root["drawings"] as? [[String: Any]] {
+            for (index, drawing) in drawings.enumerated() {
+                check(
+                    drawing["tool"],
+                    at: "drawings[\(index)].tool",
+                    allowed: ["pen", "highlighter"]
                 )
             }
         }

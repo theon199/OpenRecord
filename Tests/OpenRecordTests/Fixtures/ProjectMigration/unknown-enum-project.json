@@ -9,7 +9,7 @@
       "y" : 0.75
     },
     "shadow" : true,
-    "shape" : "squircle",
+    "shape" : "hexagon",
     "size" : 0.2
   },
   "videoExportSettings" : {

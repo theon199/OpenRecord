@@ -130,6 +130,20 @@ enum ProjectMigrationFixtureTests {
             else {
                 throw OpenRecordError.io("The v5 fixture lost smart-editing fields while decoding")
             }
+        case 6:
+            guard document.redactions.first?.mode == .pixelate,
+                  document.drawings.first?.tool == .highlighter,
+                  document.annotations.first?.kind == .stepMarker,
+                  document.annotations.first?.animation.entrance == .pop,
+                  document.deviceFrame.id == .genericLaptopDark,
+                  document.webcamOverlay.shape == .squircle,
+                  document.webcamOverlay.borderColor == RGBAColor(r: 0.2, g: 0.8, b: 1),
+                  document.audioCleanup.compressorEnabled,
+                  document.audioCleanup.limiterEnabled,
+                  document.audioCleanup.fadeInDuration == 0.4
+            else {
+                throw OpenRecordError.io("The v6 fixture lost v3.1 visual or audio fields while decoding")
+            }
         default:
             throw OpenRecordError.io("Unexpected migration fixture version \(version)")
         }
@@ -411,7 +425,7 @@ enum ProjectMigrationFixtureTests {
         } catch let error as OpenRecordError {
             guard case .io(let message) = error,
                   message.contains("unsupported enum values"),
-                  message.contains("webcamOverlay.shape=squircle"),
+                  message.contains("webcamOverlay.shape=hexagon"),
                   message.contains("videoExportSettings.codec=av1")
             else {
                 throw error

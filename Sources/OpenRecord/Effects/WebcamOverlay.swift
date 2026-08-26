@@ -87,7 +87,7 @@ public enum WebcamOverlayLayout: Sendable {
         switch settings.shape {
         case .circle:
             widthFactor = 1
-        case .roundedRectangle:
+        case .roundedRectangle, .squircle:
             widthFactor = CGFloat(
                 min(max(sourceAspect.isFinite ? sourceAspect : 16.0 / 9.0, 1.2), 1.9)
             )
@@ -124,7 +124,11 @@ public enum WebcamOverlayLayout: Sendable {
         case .roundedRectangle:
             let aspect = min(max(sourceAspect.isFinite ? sourceAspect : 16.0 / 9.0, 1.2), 1.9)
             size = CGSize(width: baseSize * aspect, height: baseSize)
-            cornerRadius = Double(baseSize * 0.16)
+            cornerRadius = Double(baseSize) * settings.cornerRadius
+        case .squircle:
+            let aspect = min(max(sourceAspect.isFinite ? sourceAspect : 16.0 / 9.0, 1.0), 1.35)
+            size = CGSize(width: baseSize * aspect, height: baseSize)
+            cornerRadius = Double(baseSize * 0.34)
         }
 
         let margin = max(CGFloat(settings.borderWidth), shortEdge * 0.012)
@@ -198,7 +202,13 @@ enum WebcamOverlayRenderer {
             rect: outerRect,
             radius: CGFloat(geometry.cornerRadius)
         )
-        let borderColor = CIImage(color: CIColor.white).cropped(to: outerRect)
+        let color = settings.normalized.borderColor
+        let borderColor = CIImage(color: CIColor(
+            red: color.r,
+            green: color.g,
+            blue: color.b,
+            alpha: color.a
+        )).cropped(to: outerRect)
         let borderImage = borderColor.applyingFilter(
             "CISourceInCompositing",
             parameters: [kCIInputBackgroundImageKey: outerMask]
@@ -206,18 +216,27 @@ enum WebcamOverlayRenderer {
         let bubble = clipped.composited(over: borderImage)
         guard settings.shadow else { return bubble }
 
-        let shadowColor = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.42))
+        let shadowColor = CIImage(color: CIColor(
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: settings.normalized.shadowOpacity
+        ))
             .cropped(to: outerRect)
         let shadowShape = shadowColor.applyingFilter(
             "CISourceInCompositing",
             parameters: [kCIInputBackgroundImageKey: outerMask]
         )
-        let shadowExtent = outerRect.insetBy(dx: -30, dy: -30).offsetBy(dx: 0, dy: -8)
+        let shadowRadius = CGFloat(settings.normalized.shadowRadius)
+        let shadowOffset = max(shadowRadius * 0.65, 1)
+        let shadowExtent = outerRect
+            .insetBy(dx: -shadowRadius * 2.5, dy: -shadowRadius * 2.5)
+            .offsetBy(dx: 0, dy: -shadowOffset)
         let transparent = CIImage(color: .clear).cropped(to: shadowExtent)
         let shadow = shadowShape
-            .transformed(by: CGAffineTransform(translationX: 0, y: -8))
+            .transformed(by: CGAffineTransform(translationX: 0, y: -shadowOffset))
             .composited(over: transparent)
-            .applyingGaussianBlur(sigma: 12)
+            .applyingGaussianBlur(sigma: Double(shadowRadius))
             .cropped(to: shadowExtent)
         return bubble.composited(over: shadow)
     }

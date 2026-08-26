@@ -210,6 +210,8 @@ public enum EditorDocumentSelection: Sendable, Equatable {
     case speed(UUID)
     case caption(UUID)
     case annotation(UUID)
+    case redaction(UUID)
+    case drawing(UUID)
     case webcam
 
     public static func reconciled(
@@ -232,6 +234,12 @@ public enum EditorDocumentSelection: Sendable, Equatable {
         added += restoredDocument.annotations
             .filter { item in !previousDocument.annotations.contains { $0.id == item.id } }
             .map { .annotation($0.id) }
+        added += restoredDocument.redactions
+            .filter { item in !previousDocument.redactions.contains { $0.id == item.id } }
+            .map { .redaction($0.id) }
+        added += restoredDocument.drawings
+            .filter { item in !previousDocument.drawings.contains { $0.id == item.id } }
+            .map { .drawing($0.id) }
         return added.count == 1 ? added[0] : nil
     }
 
@@ -241,6 +249,8 @@ public enum EditorDocumentSelection: Sendable, Equatable {
         case .speed(let id): document.speedSegments.contains { $0.id == id }
         case .caption(let id): document.captions.contains { $0.id == id }
         case .annotation(let id): document.annotations.contains { $0.id == id }
+        case .redaction(let id): document.redactions.contains { $0.id == id }
+        case .drawing(let id): document.drawings.contains { $0.id == id }
         case .webcam: document.webcamOverlay.enabled
         }
     }
@@ -293,6 +303,18 @@ public extension ProjectDocument {
         value.annotations = annotations.sorted(by: timelineRangeOrder).compactMap {
             normalizedAnnotation($0, sourceDuration: duration)
         }
+        value.transcript = transcript.sorted(by: timelineRangeOrder).compactMap {
+            normalizedTranscript($0, sourceDuration: duration)
+        }
+        value.cursorEffects = cursorEffects.sorted(by: timelineRangeOrder).compactMap {
+            normalizedCursorEffect($0, sourceDuration: duration)
+        }
+        value.redactions = redactions.sorted(by: timelineRangeOrder).compactMap {
+            normalizedRedaction($0, sourceDuration: duration)
+        }
+        value.drawings = drawings.sorted(by: timelineRangeOrder).compactMap {
+            normalizedDrawing($0, sourceDuration: duration)
+        }
         value.editDecisions = ProjectTimeMapper.normalizedDecisions(
             editDecisions,
             sourceDuration: duration
@@ -332,11 +354,109 @@ public extension ProjectDocument {
         return value
     }
 
+    private func normalizedTranscript(
+        _ raw: TranscriptSegment,
+        sourceDuration: TimeInterval
+    ) -> TranscriptSegment? {
+        guard let range = TimelineRangeEditing.normalized(
+            TimelineEditRange(start: raw.start, end: raw.end),
+            lowerBound: 0,
+            upperBound: sourceDuration,
+            minimumDuration: min(
+                TimelineRangeEditing.minimumOverlayDuration,
+                sourceDuration
+            )
+        ) else { return nil }
+        var value = raw.normalized
+        value.start = range.start
+        value.end = range.end
+        return value
+    }
+
+    private func normalizedCursorEffect(
+        _ raw: CursorEffectRange,
+        sourceDuration: TimeInterval
+    ) -> CursorEffectRange? {
+        guard let range = TimelineRangeEditing.normalized(
+            TimelineEditRange(start: raw.start, end: raw.end),
+            lowerBound: 0,
+            upperBound: sourceDuration,
+            minimumDuration: min(
+                TimelineRangeEditing.minimumOverlayDuration,
+                sourceDuration
+            )
+        ) else { return nil }
+        var value = raw.normalized
+        value.start = range.start
+        value.end = range.end
+        return value
+    }
+
+    private func normalizedRedaction(
+        _ raw: RedactionRegion,
+        sourceDuration: TimeInterval
+    ) -> RedactionRegion? {
+        guard let range = TimelineRangeEditing.normalized(
+            TimelineEditRange(start: raw.start, end: raw.end),
+            lowerBound: 0,
+            upperBound: sourceDuration,
+            minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+        ) else { return nil }
+        var value = raw.normalized
+        value.start = range.start
+        value.end = range.end
+        return value
+    }
+
+    private func normalizedDrawing(
+        _ raw: DrawingStroke,
+        sourceDuration: TimeInterval
+    ) -> DrawingStroke? {
+        guard let range = TimelineRangeEditing.normalized(
+            TimelineEditRange(start: raw.start, end: raw.end),
+            lowerBound: 0,
+            upperBound: sourceDuration,
+            minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+        ) else { return nil }
+        var value = raw.normalized
+        value.start = range.start
+        value.end = range.end
+        return value
+    }
+
     private func timelineRangeOrder(_ lhs: ZoomRange, _ rhs: ZoomRange) -> Bool {
         timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
     }
 
     private func timelineRangeOrder(_ lhs: CaptionCue, _ rhs: CaptionCue) -> Bool {
+        timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
+    }
+
+    private func timelineRangeOrder(
+        _ lhs: TranscriptSegment,
+        _ rhs: TranscriptSegment
+    ) -> Bool {
+        timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
+    }
+
+    private func timelineRangeOrder(
+        _ lhs: CursorEffectRange,
+        _ rhs: CursorEffectRange
+    ) -> Bool {
+        timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
+    }
+
+    private func timelineRangeOrder(
+        _ lhs: RedactionRegion,
+        _ rhs: RedactionRegion
+    ) -> Bool {
+        timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
+    }
+
+    private func timelineRangeOrder(
+        _ lhs: DrawingStroke,
+        _ rhs: DrawingStroke
+    ) -> Bool {
         timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
     }
 

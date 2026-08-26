@@ -51,6 +51,20 @@ struct TimelineView: View {
                         Button("Text Callout") { session.addAnnotationAtPlayhead(kind: .text) }
                         Button("Arrow") { session.addAnnotationAtPlayhead(kind: .arrow) }
                         Button("Spotlight") { session.addAnnotationAtPlayhead(kind: .spotlight) }
+                        Button("Box") { session.addAnnotationAtPlayhead(kind: .box) }
+                        Button("Underline") { session.addAnnotationAtPlayhead(kind: .underline) }
+                        Button("Step Marker") { session.addAnnotationAtPlayhead(kind: .stepMarker) }
+                        Button("Label") { session.addAnnotationAtPlayhead(kind: .label) }
+                    }
+                    Menu("Redaction") {
+                        Button("Blur Region") { session.addRedactionAtPlayhead(mode: .blur) }
+                        Button("Pixelate Region") { session.addRedactionAtPlayhead(mode: .pixelate) }
+                    }
+                    Menu("Freehand Drawing") {
+                        Button("Pen") { session.setDrawingMode(.pen) }
+                        Button("Highlighter") { session.setDrawingMode(.highlighter) }
+                        Button("Stop Drawing") { session.setDrawingMode(nil) }
+                            .disabled(session.activeDrawingTool == nil)
                     }
                     Menu("Cursor Treatment") {
                         Button("Hide Cursor") {
@@ -92,7 +106,7 @@ struct TimelineView: View {
                 }
                 .scrollIndicators(.hidden)
             }
-            .frame(height: 124)
+            .frame(height: 164)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
@@ -115,6 +129,10 @@ struct TimelineView: View {
                 cutShade(decision, width: size.width, height: size.height)
             }
 
+            if let range = session.selectedSourceRange {
+                sourceRangeSelection(range, width: size.width, height: size.height)
+            }
+
             ForEach(session.document.zoomRanges) { range in
                 zoomBlock(range, width: size.width, height: size.height)
             }
@@ -135,6 +153,14 @@ struct TimelineView: View {
                 cursorEffectBlock(effect, width: size.width)
             }
 
+            ForEach(session.document.redactions) { region in
+                redactionBlock(region, width: size.width)
+            }
+
+            ForEach(session.document.drawings) { drawing in
+                drawingBlock(drawing, width: size.width)
+            }
+
             playhead(width: size.width, height: size.height)
 
             trimHandle(time: trimIn, width: size.width, height: size.height)
@@ -147,6 +173,22 @@ struct TimelineView: View {
                 NSCursor.arrow.set()
             }
         }
+    }
+
+    private func sourceRangeSelection(
+        _ range: TimelineEditRange,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        let x0 = xPosition(range.start, width: width)
+        let x1 = xPosition(range.end, width: width)
+        return Rectangle()
+            .fill(Color.accentColor.opacity(0.16))
+            .overlay(Rectangle().stroke(Color.accentColor.opacity(0.75), lineWidth: 1))
+            .frame(width: max(x1 - x0, 2), height: height)
+            .offset(x: x0)
+            .allowsHitTesting(false)
+            .accessibilityLabel("Selected transcript range")
     }
 
     private func ticks(width: CGFloat, duration: TimeInterval) -> some View {
@@ -278,6 +320,42 @@ struct TimelineView: View {
             .offset(x: x0, y: 82)
     }
 
+    private func redactionBlock(_ region: RedactionRegion, width: CGFloat) -> some View {
+        let x0 = xPosition(region.start, width: width)
+        let x1 = xPosition(region.end, width: width)
+        let selected = session.timelineSelection.items.contains(.redaction(region.id))
+            || region.id == session.selectedRedactionID
+        return RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.red.opacity(selected ? 0.9 : 0.58))
+            .overlay {
+                Label(
+                    region.mode == .blur ? "Blur" : "Pixelate",
+                    systemImage: region.mode == .blur ? "drop.halffull" : "square.grid.3x3"
+                )
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            }
+            .frame(width: max(x1 - x0, 8), height: 16)
+            .offset(x: x0, y: 102)
+    }
+
+    private func drawingBlock(_ drawing: DrawingStroke, width: CGFloat) -> some View {
+        let x0 = xPosition(drawing.start, width: width)
+        let x1 = xPosition(drawing.end, width: width)
+        let selected = session.timelineSelection.items.contains(.drawing(drawing.id))
+            || drawing.id == session.selectedDrawingID
+        return RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.pink.opacity(selected ? 0.9 : 0.56))
+            .overlay {
+                Text(drawing.tool == .pen ? "Pen" : "Highlighter")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: max(x1 - x0, 8), height: 16)
+            .offset(x: x0, y: 122)
+    }
+
     private func playhead(width: CGFloat, height: CGFloat) -> some View {
         let x = xPosition(session.playhead, width: width)
         return Rectangle()
@@ -363,6 +441,10 @@ struct TimelineView: View {
                         select(.annotation(id), extending: extending)
                     case .cursorBody(let id, _, _, _), .cursorStart(let id), .cursorEnd(let id):
                         select(.cursorEffect(id), extending: extending)
+                    case .redactionBody(let id, _, _, _), .redactionStart(let id), .redactionEnd(let id):
+                        select(.redaction(id), extending: extending)
+                    case .drawingBody(let id, _, _, _), .drawingStart(let id), .drawingEnd(let id):
+                        select(.drawing(id), extending: extending)
                     default:
                         break
                     }
@@ -599,6 +681,92 @@ struct TimelineView: View {
             effect.start = edited.start
             effect.end = edited.end
             session.replaceCursorEffect(effect)
+        case .redactionStart(let id):
+            guard var region = session.document.redactions.first(where: { $0.id == id }),
+                  let edited = TimelineRangeEditing.resizingStart(
+                    TimelineEditRange(start: region.start, end: region.end),
+                    to: snapped(time),
+                    lowerBound: 0,
+                    upperBound: session.timelineDuration,
+                    minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+                  )
+            else { return }
+            region.start = edited.start
+            region.end = edited.end
+            session.replaceRedaction(region)
+        case .redactionEnd(let id):
+            guard var region = session.document.redactions.first(where: { $0.id == id }),
+                  let edited = TimelineRangeEditing.resizingEnd(
+                    TimelineEditRange(start: region.start, end: region.end),
+                    to: snapped(time),
+                    lowerBound: 0,
+                    upperBound: session.timelineDuration,
+                    minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+                  )
+            else { return }
+            region.start = edited.start
+            region.end = edited.end
+            session.replaceRedaction(region)
+        case .redactionBody(let id, let originalStart, let originalEnd, let grab):
+            if moveMultipleItemsIfNeeded(
+                item: .redaction(id),
+                delta: snapped(time - grab) - originalStart
+            ) { return }
+            guard var region = session.document.redactions.first(where: { $0.id == id }),
+                  let edited = TimelineRangeEditing.moving(
+                    TimelineEditRange(start: originalStart, end: originalEnd),
+                    toStart: snapped(time - grab),
+                    lowerBound: 0,
+                    upperBound: session.timelineDuration,
+                    minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+                  )
+            else { return }
+            region.start = edited.start
+            region.end = edited.end
+            session.replaceRedaction(region)
+        case .drawingStart(let id):
+            guard var drawing = session.document.drawings.first(where: { $0.id == id }),
+                  let edited = TimelineRangeEditing.resizingStart(
+                    TimelineEditRange(start: drawing.start, end: drawing.end),
+                    to: snapped(time),
+                    lowerBound: 0,
+                    upperBound: session.timelineDuration,
+                    minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+                  )
+            else { return }
+            drawing.start = edited.start
+            drawing.end = edited.end
+            session.replaceDrawing(drawing)
+        case .drawingEnd(let id):
+            guard var drawing = session.document.drawings.first(where: { $0.id == id }),
+                  let edited = TimelineRangeEditing.resizingEnd(
+                    TimelineEditRange(start: drawing.start, end: drawing.end),
+                    to: snapped(time),
+                    lowerBound: 0,
+                    upperBound: session.timelineDuration,
+                    minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+                  )
+            else { return }
+            drawing.start = edited.start
+            drawing.end = edited.end
+            session.replaceDrawing(drawing)
+        case .drawingBody(let id, let originalStart, let originalEnd, let grab):
+            if moveMultipleItemsIfNeeded(
+                item: .drawing(id),
+                delta: snapped(time - grab) - originalStart
+            ) { return }
+            guard var drawing = session.document.drawings.first(where: { $0.id == id }),
+                  let edited = TimelineRangeEditing.moving(
+                    TimelineEditRange(start: originalStart, end: originalEnd),
+                    toStart: snapped(time - grab),
+                    lowerBound: 0,
+                    upperBound: session.timelineDuration,
+                    minimumDuration: TimelineRangeEditing.minimumOverlayDuration
+                  )
+            else { return }
+            drawing.start = edited.start
+            drawing.end = edited.end
+            session.replaceDrawing(drawing)
         }
     }
 
@@ -743,6 +911,38 @@ struct TimelineView: View {
             }
         }
 
+        if point.y >= 100, point.y < 122 {
+            let items = session.document.redactions.map {
+                TimelineHitRange(id: $0.id, start: $0.start, end: $0.end)
+            }
+            if let hit = rangeHit(items),
+               let region = session.document.redactions.first(where: { $0.id == hit.id })
+            {
+                switch hit {
+                case .start(let id): return .redactionStart(id)
+                case .end(let id): return .redactionEnd(id)
+                case .body(let id, let grab):
+                    return .redactionBody(id, start: region.start, end: region.end, grab: grab)
+                }
+            }
+        }
+
+        if point.y >= 120, point.y < 142 {
+            let items = session.document.drawings.map {
+                TimelineHitRange(id: $0.id, start: $0.start, end: $0.end)
+            }
+            if let hit = rangeHit(items),
+               let drawing = session.document.drawings.first(where: { $0.id == hit.id })
+            {
+                switch hit {
+                case .start(let id): return .drawingStart(id)
+                case .end(let id): return .drawingEnd(id)
+                case .body(let id, let grab):
+                    return .drawingBody(id, start: drawing.start, end: drawing.end, grab: grab)
+                }
+            }
+        }
+
         // Track items win within their lanes so a range can still be selected
         // when it touches a trim boundary. Elsewhere, choose the nearest trim
         // handle deterministically when their hit regions overlap.
@@ -784,6 +984,12 @@ private enum TimelineDrag {
     case cursorStart(UUID)
     case cursorEnd(UUID)
     case cursorBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
+    case redactionStart(UUID)
+    case redactionEnd(UUID)
+    case redactionBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
+    case drawingStart(UUID)
+    case drawingEnd(UUID)
+    case drawingBody(UUID, start: TimeInterval, end: TimeInterval, grab: TimeInterval)
 
     var undoActionName: String? {
         switch self {
@@ -801,6 +1007,10 @@ private enum TimelineDrag {
             "Adjust Annotation"
         case .cursorStart, .cursorEnd, .cursorBody:
             "Adjust Cursor Treatment"
+        case .redactionStart, .redactionEnd, .redactionBody:
+            "Adjust Redaction"
+        case .drawingStart, .drawingEnd, .drawingBody:
+            "Adjust Drawing"
         }
     }
 }

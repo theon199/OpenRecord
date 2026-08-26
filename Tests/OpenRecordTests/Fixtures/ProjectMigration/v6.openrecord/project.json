@@ -1,0 +1,75 @@
+{
+  "formatVersion" : 6,
+  "trimIn" : 0.5,
+  "trimOut" : 30,
+  "zoomRanges" : [],
+  "canvas" : {},
+  "cursorSprites" : [],
+  "keyboardOverlay" : {},
+  "webcamOverlay" : {
+    "enabled" : true,
+    "shape" : "squircle",
+    "position" : { "x" : 0.82, "y" : 0.78 },
+    "size" : 0.2,
+    "borderWidth" : 4,
+    "borderColor" : { "r" : 0.2, "g" : 0.8, "b" : 1, "a" : 1 },
+    "cornerRadius" : 0.22,
+    "shadow" : true,
+    "shadowOpacity" : 0.5,
+    "shadowRadius" : 16
+  },
+  "autoZoomSensitivity" : "normal",
+  "zoomEasing" : "smooth",
+  "speedSegments" : [],
+  "muteAudioWhenSpedUp" : false,
+  "audioCleanup" : {
+    "compressorEnabled" : true,
+    "limiterEnabled" : true,
+    "fadeInDuration" : 0.4,
+    "fadeOutDuration" : 0.6
+  },
+  "captions" : [],
+  "annotations" : [
+    {
+      "id" : "dddddddd-1111-2222-3333-dddddddddddd",
+      "start" : 2,
+      "end" : 5,
+      "kind" : "step-marker",
+      "text" : "2",
+      "position" : { "x" : 0.2, "y" : 0.25 },
+      "endPosition" : { "x" : 0.5, "y" : 0.5 },
+      "rect" : { "x" : 0.2, "y" : 0.2, "width" : 0.3, "height" : 0.2 },
+      "color" : { "r" : 1, "g" : 0.25, "b" : 0.16, "a" : 1 },
+      "background" : { "r" : 0.03, "g" : 0.03, "b" : 0.04, "a" : 0.88 },
+      "fontSize" : 42,
+      "dimAmount" : 0.58,
+      "animation" : { "entrance" : "pop", "exit" : "fade", "duration" : 0.25 }
+    }
+  ],
+  "redactions" : [
+    {
+      "id" : "eeeeeeee-1111-2222-3333-eeeeeeeeeeee",
+      "start" : 6,
+      "end" : 9,
+      "rect" : { "x" : 0.3, "y" : 0.3, "width" : 0.35, "height" : 0.16 },
+      "mode" : "pixelate",
+      "strength" : 0.7
+    }
+  ],
+  "drawings" : [
+    {
+      "id" : "ffffffff-1111-2222-3333-ffffffffffff",
+      "start" : 10,
+      "end" : 13,
+      "tool" : "highlighter",
+      "points" : [ { "x" : 0.2, "y" : 0.6 }, { "x" : 0.7, "y" : 0.62 } ],
+      "color" : { "r" : 1, "g" : 0.82, "b" : 0.1, "a" : 1 },
+      "width" : 24
+    }
+  ],
+  "deviceFrame" : { "id" : "generic-laptop-dark", "scale" : 0.92, "shadow" : true },
+  "videoExportSettings" : {},
+  "editDecisions" : [],
+  "transcript" : [],
+  "cursorEffects" : []
+}

@@ -54,12 +54,20 @@ final class EditorSession {
     var selectedSpeedID: UUID?
     var selectedCaptionID: UUID?
     var selectedAnnotationID: UUID?
+    var selectedRedactionID: UUID?
+    var selectedDrawingID: UUID?
     var isWebcamSelected = false
+    var activeDrawingTool: DrawingTool?
+    var drawingColor = RGBAColor(r: 1, g: 0.28, b: 0.12)
+    var drawingWidth: Double = 8
     var timelineSelection = TimelineSelection()
     var timelineClipboard = TimelineClipboard()
     var timelineZoom: Double = 1
     var transcriptSearchText = ""
     var selectedTranscriptSegmentIDs = Set<UUID>()
+    /// Source-timed range selected from the transcript or a future range tool.
+    /// Deleting it creates an edit decision; it never rewrites source media.
+    var selectedSourceRange: TimelineEditRange?
     var isTranscribing = false
     var transcriptionStatus: String?
     var silencePreset: SilencePreset = .natural

@@ -56,6 +56,12 @@ struct OpenRecordApp: App {
                 .keyboardShortcut("b", modifiers: .command)
                 .disabled(model.editor == nil)
 
+                Button("Delete Selected Range") {
+                    model.editor?.deleteSelectedSourceRange()
+                }
+                .keyboardShortcut(.delete, modifiers: [.command, .shift])
+                .disabled(model.editor?.selectedSourceRange == nil)
+
                 Divider()
                 Button("Copy Timeline Items") {
                     model.editor?.copyTimelineSelection()

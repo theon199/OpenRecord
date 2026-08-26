@@ -122,6 +122,12 @@ struct InspectorPanel: View {
                     Button("Text") { session.addAnnotationAtPlayhead(kind: .text) }
                     Button("Arrow") { session.addAnnotationAtPlayhead(kind: .arrow) }
                     Button("Spotlight") { session.addAnnotationAtPlayhead(kind: .spotlight) }
+                    Menu("More") {
+                        Button("Box") { session.addAnnotationAtPlayhead(kind: .box) }
+                        Button("Underline") { session.addAnnotationAtPlayhead(kind: .underline) }
+                        Button("Step Marker") { session.addAnnotationAtPlayhead(kind: .stepMarker) }
+                        Button("Label") { session.addAnnotationAtPlayhead(kind: .label) }
+                    }
                 }
                 if let annotation = session.selectedAnnotation {
                     Picker("Type", selection: annotationKind) {
@@ -129,7 +135,7 @@ struct InspectorPanel: View {
                             Text(kind.rawValue.capitalized).tag(kind)
                         }
                     }
-                    if annotation.kind == .text {
+                    if [.text, .label, .stepMarker].contains(annotation.kind) {
                         TextField("Annotation text", text: annotationText)
                     }
                     labeledSlider("Font size", value: annotationFontSize, range: Annotation.fontSizeRange, format: "%.0f pt", actionName: "Change Annotation Font Size", step: 1)
@@ -137,6 +143,26 @@ struct InspectorPanel: View {
                         labeledSlider("Dim amount", value: annotationDimAmount, range: Annotation.dimAmountRange, format: "%.0f%%", actionName: "Change Spotlight Dim", step: 0.01, displayScale: 100)
                     }
                     ColorPicker("Color", selection: annotationColor)
+                    Picker("Entrance", selection: annotationEntrance) {
+                        ForEach(AnnotationAnimationStyle.allCases, id: \.self) { style in
+                            Text(style.rawValue.capitalized).tag(style)
+                        }
+                    }
+                    Picker("Exit", selection: annotationExit) {
+                        ForEach(AnnotationAnimationStyle.allCases, id: \.self) { style in
+                            Text(style.rawValue.capitalized).tag(style)
+                        }
+                    }
+                    if annotation.animation.entrance != .none || annotation.animation.exit != .none {
+                        labeledSlider(
+                            "Animation duration",
+                            value: annotationAnimationDuration,
+                            range: AnnotationAnimation.durationRange,
+                            format: "%.2f s",
+                            actionName: "Change Annotation Animation",
+                            step: 0.05
+                        )
+                    }
                     Button("Delete Annotation", role: .destructive) { session.deleteSelectedTimelineItem() }
                     Text("Drag active annotations in the preview to position them.")
                         .font(.caption)
@@ -145,6 +171,85 @@ struct InspectorPanel: View {
                     Text("Add a text, arrow, or spotlight annotation at the playhead.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Redaction") {
+                HStack {
+                    Button("Blur") { session.addRedactionAtPlayhead(mode: .blur) }
+                    Button("Pixelate") { session.addRedactionAtPlayhead(mode: .pixelate) }
+                }
+                if let region = session.selectedRedaction {
+                    Picker("Mode", selection: redactionMode) {
+                        Text("Blur").tag(RedactionMode.blur)
+                        Text("Pixelate").tag(RedactionMode.pixelate)
+                    }
+                    .pickerStyle(.segmented)
+                    labeledSlider(
+                        "Strength",
+                        value: redactionStrength,
+                        range: RedactionRegion.strengthRange,
+                        format: "%.0f%%",
+                        actionName: "Change Redaction Strength",
+                        step: 0.05,
+                        displayScale: 100
+                    )
+                    LabeledContent("Range") {
+                        Text("\(Timecode.string(region.start)) – \(Timecode.string(region.end))")
+                            .monospacedDigit()
+                    }
+                    Button("Delete Redaction", role: .destructive) {
+                        session.deleteSelectedTimelineItem()
+                    }
+                    Text("Drag or resize the active region directly in the preview.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Freehand Drawing") {
+                Picker("Tool", selection: drawingTool) {
+                    Text("Off").tag(DrawingTool?.none)
+                    Text("Pen").tag(DrawingTool?.some(.pen))
+                    Text("Highlighter").tag(DrawingTool?.some(.highlighter))
+                }
+                .pickerStyle(.segmented)
+                ColorPicker("Color", selection: drawingColor)
+                labeledSlider(
+                    "Width",
+                    value: drawingWidth,
+                    range: DrawingStroke.widthRange,
+                    format: "%.0f px",
+                    actionName: "Change Drawing Width",
+                    step: 1
+                )
+                if session.selectedDrawing != nil {
+                    Button("Delete Selected Stroke", role: .destructive) {
+                        session.deleteSelectedTimelineItem()
+                    }
+                }
+                Text("Choose a tool, then drag on the preview. Each stroke is a scalable vector and one undo step.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Device Frame") {
+                Picker("Frame", selection: deviceFrameID) {
+                    ForEach(DeviceFrameID.allCases, id: \.self) { frame in
+                        Text(frame.displayName).tag(frame)
+                    }
+                }
+                if session.document.deviceFrame.enabled {
+                    labeledSlider(
+                        "Scale",
+                        value: deviceFrameScale,
+                        range: DeviceFrameSettings.scaleRange,
+                        format: "%.0f%%",
+                        actionName: "Resize Device Frame",
+                        step: 0.02,
+                        displayScale: 100
+                    )
+                    Toggle("Shadow", isOn: deviceFrameShadow)
                 }
             }
 
@@ -265,6 +370,7 @@ struct InspectorPanel: View {
                         Picker("Shape", selection: webcamOverlayShape) {
                             Text("Circle").tag(WebcamOverlayShape.circle)
                             Text("Rounded").tag(WebcamOverlayShape.roundedRectangle)
+                            Text("Squircle").tag(WebcamOverlayShape.squircle)
                         }
                         .pickerStyle(.segmented)
 
@@ -303,7 +409,38 @@ struct InspectorPanel: View {
                             actionName: "Change Webcam Border",
                             step: 1
                         )
+                        if session.document.webcamOverlay.shape == .roundedRectangle {
+                            labeledSlider(
+                                "Corner radius",
+                                value: webcamOverlayCornerRadius,
+                                range: WebcamOverlaySettings.cornerRadiusRange,
+                                format: "%.0f%%",
+                                actionName: "Change Webcam Corner Radius",
+                                step: 0.02,
+                                displayScale: 100
+                            )
+                        }
+                        ColorPicker("Border color", selection: webcamOverlayBorderColor)
                         Toggle("Shadow", isOn: webcamOverlayShadow)
+                        if session.document.webcamOverlay.shadow {
+                            labeledSlider(
+                                "Shadow opacity",
+                                value: webcamOverlayShadowOpacity,
+                                range: WebcamOverlaySettings.shadowOpacityRange,
+                                format: "%.0f%%",
+                                actionName: "Change Webcam Shadow",
+                                step: 0.05,
+                                displayScale: 100
+                            )
+                            labeledSlider(
+                                "Shadow radius",
+                                value: webcamOverlayShadowRadius,
+                                range: WebcamOverlaySettings.shadowRadiusRange,
+                                format: "%.0f px",
+                                actionName: "Change Webcam Shadow",
+                                step: 1
+                            )
+                        }
                         Button("Reset Position and Size") {
                             session.updateWebcamOverlay(actionName: "Reset Webcam Overlay") {
                                 $0.position = WebcamOverlaySettings.defaultPosition
@@ -405,6 +542,24 @@ struct InspectorPanel: View {
                         )
                     }
                     Toggle("Remove microphone clicks", isOn: deClickMicrophone)
+                    Toggle("Voice compressor", isOn: compressorMicrophone)
+                    Toggle("Output limiter", isOn: limiterMicrophone)
+                    labeledSlider(
+                        "Fade in",
+                        value: microphoneFadeIn,
+                        range: AudioCleanupSettings.fadeDurationRange,
+                        format: "%.1f s",
+                        actionName: "Change Microphone Fade In",
+                        step: 0.1
+                    )
+                    labeledSlider(
+                        "Fade out",
+                        value: microphoneFadeOut,
+                        range: AudioCleanupSettings.fadeDurationRange,
+                        format: "%.1f s",
+                        actionName: "Change Microphone Fade Out",
+                        step: 0.1
+                    )
                 }
                 if session.hasSystemAudio {
                     labeledSlider(
@@ -641,6 +796,89 @@ struct InspectorPanel: View {
         )
     }
 
+    private var annotationEntrance: Binding<AnnotationAnimationStyle> {
+        Binding(
+            get: { session.selectedAnnotation?.animation.entrance ?? .none },
+            set: { value in
+                session.updateSelectedAnnotation { $0.animation.entrance = value }
+            }
+        )
+    }
+
+    private var annotationExit: Binding<AnnotationAnimationStyle> {
+        Binding(
+            get: { session.selectedAnnotation?.animation.exit ?? .none },
+            set: { value in
+                session.updateSelectedAnnotation { $0.animation.exit = value }
+            }
+        )
+    }
+
+    private var annotationAnimationDuration: Binding<Double> {
+        Binding(
+            get: { session.selectedAnnotation?.animation.duration ?? 0.2 },
+            set: { value in
+                session.updateSelectedAnnotation { $0.animation.duration = value }
+            }
+        )
+    }
+
+    private var redactionMode: Binding<RedactionMode> {
+        Binding(
+            get: { session.selectedRedaction?.mode ?? .blur },
+            set: { value in session.updateSelectedRedaction { $0.mode = value } }
+        )
+    }
+
+    private var redactionStrength: Binding<Double> {
+        Binding(
+            get: { session.selectedRedaction?.strength ?? 0.55 },
+            set: { value in session.updateSelectedRedaction { $0.strength = value } }
+        )
+    }
+
+    private var drawingTool: Binding<DrawingTool?> {
+        Binding(
+            get: { session.activeDrawingTool },
+            set: { session.setDrawingMode($0) }
+        )
+    }
+
+    private var drawingColor: Binding<Color> {
+        Binding(
+            get: { session.drawingColor.swiftUIColor },
+            set: { session.drawingColor = RGBAColor($0) }
+        )
+    }
+
+    private var drawingWidth: Binding<Double> {
+        Binding(
+            get: { session.drawingWidth },
+            set: { session.drawingWidth = min(max($0, DrawingStroke.widthRange.lowerBound), DrawingStroke.widthRange.upperBound) }
+        )
+    }
+
+    private var deviceFrameID: Binding<DeviceFrameID> {
+        Binding(
+            get: { session.document.deviceFrame.id },
+            set: { value in session.updateDeviceFrame { $0.id = value } }
+        )
+    }
+
+    private var deviceFrameScale: Binding<Double> {
+        Binding(
+            get: { session.document.deviceFrame.scale },
+            set: { value in session.updateDeviceFrame { $0.scale = value } }
+        )
+    }
+
+    private var deviceFrameShadow: Binding<Bool> {
+        Binding(
+            get: { session.document.deviceFrame.shadow },
+            set: { value in session.updateDeviceFrame { $0.shadow = value } }
+        )
+    }
+
     private var exportCodec: Binding<VideoExportCodec> {
         Binding(
             get: { session.document.videoExportSettings.codec },
@@ -822,12 +1060,56 @@ struct InspectorPanel: View {
         )
     }
 
+    private var webcamOverlayBorderColor: Binding<Color> {
+        Binding(
+            get: { session.document.webcamOverlay.borderColor.swiftUIColor },
+            set: { color in
+                session.updateWebcamOverlay(actionName: "Change Webcam Border Color") {
+                    $0.borderColor = RGBAColor(color)
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayCornerRadius: Binding<Double> {
+        Binding(
+            get: { session.document.webcamOverlay.cornerRadius },
+            set: { value in
+                session.updateWebcamOverlay(actionName: "Change Webcam Corner Radius") {
+                    $0.cornerRadius = value
+                }
+            }
+        )
+    }
+
     private var webcamOverlayShadow: Binding<Bool> {
         Binding(
             get: { session.document.webcamOverlay.shadow },
             set: { shadow in
                 session.updateWebcamOverlay(actionName: "Toggle Webcam Shadow") {
                     $0.shadow = shadow
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayShadowOpacity: Binding<Double> {
+        Binding(
+            get: { session.document.webcamOverlay.shadowOpacity },
+            set: { value in
+                session.updateWebcamOverlay(actionName: "Change Webcam Shadow") {
+                    $0.shadowOpacity = value
+                }
+            }
+        )
+    }
+
+    private var webcamOverlayShadowRadius: Binding<Double> {
+        Binding(
+            get: { session.document.webcamOverlay.shadowRadius },
+            set: { value in
+                session.updateWebcamOverlay(actionName: "Change Webcam Shadow") {
+                    $0.shadowRadius = value
                 }
             }
         )
@@ -869,6 +1151,22 @@ struct InspectorPanel: View {
 
     private var deClickMicrophone: Binding<Bool> {
         audioBinding(\.deClickEnabled, actionName: "Toggle Microphone De-Click")
+    }
+
+    private var compressorMicrophone: Binding<Bool> {
+        audioBinding(\.compressorEnabled, actionName: "Toggle Voice Compressor")
+    }
+
+    private var limiterMicrophone: Binding<Bool> {
+        audioBinding(\.limiterEnabled, actionName: "Toggle Output Limiter")
+    }
+
+    private var microphoneFadeIn: Binding<Double> {
+        audioBinding(\.fadeInDuration, actionName: "Change Microphone Fade In")
+    }
+
+    private var microphoneFadeOut: Binding<Double> {
+        audioBinding(\.fadeOutDuration, actionName: "Change Microphone Fade Out")
     }
 
     private func audioBinding<Value>(

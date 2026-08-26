@@ -547,11 +547,15 @@ public struct CaptureHealth: Codable, Sendable, Hashable {
 public enum WebcamOverlayShape: String, Codable, CaseIterable, Sendable, Hashable {
     case circle
     case roundedRectangle = "rounded-rectangle"
+    case squircle
 }
 
 public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
     public static let sizeRange = 0.08...0.4
     public static let borderWidthRange = 0.0...12.0
+    public static let cornerRadiusRange = 0.02...0.5
+    public static let shadowOpacityRange = 0.0...0.8
+    public static let shadowRadiusRange = 0.0...40.0
     public static let defaultPosition = Point2D(x: 0.85, y: 0.82)
     public static let defaultSize = 0.18
 
@@ -562,7 +566,12 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
     /// Diameter/height relative to the canvas's shorter edge.
     public var size: Double
     public var borderWidth: Double
+    public var borderColor: RGBAColor
+    /// Fraction of the overlay's shorter edge for non-circular shapes.
+    public var cornerRadius: Double
     public var shadow: Bool
+    public var shadowOpacity: Double
+    public var shadowRadius: Double
 
     public init(
         enabled: Bool = false,
@@ -570,14 +579,22 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
         position: Point2D = Self.defaultPosition,
         size: Double = Self.defaultSize,
         borderWidth: Double = 3,
-        shadow: Bool = true
+        borderColor: RGBAColor = RGBAColor(r: 1, g: 1, b: 1),
+        cornerRadius: Double = 0.16,
+        shadow: Bool = true,
+        shadowOpacity: Double = 0.42,
+        shadowRadius: Double = 12
     ) {
         self.enabled = enabled
         self.shape = shape
         self.position = position
         self.size = size
         self.borderWidth = borderWidth
+        self.borderColor = borderColor
+        self.cornerRadius = cornerRadius
         self.shadow = shadow
+        self.shadowOpacity = shadowOpacity
+        self.shadowRadius = shadowRadius
     }
 
     public static let disabled = WebcamOverlaySettings()
@@ -588,7 +605,11 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
         case position
         case size
         case borderWidth
+        case borderColor
+        case cornerRadius
         case shadow
+        case shadowOpacity
+        case shadowRadius
     }
 
     public init(from decoder: Decoder) throws {
@@ -599,7 +620,12 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
             ?? Self.defaultPosition
         size = try container.decodeIfPresent(Double.self, forKey: .size) ?? Self.defaultSize
         borderWidth = try container.decodeIfPresent(Double.self, forKey: .borderWidth) ?? 3
+        borderColor = try container.decodeIfPresent(RGBAColor.self, forKey: .borderColor)
+            ?? RGBAColor(r: 1, g: 1, b: 1)
+        cornerRadius = try container.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? 0.16
         shadow = try container.decodeIfPresent(Bool.self, forKey: .shadow) ?? true
+        shadowOpacity = try container.decodeIfPresent(Double.self, forKey: .shadowOpacity) ?? 0.42
+        shadowRadius = try container.decodeIfPresent(Double.self, forKey: .shadowRadius) ?? 12
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -609,7 +635,11 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
         try container.encode(position, forKey: .position)
         try container.encode(size, forKey: .size)
         try container.encode(borderWidth, forKey: .borderWidth)
+        try container.encode(borderColor, forKey: .borderColor)
+        try container.encode(cornerRadius, forKey: .cornerRadius)
         try container.encode(shadow, forKey: .shadow)
+        try container.encode(shadowOpacity, forKey: .shadowOpacity)
+        try container.encode(shadowRadius, forKey: .shadowRadius)
     }
 
     public var normalized: WebcamOverlaySettings {
@@ -621,6 +651,16 @@ public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
             max(value.borderWidth, Self.borderWidthRange.lowerBound),
             Self.borderWidthRange.upperBound
         )
+        value.borderColor = value.borderColor.normalized
+        value.cornerRadius = value.cornerRadius.isFinite
+            ? min(max(value.cornerRadius, Self.cornerRadiusRange.lowerBound), Self.cornerRadiusRange.upperBound)
+            : 0.16
+        value.shadowOpacity = value.shadowOpacity.isFinite
+            ? min(max(value.shadowOpacity, Self.shadowOpacityRange.lowerBound), Self.shadowOpacityRange.upperBound)
+            : 0.42
+        value.shadowRadius = value.shadowRadius.isFinite
+            ? min(max(value.shadowRadius, Self.shadowRadiusRange.lowerBound), Self.shadowRadiusRange.upperBound)
+            : 12
         return value
     }
 }
@@ -660,6 +700,7 @@ public struct SpeedSegment: Codable, Sendable, Hashable, Identifiable {
 public struct AudioCleanupSettings: Codable, Sendable, Hashable {
     public static let gainRange = 0.0...2.0
     public static let noiseGateThresholdRange = -60.0 ... -20.0
+    public static let fadeDurationRange = 0.0...5.0
 
     public var microphoneGain: Double
     public var systemGain: Double
@@ -667,6 +708,10 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
     public var noiseGateThresholdDB: Double
     public var normalizeEnabled: Bool
     public var deClickEnabled: Bool
+    public var compressorEnabled: Bool
+    public var limiterEnabled: Bool
+    public var fadeInDuration: TimeInterval
+    public var fadeOutDuration: TimeInterval
 
     public init(
         microphoneGain: Double = 1,
@@ -674,7 +719,11 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
         noiseGateEnabled: Bool = false,
         noiseGateThresholdDB: Double = -42,
         normalizeEnabled: Bool = false,
-        deClickEnabled: Bool = false
+        deClickEnabled: Bool = false,
+        compressorEnabled: Bool = false,
+        limiterEnabled: Bool = false,
+        fadeInDuration: TimeInterval = 0,
+        fadeOutDuration: TimeInterval = 0
     ) {
         self.microphoneGain = microphoneGain
         self.systemGain = systemGain
@@ -682,6 +731,10 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
         self.noiseGateThresholdDB = noiseGateThresholdDB
         self.normalizeEnabled = normalizeEnabled
         self.deClickEnabled = deClickEnabled
+        self.compressorEnabled = compressorEnabled
+        self.limiterEnabled = limiterEnabled
+        self.fadeInDuration = fadeInDuration
+        self.fadeOutDuration = fadeOutDuration
     }
 
     public static let `default` = AudioCleanupSettings()
@@ -693,6 +746,10 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
         case noiseGateThresholdDB
         case normalizeEnabled
         case deClickEnabled
+        case compressorEnabled
+        case limiterEnabled
+        case fadeInDuration
+        case fadeOutDuration
     }
 
     public init(from decoder: Decoder) throws {
@@ -706,6 +763,10 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
         )) ?? -42
         normalizeEnabled = (try? container.decode(Bool.self, forKey: .normalizeEnabled)) ?? false
         deClickEnabled = (try? container.decode(Bool.self, forKey: .deClickEnabled)) ?? false
+        compressorEnabled = (try? container.decode(Bool.self, forKey: .compressorEnabled)) ?? false
+        limiterEnabled = (try? container.decode(Bool.self, forKey: .limiterEnabled)) ?? false
+        fadeInDuration = (try? container.decode(TimeInterval.self, forKey: .fadeInDuration)) ?? 0
+        fadeOutDuration = (try? container.decode(TimeInterval.self, forKey: .fadeOutDuration)) ?? 0
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -716,6 +777,10 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
         try container.encode(noiseGateThresholdDB, forKey: .noiseGateThresholdDB)
         try container.encode(normalizeEnabled, forKey: .normalizeEnabled)
         try container.encode(deClickEnabled, forKey: .deClickEnabled)
+        try container.encode(compressorEnabled, forKey: .compressorEnabled)
+        try container.encode(limiterEnabled, forKey: .limiterEnabled)
+        try container.encode(fadeInDuration, forKey: .fadeInDuration)
+        try container.encode(fadeOutDuration, forKey: .fadeOutDuration)
     }
 
     public var normalized: AudioCleanupSettings {
@@ -728,6 +793,12 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
                 Self.noiseGateThresholdRange.upperBound
             )
             : -42
+        value.fadeInDuration = value.fadeInDuration.isFinite
+            ? min(max(value.fadeInDuration, Self.fadeDurationRange.lowerBound), Self.fadeDurationRange.upperBound)
+            : 0
+        value.fadeOutDuration = value.fadeOutDuration.isFinite
+            ? min(max(value.fadeOutDuration, Self.fadeDurationRange.lowerBound), Self.fadeDurationRange.upperBound)
+            : 0
         return value
     }
 
@@ -738,10 +809,11 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {
-    /// v5 adds durable smart-editing data (transcript and cursor effects) and
-    /// richer zoom metadata. Older documents remain
+    /// v6 adds the v3.1 visual stack: redaction, freehand drawing, richer
+    /// annotations, device framing, and expanded webcam/audio styling.
+    /// Older documents remain
     /// readable and are upgraded when they are first saved.
-    public static let currentFormatVersion = 5
+    public static let currentFormatVersion = 6
 
     public var formatVersion: Int
     public var trimIn: TimeInterval
@@ -759,6 +831,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var audioCleanup: AudioCleanupSettings
     public var captions: [CaptionCue]
     public var annotations: [Annotation]
+    public var redactions: [RedactionRegion]
+    public var drawings: [DrawingStroke]
+    public var deviceFrame: DeviceFrameSettings
     public var videoExportSettings: VideoExportSettings
     public var editDecisions: [EditDecision]
     public var transcript: [TranscriptSegment]
@@ -784,6 +859,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         audioCleanup: AudioCleanupSettings = .default,
         captions: [CaptionCue] = [],
         annotations: [Annotation] = [],
+        redactions: [RedactionRegion] = [],
+        drawings: [DrawingStroke] = [],
+        deviceFrame: DeviceFrameSettings = .none,
         videoExportSettings: VideoExportSettings = .default,
         editDecisions: [EditDecision] = [],
         transcript: [TranscriptSegment] = [],
@@ -806,6 +884,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.audioCleanup = audioCleanup
         self.captions = captions
         self.annotations = annotations
+        self.redactions = redactions
+        self.drawings = drawings
+        self.deviceFrame = deviceFrame
         self.videoExportSettings = videoExportSettings
         self.editDecisions = editDecisions
         self.transcript = transcript
@@ -830,6 +911,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case audioCleanup
         case captions
         case annotations
+        case redactions
+        case drawings
+        case deviceFrame
         case videoExportSettings
         case editDecisions
         case transcript
@@ -919,6 +1003,18 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         )) ?? .default
         captions = (try? container.decode([CaptionCue].self, forKey: .captions)) ?? []
         annotations = (try? container.decode([Annotation].self, forKey: .annotations)) ?? []
+        redactions = (try? container.decode(
+            [LossyDecodable<RedactionRegion>].self,
+            forKey: .redactions
+        ))?.compactMap(\.value) ?? []
+        drawings = (try? container.decode(
+            [LossyDecodable<DrawingStroke>].self,
+            forKey: .drawings
+        ))?.compactMap(\.value) ?? []
+        deviceFrame = (try? container.decode(
+            DeviceFrameSettings.self,
+            forKey: .deviceFrame
+        )) ?? .none
         videoExportSettings = (try? container.decode(
             VideoExportSettings.self,
             forKey: .videoExportSettings
@@ -956,6 +1052,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encode(audioCleanup, forKey: .audioCleanup)
         try container.encode(captions, forKey: .captions)
         try container.encode(annotations, forKey: .annotations)
+        try container.encode(redactions, forKey: .redactions)
+        try container.encode(drawings, forKey: .drawings)
+        try container.encode(deviceFrame, forKey: .deviceFrame)
         try container.encode(videoExportSettings, forKey: .videoExportSettings)
         try container.encode(editDecisions, forKey: .editDecisions)
         try container.encode(transcript, forKey: .transcript)
@@ -973,6 +1072,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         value.formatVersion = max(value.formatVersion, Self.currentFormatVersion)
         value.keyboardOverlay = value.keyboardOverlay.normalized
         value.webcamOverlay = value.webcamOverlay.normalized
+        value.deviceFrame = value.deviceFrame.normalized
         value.canvas.cursorMotionBlur = value.canvas.cursorMotionBlur.normalized
         value.zoomRanges = value.zoomRanges.map(\.normalized)
         value.transcript = value.transcript.map(\.normalized).sorted {
@@ -990,6 +1090,12 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
         }
         value.annotations = value.annotations.map(\.normalized).sorted {
+            $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
+        }
+        value.redactions = value.redactions.map(\.normalized).sorted {
+            $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
+        }
+        value.drawings = value.drawings.map(\.normalized).sorted {
             $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
         }
         // The document alone does not know the source-media duration. Preserve
