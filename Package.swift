@@ -42,6 +42,10 @@ let package = Package(
             name: "OpenRecordExportBenchmark",
             targets: ["OpenRecordExportBenchmark"]
         ),
+        .executable(
+            name: "openrecord-cli",
+            targets: ["OpenRecordCLI"]
+        ),
     ],
     targets: [
         // Contracts + stubs. Tests import this module (not the @main executable).
@@ -64,6 +68,14 @@ let package = Package(
                 "OpenRecord"
             ],
             path: "Benchmarks/OpenRecordExportBenchmark",
+            linkerSettings: appleFrameworks
+        ),
+        .executableTarget(
+            name: "OpenRecordCLI",
+            dependencies: [
+                "OpenRecord"
+            ],
+            path: "Sources/OpenRecordCLI",
             linkerSettings: appleFrameworks
         ),
         .testTarget(

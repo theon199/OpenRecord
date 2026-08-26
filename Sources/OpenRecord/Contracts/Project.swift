@@ -809,11 +809,12 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {
-    /// v6 adds the v3.1 visual stack: redaction, freehand drawing, richer
+    /// v7 adds v3.2 project-template provenance and portable default styles.
+    /// v6 added the v3.1 visual stack: redaction, freehand drawing, richer
     /// annotations, device framing, and expanded webcam/audio styling.
     /// Older documents remain
     /// readable and are upgraded when they are first saved.
-    public static let currentFormatVersion = 6
+    public static let currentFormatVersion = 7
 
     public var formatVersion: Int
     public var trimIn: TimeInterval
@@ -841,6 +842,13 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     /// Presets applied to this document, in application order. Empty is the
     /// default and is omitted from the wire format for compact legacy output.
     public var appliedPresetIDs: [String]
+    /// The local/portable template that supplied this project's concrete
+    /// starting settings. The project never depends on the template file after
+    /// application; this identifier is provenance only.
+    public var projectTemplateID: String?
+    /// Portable defaults used for items created after a template is applied.
+    public var defaultCaptionStyle: CaptionStyle
+    public var defaultAnnotationStyle: AnnotationStylePreset?
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -866,7 +874,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         editDecisions: [EditDecision] = [],
         transcript: [TranscriptSegment] = [],
         cursorEffects: [CursorEffectRange] = [],
-        appliedPresetIDs: [String] = []
+        appliedPresetIDs: [String] = [],
+        projectTemplateID: String? = nil,
+        defaultCaptionStyle: CaptionStyle = .default,
+        defaultAnnotationStyle: AnnotationStylePreset? = nil
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -892,6 +903,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.transcript = transcript
         self.cursorEffects = cursorEffects
         self.appliedPresetIDs = appliedPresetIDs
+        self.projectTemplateID = projectTemplateID
+        self.defaultCaptionStyle = defaultCaptionStyle
+        self.defaultAnnotationStyle = defaultAnnotationStyle
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -919,6 +933,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case transcript
         case cursorEffects
         case appliedPresetIDs
+        case projectTemplateID
+        case defaultCaptionStyle
+        case defaultAnnotationStyle
     }
 
     private struct AnyCodingKey: CodingKey {
@@ -1032,6 +1049,15 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             forKey: .cursorEffects
         ))?.compactMap(\.value) ?? []
         appliedPresetIDs = (try? container.decode([String].self, forKey: .appliedPresetIDs)) ?? []
+        projectTemplateID = try container.decodeIfPresent(String.self, forKey: .projectTemplateID)
+        defaultCaptionStyle = (try? container.decode(
+            CaptionStyle.self,
+            forKey: .defaultCaptionStyle
+        )) ?? .default
+        defaultAnnotationStyle = try? container.decodeIfPresent(
+            AnnotationStylePreset.self,
+            forKey: .defaultAnnotationStyle
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1062,6 +1088,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         if !appliedPresetIDs.isEmpty {
             try container.encode(appliedPresetIDs, forKey: .appliedPresetIDs)
         }
+        try container.encodeIfPresent(projectTemplateID, forKey: .projectTemplateID)
+        try container.encode(defaultCaptionStyle, forKey: .defaultCaptionStyle)
+        try container.encodeIfPresent(defaultAnnotationStyle, forKey: .defaultAnnotationStyle)
     }
 
     /// Opening a legacy project is read-only. Supported write paths call this
@@ -1084,6 +1113,12 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         value.appliedPresetIDs = value.appliedPresetIDs
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        value.projectTemplateID = value.projectTemplateID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.projectTemplateID?.isEmpty == true {
+            value.projectTemplateID = nil
+        }
+        value.defaultCaptionStyle = value.defaultCaptionStyle.normalized
         value.speedSegments = SpeedTimeline.normalizedSegments(value.speedSegments)
         value.audioCleanup = value.audioCleanup.normalized
         value.captions = value.captions.map(\.normalized).sorted {

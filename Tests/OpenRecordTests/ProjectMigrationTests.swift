@@ -144,6 +144,19 @@ enum ProjectMigrationFixtureTests {
             else {
                 throw OpenRecordError.io("The v6 fixture lost v3.1 visual or audio fields while decoding")
             }
+        case 7:
+            guard document.projectTemplateID == "built-in-portrait-demo",
+                  document.defaultCaptionStyle.fontSize == 52,
+                  document.defaultCaptionStyle.maxWidth == 0.82,
+                  document.defaultAnnotationStyle?.fontSize == 48,
+                  document.canvas.aspectWidth == 9,
+                  document.canvas.aspectHeight == 16,
+                  document.deviceFrame.id == .genericPhoneDark,
+                  document.videoExportSettings
+                    == VideoExportSettings(codec: .hevc, resolution: .p1080)
+            else {
+                throw OpenRecordError.io("The v7 fixture lost v3.2 project-template defaults")
+            }
         default:
             throw OpenRecordError.io("Unexpected migration fixture version \(version)")
         }
@@ -426,7 +439,8 @@ enum ProjectMigrationFixtureTests {
             guard case .io(let message) = error,
                   message.contains("unsupported enum values"),
                   message.contains("webcamOverlay.shape=hexagon"),
-                  message.contains("videoExportSettings.codec=av1")
+                  message.contains("videoExportSettings.codec=av1"),
+                  message.contains("defaultCaptionStyle.position=lower-third")
             else {
                 throw error
             }

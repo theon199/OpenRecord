@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.2.0 — 2026-08-26
+
+OpenRecord v3 is complete through the v3.2 workflow and automation checkpoint.
+
+### Added
+
+- Media-free `.openrecordtemplate` project templates with built-in tutorial and portrait starts, portable import/export, and format-v7 default caption/annotation styles.
+- Selected-project batch queues with reorderable jobs, per-project export presets, visible progress/status, failure isolation, cancellation, and failed-job retry.
+- Atomic MP4/MOV/M4V import for iPhone and external-device recordings while preserving the hardened desktop capture path.
+- Dependency-free `openrecord-cli` commands for project inspection, validation, single export, and deterministic folder batch export.
+- A format-v7 migration fixture, template portability tests, batch transition tests, automation tests, import tests, and v3 release verification.
+
+### v3 highlights
+
+- Unified multi-cut and speed-aware time mapping across preview, export, audio, webcam, cursor, captions, transcript, and annotations.
+- Local transcription, transcript-assisted editing, pause suggestions, smart auto-zoom, cursor treatments, productivity operations, and reusable style presets.
+- Redaction/pixelation, vector drawing, richer annotations, device frames, expanded webcam styling, and non-destructive audio polish.
+
+### Compatibility
+
+- Projects remain transparent local `.openrecord` bundles. Older supported formats open without eager rewriting and migrate to format v7 on first save.
+- Core workflows require no account, cloud API, external dependency, Xcode, or network service.
+
 ## Unreleased — v2.5 hardening (Phases 1–8)
 
 Implementation Phases 1–8 are complete. v2.5 remains unreleased until the

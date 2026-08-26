@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import OpenRecord
+import UniformTypeIdentifiers
 #if canImport(Speech)
 import Speech
 #endif
@@ -236,11 +237,20 @@ extension EditorSession {
     func generateCaptionsFromTranscript(overwrite: Bool = false) {
         guard !document.transcript.isEmpty else { return }
         let before = document
-        document.captions = CaptionGenerator.regenerate(
+        let generated = CaptionGenerator.regenerate(
             from: document.transcript,
             existing: document.captions,
             overwrite: overwrite
         )
+        if overwrite || document.captions.isEmpty {
+            document.captions = generated.map {
+                var cue = $0
+                cue.style = document.defaultCaptionStyle
+                return cue
+            }
+        } else {
+            document.captions = generated
+        }
         documentDidChange(from: before, actionName: "Generate Captions")
     }
 
@@ -616,9 +626,10 @@ extension EditorSession {
         let preset = EditorStylePreset(
             id: "user-\(slug)",
             name: name,
-            caption: document.captions.first?.style ?? .default,
+            caption: document.captions.first?.style ?? document.defaultCaptionStyle,
             webcam: document.webcamOverlay,
             annotation: document.annotations.first.map(AnnotationStylePreset.init)
+                ?? document.defaultAnnotationStyle
                 ?? AnnotationStylePreset(),
             cursor: CursorStylePreset(
                 scale: document.canvas.cursorScale,
@@ -634,6 +645,87 @@ extension EditorSession {
             presetStatus = "Saved \(name) locally."
         } catch {
             presetStatus = "Could not save the preset: \(error.localizedDescription)"
+        }
+    }
+
+    func applyProjectTemplate(_ template: ProjectTemplate) {
+        let before = document
+        document = template.applying(to: document)
+        documentDidChange(
+            from: before,
+            actionName: "Apply \(template.name) Template",
+            rebuildZoomEngine: false
+        )
+        projectTemplateStatus = "Applied \(template.name). Concrete values are stored in this project."
+    }
+
+    func reloadLocalProjectTemplates() {
+        do {
+            localProjectTemplates = try LocalProjectTemplateStore.applicationSupport().load()
+        } catch {
+            localProjectTemplates = []
+            projectTemplateStatus = "Could not load project templates: \(error.localizedDescription)"
+        }
+    }
+
+    func saveCurrentProjectTemplate(named rawName: String) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let slug = name.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: "-")
+        var template = ProjectTemplate(
+            id: "user-\(slug)",
+            name: name,
+            document: document
+        )
+        template.caption = document.captions.first?.style ?? document.defaultCaptionStyle
+        template.annotation = document.annotations.first.map(AnnotationStylePreset.init)
+            ?? document.defaultAnnotationStyle
+        do {
+            _ = try LocalProjectTemplateStore.applicationSupport().save(template)
+            reloadLocalProjectTemplates()
+            projectTemplateStatus = "Saved \(name) as a media-free project template."
+        } catch {
+            projectTemplateStatus = "Could not save the project template: \(error.localizedDescription)"
+        }
+    }
+
+    func importProjectTemplatePanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if let templateType = UTType(filenameExtension: ProjectTemplate.fileExtension) {
+            panel.allowedContentTypes = [templateType]
+        }
+        panel.prompt = "Import"
+        panel.message = "Import a portable .\(ProjectTemplate.fileExtension) file. Templates never contain recorded media."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let template = try LocalProjectTemplateStore.applicationSupport().import(from: url)
+            reloadLocalProjectTemplates()
+            projectTemplateStatus = "Imported \(template.name)."
+        } catch {
+            projectTemplateStatus = "Could not import the project template: \(error.localizedDescription)"
+        }
+    }
+
+    func exportProjectTemplatePanel(_ template: ProjectTemplate) {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        if let templateType = UTType(filenameExtension: ProjectTemplate.fileExtension) {
+            panel.allowedContentTypes = [templateType]
+        }
+        panel.nameFieldStringValue = "\(template.id).\(ProjectTemplate.fileExtension)"
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            _ = try LocalProjectTemplateStore.applicationSupport().export(template, to: url)
+            projectTemplateStatus = "Exported \(template.name)."
+        } catch {
+            projectTemplateStatus = "Could not export the project template: \(error.localizedDescription)"
         }
     }
 

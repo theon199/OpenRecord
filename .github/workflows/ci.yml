@@ -13,9 +13,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     env:
-      # Use Swift and the SDK from the same Xcode installation rather than
-      # whichever Command Line Tools happen to be selected on the runner.
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      DEVELOPER_DIR: /Library/Developer/CommandLineTools
 
     steps:
       - name: Check out repository
@@ -24,7 +22,6 @@ jobs:
       - name: Show toolchain
         run: |
           sw_vers
-          xcodebuild -version
           swift --version
 
       - name: Build
@@ -41,11 +38,18 @@ jobs:
         run: ./scripts/package-app.sh
 
       - name: Verify packaged app
-        run: ./scripts/verify-v2_5-release.sh --static-only
+        run: ./scripts/verify-v3-release.sh --static-only
 
       - name: Upload packaged app
         uses: actions/upload-artifact@v4
         with:
           name: OpenRecord-macos
           path: dist/OpenRecord.app
+          if-no-files-found: error
+
+      - name: Upload local automation CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrecord-cli-macos-arm64
+          path: .build/arm64-apple-macosx/release/openrecord-cli
           if-no-files-found: error

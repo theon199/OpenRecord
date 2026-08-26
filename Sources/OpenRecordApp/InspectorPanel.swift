@@ -5,6 +5,7 @@ struct InspectorPanel: View {
     @Bindable var session: EditorSession
     @State private var confirmRegenerateZooms = false
     @State private var newPresetName = ""
+    @State private var newProjectTemplateName = ""
 
     var body: some View {
         Form {
@@ -359,6 +360,52 @@ struct InspectorPanel: View {
                     }
                 }
                 Text("Preset values are copied into the project for portability; optional IDs record provenance.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Project Templates") {
+                ForEach(ProjectTemplate.builtIns) { template in
+                    Button("Apply \(template.name)") {
+                        session.applyProjectTemplate(template)
+                    }
+                }
+                ForEach(session.localProjectTemplates) { template in
+                    HStack {
+                        Button("Apply \(template.name)") {
+                            session.applyProjectTemplate(template)
+                        }
+                        Spacer()
+                        Button {
+                            session.exportProjectTemplatePanel(template)
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Export \(template.name)")
+                    }
+                }
+                HStack {
+                    TextField("Template name", text: $newProjectTemplateName)
+                    Button("Save Current") {
+                        session.saveCurrentProjectTemplate(named: newProjectTemplateName)
+                        newProjectTemplateName = ""
+                    }
+                    .disabled(
+                        newProjectTemplateName
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty
+                    )
+                }
+                Button("Import Template…") {
+                    session.importProjectTemplatePanel()
+                }
+                if let status = session.projectTemplateStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Project templates are media-free portable JSON. Applying one changes presentation defaults without replacing source media, cuts, transcript, or timed content.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

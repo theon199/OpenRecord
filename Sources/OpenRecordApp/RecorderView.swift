@@ -123,6 +123,18 @@ struct RecorderView: View {
                 }
             }
 
+            Picker("Project template", selection: $model.selectedProjectTemplateID) {
+                Text("None").tag(String?.none)
+                ForEach(model.projectTemplates) { template in
+                    Text(template.name).tag(String?.some(template.id))
+                }
+            }
+            .pickerStyle(.menu)
+            Text("Templates copy portable canvas, cursor, webcam, caption, annotation, device-frame, keyboard, and export defaults into the new project. They never contain recorded media.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Toggle(
                 "Record keyboard shortcuts",
                 isOn: $model.capturesKeyboardShortcuts

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import OpenRecord
 import SwiftUI
+import UniformTypeIdentifiers
 
 private enum PendingEditorTransition {
     case close
@@ -59,7 +60,10 @@ final class AppModel {
     var recordedDuration: TimeInterval = 0
     var isProcessingCapture = false
     var isLoadingSources = false
+    var isImportingMedia = false
     var batchExportProgress: Double?
+    var batchExportQueue = BatchExportQueue()
+    var batchSelectedProjectURLs = Set<URL>()
     private var batchExportTask: Task<Void, Never>?
     var degradedOpenMessage: String?
     var saveFailureMessage: String?
@@ -79,6 +83,8 @@ final class AppModel {
             )
         }
     }
+    var projectTemplates: [ProjectTemplate] = ProjectTemplate.builtIns
+    var selectedProjectTemplateID: String?
 
     var allPermissionsGranted: Bool {
         CapturePermissionKind.requiredForScreenCapture.allSatisfy {
@@ -86,8 +92,14 @@ final class AppModel {
         }
     }
 
+    var isBatchExportRunning: Bool { batchExportTask != nil }
+
     var selectedSource: CaptureSourceOption? {
         captureSources.first { $0.id == selectedSourceID }
+    }
+
+    var selectedProjectTemplate: ProjectTemplate? {
+        projectTemplates.first { $0.id == selectedProjectTemplateID }
     }
 
     var displaySources: [CaptureSourceOption] {
@@ -129,6 +141,7 @@ final class AppModel {
             )
         }
         refreshPermissions()
+        reloadProjectTemplates()
     }
 
     func start() {
@@ -178,6 +191,7 @@ final class AppModel {
             let items = try library.list().map(LibraryItem.from)
             projects = items
             let currentURLs = Set(items.map(\.url))
+            batchSelectedProjectURLs.formIntersection(currentURLs)
             projectThumbnails = projectThumbnails.filter { currentURLs.contains($0.key) }
             for item in items where projectThumbnails[item.url] == nil {
                 let thumbnailURL = ProjectLayout.thumbnailURL(in: item.url)
@@ -191,6 +205,26 @@ final class AppModel {
         }
     }
 
+    func reloadProjectTemplates() {
+        do {
+            let local = try LocalProjectTemplateStore.applicationSupport().load()
+            let builtInIDs = Set(ProjectTemplate.builtIns.map(\.id))
+            projectTemplates = ProjectTemplate.builtIns
+                + local.filter { !builtInIDs.contains($0.id) }
+            if let selectedProjectTemplateID,
+               !projectTemplates.contains(where: { $0.id == selectedProjectTemplateID })
+            {
+                self.selectedProjectTemplateID = nil
+            }
+        } catch {
+            projectTemplates = ProjectTemplate.builtIns
+            reportError(
+                "Could not load project templates: \(error.localizedDescription)",
+                category: .projectContent
+            )
+        }
+    }
+
     func thumbnail(for url: URL) -> NSImage? {
         projectThumbnails[url.standardizedFileURL]
     }
@@ -201,6 +235,23 @@ final class AppModel {
         } catch {
             reportError(error.localizedDescription, category: .projectContent)
         }
+    }
+
+    func setBatchSelected(_ url: URL, selected: Bool) {
+        let url = url.standardizedFileURL
+        if selected {
+            batchSelectedProjectURLs.insert(url)
+        } else {
+            batchSelectedProjectURLs.remove(url)
+        }
+    }
+
+    func selectAllProjectsForBatchExport() {
+        batchSelectedProjectURLs = Set(projects.map { $0.url.standardizedFileURL })
+    }
+
+    func clearBatchExportSelection() {
+        batchSelectedProjectURLs.removeAll()
     }
 
     func deleteProject(_ url: URL) {
@@ -238,56 +289,167 @@ final class AppModel {
     }
 
     func presentBatchExportPanel() {
+        guard batchExportTask == nil else {
+            reportError(
+                "Wait for the current batch export to finish or cancel it before starting another.",
+                category: .export
+            )
+            return
+        }
+        let selectedItems = projects.filter {
+            batchSelectedProjectURLs.contains($0.url.standardizedFileURL)
+        }
+        guard !selectedItems.isEmpty else {
+            reportError("Select at least one project for batch export.", category: .export)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Export"
-        panel.message = "Choose a folder for MP4 exports of every project in the library."
+        panel.message = "Choose a folder for \(selectedItems.count) selected project export\(selectedItems.count == 1 ? "" : "s"). Each project keeps its own export preset."
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        batchExportTask?.cancel()
+        batchExportQueue = BatchExportQueue()
+        for item in selectedItems {
+            let settings = (try? library.open(url: item.url).document.videoExportSettings)
+                ?? .default
+            let fileExtension = settings.codec == .proRes422 ? "mov" : "mp4"
+            let output = destination
+                .appendingPathComponent(item.name, isDirectory: false)
+                .appendingPathExtension(fileExtension)
+            batchExportQueue.enqueue(
+                projectURL: item.url,
+                outputURL: output,
+                settings: settings
+            )
+        }
         batchExportTask = Task { @MainActor in
-            await batchExport(to: destination)
+            await runBatchExportQueue()
+        }
+    }
+
+    func presentImportMoviePanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.movie]
+        panel.prompt = "Import"
+        panel.message = "Import an MP4, MOV, or M4V recording, including a movie copied from an iPhone or external capture device. The original file is not changed."
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+
+        isImportingMedia = true
+        Task { @MainActor in
+            defer { isImportingMedia = false }
+            do {
+                let initial = selectedProjectTemplate?.applying(to: ProjectDocument())
+                    ?? ProjectDocument()
+                let projectURL = try await library.importMovie(
+                    from: source,
+                    document: initial
+                )
+                refreshProjects()
+                selectedProjectURL = projectURL
+                await openProject(projectURL)
+            } catch {
+                reportError(error.localizedDescription, category: .projectContent)
+            }
         }
     }
 
     func cancelBatchExport() {
         batchExportTask?.cancel()
+        batchExportQueue.cancelAll()
         batchExportProgress = nil
     }
 
-    private func batchExport(to destination: URL) async {
-        let items = projects
-        guard !items.isEmpty else { return }
+    func retryFailedBatchExports() {
+        guard batchExportTask == nil else { return }
+        guard !batchExportQueue.retryFailed().isEmpty else { return }
+        batchExportTask = Task { @MainActor in
+            await runBatchExportQueue()
+        }
+    }
+
+    func clearBatchExportQueue() {
+        guard batchExportTask == nil else { return }
+        batchExportQueue = BatchExportQueue()
+        batchExportProgress = nil
+    }
+
+    func moveBatchExportJob(_ id: UUID, offset: Int) {
+        guard batchExportTask == nil,
+              let index = batchExportQueue.jobs.firstIndex(where: { $0.id == id })
+        else { return }
+        let targetIndex = min(max(index + offset, 0), batchExportQueue.jobs.count - 1)
+        guard targetIndex != index else { return }
+        let insertionOffset = targetIndex > index ? targetIndex + 1 : targetIndex
+        _ = batchExportQueue.move(jobID: id, to: insertionOffset)
+    }
+
+    private func runBatchExportQueue() async {
+        let total = max(batchExportQueue.jobs.count, 1)
         batchExportProgress = 0
-        var failures: [String] = []
-        for (index, item) in items.enumerated() {
-            if Task.isCancelled { break }
+        while !Task.isCancelled, let job = batchExportQueue.startNext() {
             do {
-                let opened = try library.open(url: item.url)
-                let output = destination.appendingPathComponent("\(item.name).mp4")
-                let exporter = Exporter(projectBundleURL: item.url)
+                let opened = try library.open(url: job.projectURL)
+                let exporter = Exporter(projectBundleURL: job.projectURL)
                 var document = opened.document
-                document.videoExportSettings.codec = .h264
-                try await exporter.export(project: document, url: output) { [weak self] progress in
+                document.videoExportSettings = job.settings
+                try await exporter.export(project: document, url: job.outputURL) { [weak self] progress in
                     Task { @MainActor in
-                        guard let self, self.batchExportProgress != nil else { return }
-                        self.batchExportProgress = (Double(index) + progress) / Double(items.count)
+                        guard let self,
+                              self.batchExportQueue.currentJobID == job.id
+                        else { return }
+                        _ = self.batchExportQueue.updateProgress(
+                            for: job.id,
+                            progress: progress
+                        )
+                        self.refreshBatchExportProgress(total: total)
                     }
                 }
+                _ = batchExportQueue.markSucceeded(for: job.id)
+            } catch is CancellationError {
+                _ = batchExportQueue.cancel(jobID: job.id)
+                break
             } catch {
-                failures.append("\(item.name): \(error.localizedDescription)")
+                _ = batchExportQueue.markFailed(
+                    for: job.id,
+                    error: error.localizedDescription
+                )
             }
-            batchExportProgress = Double(index + 1) / Double(items.count)
+            refreshBatchExportProgress(total: total)
         }
+        if Task.isCancelled {
+            batchExportQueue.cancelAll()
+        }
+        let failures = batchExportQueue.jobs.filter { $0.status == .failed }
         if !failures.isEmpty {
             reportError(
-                "Batch export finished with errors: " + failures.joined(separator: " "),
+                "Batch export finished with \(failures.count) failed job\(failures.count == 1 ? "" : "s"). Retry them from the queue.",
                 category: .export
             )
         }
-        batchExportProgress = nil
+        batchExportTask = nil
+        batchExportProgress = batchExportQueue.jobs.allSatisfy { $0.status == .succeeded }
+            ? 1
+            : nil
+    }
+
+    private func refreshBatchExportProgress(total: Int) {
+        let completed = batchExportQueue.jobs.reduce(0.0) { partial, job in
+            switch job.status {
+            case .succeeded, .failed, .cancelled:
+                partial + 1
+            case .running:
+                partial + job.progress
+            case .queued:
+                partial
+            }
+        }
+        batchExportProgress = completed / Double(max(total, 1))
     }
 
     func openProject(_ url: URL, generateAutoZooms: Bool = false) async {
@@ -536,6 +698,7 @@ final class AppModel {
             return
         }
         guard !isRecording, !isProcessingCapture else { return }
+        reloadProjectTemplates()
         isRecorderPresented = true
         await reloadCaptureSources()
         if autoStart {
@@ -779,15 +942,11 @@ final class AppModel {
         do {
             try library.ensureRootExists()
             let url = try library.create(name: name, meta: meta)
-            try library.save(
-                document: ProjectDocument(
-                    keyboardOverlay: KeyboardOverlaySettings(
-                        enabled: capturesKeyboardShortcuts
-                    ),
-                    webcamOverlay: WebcamOverlaySettings(enabled: capturesWebcam)
-                ),
-                to: url
-            )
+            var initialDocument = selectedProjectTemplate?.applying(to: ProjectDocument())
+                ?? ProjectDocument()
+            initialDocument.keyboardOverlay.enabled = capturesKeyboardShortcuts
+            initialDocument.webcamOverlay.enabled = capturesWebcam
+            try library.save(document: initialDocument, to: url)
             recordingURL = url
             try await capture.start(
                 target: source.target,

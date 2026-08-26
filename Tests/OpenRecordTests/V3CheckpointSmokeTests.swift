@@ -240,7 +240,7 @@ enum V3CheckpointSmokeSuite {
               decoded.transcript[0].recognizedText == "recognized",
               decoded.transcript[0].editedText == "corrected"
         else {
-            throw OpenRecordError.io("Format-v6 smart-editing fields did not round-trip")
+            throw OpenRecordError.io("Format-v7 smart-editing fields did not round-trip")
         }
     }
 }

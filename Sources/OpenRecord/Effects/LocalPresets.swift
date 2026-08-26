@@ -129,6 +129,7 @@ public struct EditorStylePreset: Codable, Sendable, Hashable, Identifiable {
     public func applying(to document: ProjectDocument) -> ProjectDocument {
         var value = document
         if let caption {
+            value.defaultCaptionStyle = caption.normalized
             value.captions = value.captions.map {
                 var cue = $0
                 cue.style = caption.normalized
@@ -139,6 +140,7 @@ public struct EditorStylePreset: Codable, Sendable, Hashable, Identifiable {
             value.webcamOverlay = webcam.normalized
         }
         if let annotation {
+            value.defaultAnnotationStyle = annotation
             value.annotations = value.annotations.map {
                 var item = $0
                 annotation.apply(to: &item)

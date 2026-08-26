@@ -14,7 +14,10 @@ enum ProjectDocumentJSONRoundTrip {
               ProjectDocument().editDecisions.isEmpty,
               ProjectDocument().transcript.isEmpty,
               ProjectDocument().cursorEffects.isEmpty,
-              ProjectDocument().appliedPresetIDs.isEmpty
+              ProjectDocument().appliedPresetIDs.isEmpty,
+              ProjectDocument().projectTemplateID == nil,
+              ProjectDocument().defaultCaptionStyle == .default,
+              ProjectDocument().defaultAnnotationStyle == nil
         else {
             throw OpenRecordError.io("Canvas cursor defaults are incorrect")
         }
@@ -147,7 +150,10 @@ enum ProjectDocumentJSONRoundTrip {
                     halo: true
                 )
             ],
-            appliedPresetIDs: ["dark", "custom-demo"]
+            appliedPresetIDs: ["dark", "custom-demo"],
+            projectTemplateID: "product-launch",
+            defaultCaptionStyle: CaptionStyle(fontSize: 48, position: .top),
+            defaultAnnotationStyle: AnnotationStylePreset(fontSize: 54)
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -209,13 +215,16 @@ enum ProjectDocumentJSONRoundTrip {
               upgraded.annotations.isEmpty,
               upgraded.transcript.isEmpty,
               upgraded.cursorEffects.isEmpty,
-              upgraded.appliedPresetIDs.isEmpty
+              upgraded.appliedPresetIDs.isEmpty,
+              upgraded.projectTemplateID == nil,
+              upgraded.defaultCaptionStyle == .default,
+              upgraded.defaultAnnotationStyle == nil
         else {
-            throw OpenRecordError.io("The first-save migration did not produce the v6 defaults")
+            throw OpenRecordError.io("The first-save migration did not produce the v7 defaults")
         }
 
         let futureJSON = Data(
-            #"{"formatVersion":7,"futureOverlay":{"preserveMe":true}}"#.utf8
+            #"{"formatVersion":8,"futureOverlay":{"preserveMe":true}}"#.utf8
         )
         do {
             _ = try ProjectJSON.decoder.decode(ProjectDocument.self, from: futureJSON)
@@ -226,7 +235,7 @@ enum ProjectDocumentJSONRoundTrip {
         }
 
         var future = upgraded
-        future.formatVersion = 7
+        future.formatVersion = ProjectDocument.currentFormatVersion + 1
         do {
             _ = try future.validatedForSave()
             throw OpenRecordError.io("A future project format was allowed to save")

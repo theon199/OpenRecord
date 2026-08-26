@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. After you stop, it can transcribe recorded audio on device, suggest pause cuts and smart auto-zooms, edit through multiple non-destructive cuts, style captions/callouts/cursor treatments, and export polished video, GIF, audio, or still-image deliverables.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. It can also import MP4/MOV/M4V recordings from an iPhone or other device without changing the original. After capture or import, it can transcribe recorded audio on device, suggest pause cuts and smart auto-zooms, edit through multiple non-destructive cuts, apply portable project templates, and export polished video, GIF, audio, or still-image deliverables.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -30,6 +30,7 @@ Other useful commands:
 swift build          # debug
 swift test           # unit tests (CLT Testing.framework, not XCTest)
 ./scripts/package-app.sh   # release .app at dist/OpenRecord.app (does not open it)
+swift run openrecord-cli --help   # local inspect/validate/export/batch automation
 ```
 
 First package may create a local self-signed **OpenRecord Dev** identity in your login keychain so TCC grants survive rebuilds. Allow Keychain if macOS prompts. If cert import fails, the script falls back to ad-hoc signing (`codesign -s -`), which often **resets permissions on every rebuild**.
@@ -48,6 +49,8 @@ The first-run screen has **Open Settings** / **Request Remaining**. After flippi
 
 - **⌃⌥⌘R** starts and stops from anywhere (also in the Recording menu and the menu-bar extra).
 - **New Recording** from the library toolbar, File → New Recording…, or the menu-bar extra. Pick a **display** or **window**, then Record (3–2–1 countdown).
+- **Import Movie** adds an MP4, MOV, or M4V—including a recording copied from an iPhone or external capture device—as an ordinary portable project. Desktop capture remains on its independent, hardened ScreenCaptureKit path.
+- Pick **None**, **Tutorial**, **Portrait Demo**, or a local project template before recording. Template files contain presentation defaults only, never recorded media.
 - **Record keyboard shortcuts** adds shortcut chords and navigation keys to a separate overlay track. Ordinary unmodified typing and all input while macOS Secure Input is active are omitted.
 - Stop with **⌃⌥⌘R** or the Stop button. OpenRecord then writes the project and generates auto-zooms from cursor activity.
 
@@ -70,7 +73,26 @@ Open a project from the sidebar.
 
 **Export Video…** (⌘E) renders the **in-memory** document — not a stale re-read from disk. Choose H.264 or HEVC in MP4, or ProRes 422 in MOV, at 720p, 1080p, 4K, or source-sized resolution. Output is Rec.709 and 60 fps if the source averages ≥ 45 fps, otherwise 30 fps. Speed regions remap every visual and telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
 
-The Export inspector also creates animated GIFs (up to 30 seconds), mixed-audio M4A files, and a PNG of the current playhead frame (⌘⇧E). **Batch Export** in the library exports every project in the current library as H.264 MP4.
+The Export inspector also creates animated GIFs (up to 30 seconds), mixed-audio M4A files, and a PNG of the current playhead frame (⌘⇧E). In the library, check the projects you want, then use **Batch Export Selected**. Each queued job keeps its own codec/resolution preset, exposes progress and failure state, continues past failures, and can be retried without rerunning successful jobs.
+
+### Project templates
+
+Project templates capture canvas/aspect, cursor treatment, webcam treatment, caption and annotation defaults, device frame, keyboard overlay, and video export settings. Use **Project Templates → Save Current** in the editor to create a local `.openrecordtemplate`, then import/export that JSON file for portability. Applying a template copies concrete values into `project.json`; the project does not depend on the template file afterward, and source media, transcript, cuts, and timed content are preserved.
+
+### Local automation CLI
+
+The dependency-free SwiftPM executable operates directly on normal project bundles and never rewrites `meta.json` or `project.json` during inspection or export:
+
+```bash
+swift run openrecord-cli inspect Demo.openrecord --json
+swift run openrecord-cli validate Demo.openrecord
+swift run openrecord-cli export Demo.openrecord --output Demo.mp4 --codec h264 --resolution 1080p
+swift run openrecord-cli batch ./Projects --output ./Exports --codec hevc
+```
+
+Batch discovery is deterministic and top-level only. It continues after a failed project and exits nonzero when any job fails.
+
+The versioned schema overview is documented in [`docs/PROJECT_FORMAT_V7.md`](docs/PROJECT_FORMAT_V7.md), with migration policy in [`docs/V3_MIGRATION.md`](docs/V3_MIGRATION.md).
 
 ### Direct manipulation, parity, and recovery
 
@@ -104,7 +126,7 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # capture target/timing/health and optional webcam device metadata
-  project.json              # format v6: edits, transcript, visual stack, audio polish, and export settings
+  project.json              # format v7: edits, transcript, visual stack, templates/defaults, and export settings
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     webcam.mp4              # optional H.264 face-camera track
@@ -121,9 +143,9 @@ Each recording is a folder package:
 Coordinates are **points** (Quartz, origin top-left of the main display). Cursor samples may include `visible: false` while the pointer is outside the captured target. New window recordings use `target.jsonl` to map global cursor points through the window bounds at each timestamp; older projects fall back to `meta.json` bounds. Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
 
 Opening an older supported project is read-only until the first save, which migrates a
-copy of every supported field to the current format-v6 schema. Projects with a newer
+copy of every supported field to the current format-v7 schema. Projects with a newer
 format version, or unknown top-level fields in the current format, are rejected
-with an update-required error instead of risking silent data loss. Legacy pre-v6
+with an update-required error instead of risking silent data loss. Legacy pre-v7
 files with unknown top-level fields may open read-only, but cannot be migrated
 until those fields are supported. Unknown nested fields in an otherwise valid
 current document are preserved across library saves; unknown enum values may
@@ -135,4 +157,4 @@ atomic replacement.
 
 ## Out of scope
 
-No cloud-required speech service, automatic sensitive-content detection, arbitrary animation curves, webcam background removal, iPhone capture, hosted share links, collaboration accounts, advanced DAW/NLE tooling, or in-app OAuth yet.
+No cloud-required speech service, automatic sensitive-content detection, arbitrary animation curves, webcam background removal, live iPhone capture, hosted share links, collaboration accounts, advanced DAW/NLE tooling, or in-app OAuth yet. v3.2 supports the safer import-oriented iPhone/device workflow instead of coupling live device capture to desktop recording.

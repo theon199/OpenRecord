@@ -1,0 +1,54 @@
+name: Publish OpenRecord v3.2.0
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Library/Developer/CommandLineTools
+      RELEASE_TAG: v3.2.0
+      APP_ZIP: OpenRecord-v3.2.0-macos-arm64.zip
+      CLI_ZIP: openrecord-cli-v3.2.0-macos-arm64.zip
+
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+
+      - name: Show Command Line Tools
+        run: |
+          sw_vers
+          swift --version
+
+      - name: Run deterministic release verification
+        run: ./scripts/verify-v3-release.sh
+
+      - name: Archive app and CLI
+        run: |
+          BIN_DIR="$(swift build -c release --arch arm64 --show-bin-path)"
+          ditto -c -k --sequesterRsrc --keepParent dist/OpenRecord.app "$APP_ZIP"
+          ditto -c -k --keepParent "$BIN_DIR/openrecord-cli" "$CLI_ZIP"
+          shasum -a 256 "$APP_ZIP" "$CLI_ZIP" > SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "OpenRecord v3.2.0" \
+              --notes-file docs/V3_RELEASE_NOTES.md \
+              --latest
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "OpenRecord v3.2.0" \
+              --notes-file docs/V3_RELEASE_NOTES.md \
+              --latest
+          fi
+          gh release upload "$RELEASE_TAG" "$APP_ZIP" "$CLI_ZIP" SHA256SUMS --clobber

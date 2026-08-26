@@ -15,5 +15,8 @@
   "videoExportSettings" : {
     "codec" : "av1",
     "resolution" : "1080p"
+  },
+  "defaultCaptionStyle" : {
+    "position" : "lower-third"
   }
 }

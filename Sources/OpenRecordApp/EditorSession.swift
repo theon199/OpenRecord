@@ -78,7 +78,9 @@ final class EditorSession {
     var isAnalyzingSilence = false
     var isPreviewingSilenceSuggestions = false
     var localStylePresets: [EditorStylePreset] = []
+    var localProjectTemplates: [ProjectTemplate] = []
     var presetStatus: String?
+    var projectTemplateStatus: String?
     var copyExportToLibrary = false
     var exportProgress: ExportProgress?
     private(set) var isCancellingExport = false
@@ -367,6 +369,7 @@ final class EditorSession {
         }
         session.loadCursorSprite()
         session.reloadLocalStylePresets()
+        session.reloadLocalProjectTemplates()
         session.playhead = editorDocument.trimIn
         if hasVideo {
             session.attachPlayer()

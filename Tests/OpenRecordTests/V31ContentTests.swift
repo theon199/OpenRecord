@@ -113,7 +113,7 @@ enum V31ContentSuite {
         let data = try ProjectJSON.encoder.encode(document)
         let decoded = try ProjectJSON.decoder.decode(ProjectDocument.self, from: data)
         guard decoded == document,
-              decoded.formatVersion == 6,
+              decoded.formatVersion == ProjectDocument.currentFormatVersion,
               decoded.redactions == [redaction],
               decoded.drawings == [drawing]
         else {

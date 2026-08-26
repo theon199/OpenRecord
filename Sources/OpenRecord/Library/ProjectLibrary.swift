@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import AVFoundation
 import Foundation
 
 /// Local `.openrecord` library under a folder the user may already sync
@@ -123,6 +124,115 @@ public struct ProjectLibrary: Sendable {
             try stageNewBundle(at: projectURL, meta: meta, document: ProjectDocument())
             return projectURL
         }
+    }
+
+    /// Import a local movie (including a recording copied from an iPhone or
+    /// external capture device) as the display track of a normal, portable
+    /// `.openrecord` bundle. The source is never moved or modified. The new
+    /// bundle is staged off to the side and installed atomically only after
+    /// media validation and conversion succeed.
+    ///
+    /// OpenRecord deliberately treats device capture as an import workflow in
+    /// v3.2. This keeps ScreenCaptureKit's desktop timebase and recovery path
+    /// untouched while still making connected-device recordings editable.
+    public func importMovie(
+        from sourceURL: URL,
+        name: String? = nil,
+        document initialDocument: ProjectDocument = ProjectDocument()
+    ) async throws -> URL {
+        let source = sourceURL.standardizedFileURL
+        let allowedExtensions = Set(["mp4", "mov", "m4v"])
+        guard allowedExtensions.contains(source.pathExtension.lowercased()) else {
+            throw OpenRecordError.io("Import a movie in MP4, MOV, or M4V format.")
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue
+        else {
+            throw OpenRecordError.io("Movie does not exist: \(source.path)")
+        }
+
+        let sourceAccessed = source.startAccessingSecurityScopedResource()
+        let rootAccessed = rootURL.startAccessingSecurityScopedResource()
+        defer {
+            if rootAccessed { rootURL.stopAccessingSecurityScopedResource() }
+            if sourceAccessed { source.stopAccessingSecurityScopedResource() }
+        }
+
+        let asset = AVURLAsset(
+            url: source,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+        )
+        let duration = try await asset.load(.duration).seconds
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        guard let videoTrack = videoTracks.first, duration.isFinite, duration > 0 else {
+            throw OpenRecordError.io("The selected movie has no usable video track.")
+        }
+        let naturalSize = try await videoTrack.load(.naturalSize)
+        let transform = try await videoTrack.load(.preferredTransform)
+        let transformed = naturalSize.applying(transform)
+        let width = abs(transformed.width)
+        let height = abs(transformed.height)
+        guard width.isFinite, height.isFinite, width >= 1, height >= 1 else {
+            throw OpenRecordError.io("The selected movie has invalid video dimensions.")
+        }
+
+        try ensureRootExists()
+        let requestedName = name ?? source.deletingPathExtension().lastPathComponent
+        let projectURL = ProjectBundleNaming.uniqueBundleURL(
+            root: rootURL,
+            baseName: ProjectBundleNaming.sanitizedBaseName(requestedName),
+            fileManager: .default
+        )
+        let stagingURL = rootURL.appendingPathComponent(
+            ".\(UUID().uuidString).importing",
+            isDirectory: true
+        )
+        var document = initialDocument
+        document.trimIn = 0
+        document.trimOut = duration
+        let meta = ProjectMeta(
+            displayBounds: Rect2D(x: 0, y: 0, width: width, height: height),
+            scale: 1,
+            // Display ID zero is a documented sentinel for imported media;
+            // no live capture path ever resolves it through ScreenCaptureKit.
+            captureTarget: .display(id: 0),
+            captureTiming: CaptureTiming(systemAudioOffset: 0)
+        )
+
+        do {
+            try FileManager.default.createDirectory(
+                at: ProjectLayout.cursorsDirectory(in: stagingURL),
+                withIntermediateDirectories: true
+            )
+            try AtomicFileWrite.writeJSON(meta, to: ProjectLayout.metaURL(in: stagingURL))
+            try AtomicFileWrite.writeProjectDocument(
+                document,
+                to: ProjectLayout.documentURL(in: stagingURL)
+            )
+            try await Self.installImportedDisplay(
+                asset: asset,
+                source: source,
+                destination: ProjectLayout.displayVideoURL(in: stagingURL)
+            )
+            if !(try await asset.loadTracks(withMediaType: .audio)).isEmpty {
+                try await Self.installImportedAudio(
+                    asset: asset,
+                    destination: ProjectLayout.systemAudioURL(in: stagingURL)
+                )
+            }
+            try FileManager.default.moveItem(at: stagingURL, to: projectURL)
+        } catch let error as OpenRecordError {
+            try? FileManager.default.removeItem(at: stagingURL)
+            throw error
+        } catch {
+            try? FileManager.default.removeItem(at: stagingURL)
+            throw OpenRecordError.io(
+                "Could not import \(source.lastPathComponent): \(error.localizedDescription)"
+            )
+        }
+        return projectURL.standardizedFileURL
     }
 
     public func open(url: URL) throws -> OpenedProject {
@@ -482,6 +592,44 @@ public struct ProjectLibrary: Sendable {
 // MARK: - Private
 
 extension ProjectLibrary {
+    fileprivate static func installImportedDisplay(
+        asset: AVAsset,
+        source: URL,
+        destination: URL
+    ) async throws {
+        if source.pathExtension.lowercased() == "mp4" {
+            try FileManager.default.copyItem(at: source, to: destination)
+            return
+        }
+        let passthrough = AVAssetExportSession(
+            asset: asset,
+            presetName: AVAssetExportPresetPassthrough
+        )
+        let exporter: AVAssetExportSession?
+        if let passthrough, passthrough.supportedFileTypes.contains(.mp4) {
+            exporter = passthrough
+        } else {
+            exporter = AVAssetExportSession(
+                asset: asset,
+                presetName: AVAssetExportPresetHighestQuality
+            )
+        }
+        guard let exporter, exporter.supportedFileTypes.contains(.mp4) else {
+            throw OpenRecordError.io("This movie cannot be converted to a portable MP4 display track.")
+        }
+        try await exporter.export(to: destination, as: .mp4)
+    }
+
+    fileprivate static func installImportedAudio(asset: AVAsset, destination: URL) async throws {
+        guard let exporter = AVAssetExportSession(
+            asset: asset,
+            presetName: AVAssetExportPresetAppleM4A
+        ) else {
+            throw OpenRecordError.io("The imported movie audio could not be prepared.")
+        }
+        try await exporter.export(to: destination, as: .m4a)
+    }
+
     /// Validate that an operation targets an existing, top-level project in
     /// this library. This prevents a malformed URL from saving into a nested
     /// bundle or an arbitrary directory outside the active library.

@@ -314,6 +314,13 @@ private enum ProjectDocumentPersistence {
                 allowed: ["720p", "1080p", "4k", "source"]
             )
         }
+        if let defaultCaptionStyle = root["defaultCaptionStyle"] as? [String: Any] {
+            check(
+                defaultCaptionStyle["position"],
+                at: "defaultCaptionStyle.position",
+                allowed: ["top", "center", "bottom"]
+            )
+        }
         if let captions = root["captions"] as? [[String: Any]] {
             for (index, caption) in captions.enumerated() {
                 let style = caption["style"] as? [String: Any]

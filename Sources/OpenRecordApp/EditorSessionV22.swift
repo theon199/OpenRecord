@@ -139,7 +139,12 @@ extension EditorSession {
         let end = min(start + 3, timelineDuration)
         guard end - start >= 0.05 else { return }
         let before = document
-        let cue = CaptionCue(start: start, end: end, text: "Caption")
+        let cue = CaptionCue(
+            start: start,
+            end: end,
+            text: "Caption",
+            style: document.defaultCaptionStyle
+        )
         document.captions.append(cue)
         document.captions.sort { $0.start < $1.start }
         selectCaption(cue.id)
@@ -202,7 +207,7 @@ extension EditorSession {
         let end = min(start + 3, timelineDuration)
         guard end - start >= 0.05 else { return }
         let before = document
-        let annotation: Annotation
+        var annotation: Annotation
         switch kind {
         case .text: annotation = .textCallout(start: start, end: end)
         case .arrow: annotation = .arrow(start: start, end: end)
@@ -226,6 +231,7 @@ extension EditorSession {
                 text: "Label"
             )
         }
+        document.defaultAnnotationStyle?.apply(to: &annotation)
         document.annotations.append(annotation)
         document.annotations.sort { $0.start < $1.start }
         selectAnnotation(annotation.id)

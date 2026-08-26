@@ -16,6 +16,19 @@ struct LibrarySidebar: View {
                 }
                 ForEach(model.projects) { item in
                     HStack(spacing: 10) {
+                        Toggle(
+                            "Include \(item.name) in batch export",
+                            isOn: Binding(
+                                get: {
+                                    model.batchSelectedProjectURLs.contains(
+                                        item.url.standardizedFileURL
+                                    )
+                                },
+                                set: { model.setBatchSelected(item.url, selected: $0) }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.checkbox)
                         ProjectThumbnailView(image: model.thumbnail(for: item.url))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name)
@@ -107,6 +120,13 @@ struct LibrarySidebar: View {
                 }
                 .help("New Recording  ⌃⌥⌘R")
                 Button {
+                    model.presentImportMoviePanel()
+                } label: {
+                    Label("Import Movie", systemImage: "square.and.arrow.down")
+                }
+                .disabled(model.isImportingMedia || model.batchExportProgress != nil)
+                .help("Import an MP4, MOV, or M4V recording, including device captures")
+                Button {
                     model.isSettingsPresented = true
                 } label: {
                     Label("Settings", systemImage: "folder")
@@ -115,27 +135,37 @@ struct LibrarySidebar: View {
                 Button {
                     model.presentBatchExportPanel()
                 } label: {
-                    Label("Batch Export", systemImage: "square.and.arrow.up.on.square")
+                    Label("Batch Export Selected", systemImage: "square.and.arrow.up.on.square")
                 }
-                .disabled(model.batchExportProgress != nil || model.projects.isEmpty)
-                .help("Export every project as an MP4")
+                .disabled(
+                    model.isBatchExportRunning
+                        || model.batchSelectedProjectURLs.isEmpty
+                        || model.isImportingMedia
+                )
+                .help("Export selected projects using each project's saved export preset")
+                Menu {
+                    Button("Select All") { model.selectAllProjectsForBatchExport() }
+                    Button("Clear Selection") { model.clearBatchExportSelection() }
+                        .disabled(model.batchSelectedProjectURLs.isEmpty)
+                } label: {
+                    Label("Batch Selection", systemImage: "checklist")
+                }
+                .disabled(model.projects.isEmpty || model.isBatchExportRunning)
             }
         }
         .overlay {
-            if let progress = model.batchExportProgress {
+            if model.isImportingMedia {
                 VStack(spacing: 8) {
-                    ProgressView(value: progress)
-                    HStack {
-                        Text("Batch exporting…")
-                        Spacer()
-                        Button("Cancel") { model.cancelBatchExport() }
-                    }
-                    .font(.caption)
+                    ProgressView()
+                    Text("Importing movie…")
+                        .font(.caption)
                 }
                 .padding(12)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .padding(12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            } else if !model.batchExportQueue.jobs.isEmpty {
+                batchQueuePanel
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -152,6 +182,92 @@ struct LibrarySidebar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
             .background(.bar)
+        }
+    }
+
+    private var batchQueuePanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(model.isBatchExportRunning ? "Batch exporting…" : "Batch export")
+                    .font(.headline)
+                Spacer()
+                if model.isBatchExportRunning {
+                    Button("Cancel") { model.cancelBatchExport() }
+                } else {
+                    if model.batchExportQueue.jobs.contains(where: { $0.status == .failed }) {
+                        Button("Retry Failed") { model.retryFailedBatchExports() }
+                    }
+                    Button("Close") { model.clearBatchExportQueue() }
+                }
+            }
+            if let progress = model.batchExportProgress {
+                ProgressView(value: progress)
+            }
+            ForEach(model.batchExportQueue.jobs) { job in
+                HStack(spacing: 8) {
+                    Image(systemName: batchStatusIcon(job.status))
+                        .foregroundStyle(batchStatusColor(job.status))
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(job.projectURL.deletingPathExtension().lastPathComponent)
+                            .lineLimit(1)
+                        Text(batchStatusText(job))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    if !model.isBatchExportRunning, job.status == .queued {
+                        Button {
+                            model.moveBatchExportJob(job.id, offset: -1)
+                        } label: {
+                            Image(systemName: "chevron.up")
+                        }
+                        .buttonStyle(.borderless)
+                        Button {
+                            model.moveBatchExportJob(job.id, offset: 1)
+                        } label: {
+                            Image(systemName: "chevron.down")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                if job.status == .running {
+                    ProgressView(value: job.progress)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func batchStatusText(_ job: BatchExportJob) -> String {
+        switch job.status {
+        case .queued: "Queued • \(job.settings.codec.rawValue), \(job.settings.resolution.rawValue)"
+        case .running: "Exporting • attempt \(job.attemptCount)"
+        case .succeeded: "Complete"
+        case .failed: job.lastError.map { "Failed: \($0)" } ?? "Failed"
+        case .cancelled: "Cancelled"
+        }
+    }
+
+    private func batchStatusIcon(_ status: BatchExportJobStatus) -> String {
+        switch status {
+        case .queued: "clock"
+        case .running: "arrow.trianglehead.2.clockwise.rotate.90"
+        case .succeeded: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        case .cancelled: "xmark.circle"
+        }
+    }
+
+    private func batchStatusColor(_ status: BatchExportJobStatus) -> Color {
+        switch status {
+        case .queued, .cancelled: .secondary
+        case .running: .accentColor
+        case .succeeded: .green
+        case .failed: .red
         }
     }
 }
