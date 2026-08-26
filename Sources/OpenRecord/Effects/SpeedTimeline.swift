@@ -33,10 +33,12 @@ public struct SpeedTimeline: Sendable {
         var result: [SpeedSegment] = []
 
         for raw in segments.sorted(by: {
-            if $0.start == $1.start { return $0.end < $1.end }
+            if $0.start == $1.start {
+                if $0.end == $1.end { return $0.id.uuidString < $1.id.uuidString }
+                return $0.end < $1.end
+            }
             return $0.start < $1.start
         }) {
-            guard seen.insert(raw.id).inserted else { continue }
             var segment = raw.normalized
             if let limit {
                 segment.start = min(segment.start, limit)
@@ -44,6 +46,7 @@ public struct SpeedTimeline: Sendable {
             }
             segment.start = max(segment.start, previousEnd)
             guard segment.end - segment.start >= minimumSegmentDuration else { continue }
+            guard seen.insert(raw.id).inserted else { continue }
             previousEnd = segment.end
             result.append(segment)
         }

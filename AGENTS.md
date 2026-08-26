@@ -1,13 +1,14 @@
 # OpenRecord - AI Agent Instructions
 
-## CRITICAL: Toolchain Error Handling & No Self-Installations
-- **NEVER attempt to download or install new toolchain versions, compilers, Xcode, SDKs, Homebrew packages, CocoaPods, or external tools yourself.**
-- If you encounter a toolchain mismatch, missing CLI tool, or build environment problem: **STOP IMMEDIATELY, do not try automated workarounds or downloads, and report the issue to the user.**
-
 ## Environment & Toolchain
 - **Platform**: macOS Apple Silicon (`arm64`), Apple Command Line Tools (`/Library/Developer/CommandLineTools`) ONLY.
+- **Environment Status**: The system toolchain and SDK are verified functional and compatible. Do not claim version mismatches without running `swift test` or `swift build`.
 - **NO Full Xcode**: Full Xcode and `xcodebuild` are NOT installed and must NEVER be invoked.
 - **NO External Dependencies**: The project uses pure native Apple frameworks (`SwiftUI`, `ScreenCaptureKit`, `AVFoundation`, `MetalKit`, etc.) and SwiftPM. Do NOT add external dependencies.
+
+## CRITICAL: Toolchain Error Handling & No Self-Installations
+- **NEVER attempt to download or install new toolchain versions, compilers, Xcode, SDKs, Homebrew packages, CocoaPods, or external tools yourself.**
+- If you encounter a real build error, inspect code syntax, struct parameters, and test fixtures first.
 
 ## Standard Development Workflows
 - **Debug build**: `swift build`

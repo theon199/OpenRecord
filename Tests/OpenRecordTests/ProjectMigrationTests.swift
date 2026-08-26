@@ -22,6 +22,7 @@ enum ProjectMigrationFixtureTests {
         try assertNestedUnknownFieldsSurviveSave(library: library, root: root)
         try assertLegacyUnknownFieldsRemainReadOnly(library: library, root: root)
         try assertUnknownEnumValuesRemainReadOnly(library: library, root: root)
+        try assertMalformedEditDecisionsRemainReadOnly(library: library, root: root)
     }
 
     private static func assertVersionedFixturesRoundTrip(
@@ -102,6 +103,16 @@ enum ProjectMigrationFixtureTests {
                     == VideoExportSettings(codec: .hevc, resolution: .p1080)
             else {
                 throw OpenRecordError.io("The v3 fixture lost a current document field while decoding")
+            }
+        case 4:
+            guard document.editDecisions.count == 2,
+                  document.editDecisions[0].kind == .exclude,
+                  document.editDecisions[0].start == 10,
+                  document.editDecisions[0].end == 13,
+                  document.editDecisions[1].start == 21,
+                  document.editDecisions[1].end == 23.5
+            else {
+                throw OpenRecordError.io("The v4 fixture lost edit decisions while decoding")
             }
         default:
             throw OpenRecordError.io("Unexpected migration fixture version \(version)")
@@ -285,6 +296,7 @@ enum ProjectMigrationFixtureTests {
         document.trimIn = 2.5
         document.webcamOverlay.size = 0.3
         document.captions[0].text = "Edited known caption field"
+        document.editDecisions[0].end = 7.5
         try library.save(document: document, to: projectURL)
 
         let savedData = try Data(contentsOf: documentURL)
@@ -297,7 +309,12 @@ enum ProjectMigrationFixtureTests {
               let firstCaption = captions.first,
               let futureAnimation = firstCaption["futureAnimation"] as? [String: Any],
               futureAnimation["name"] as? String == "bounce",
-              firstCaption["text"] as? String == "Edited known caption field"
+              firstCaption["text"] as? String == "Edited known caption field",
+              let decisions = rootObject["editDecisions"] as? [[String: Any]],
+              let firstDecision = decisions.first,
+              let futureReason = firstDecision["futureReason"] as? [String: Any],
+              futureReason["source"] as? String == "pause-analysis",
+              firstDecision["end"] as? Double == 7.5
         else {
             throw OpenRecordError.io("Saving discarded nested unknown fields or current edits")
         }
@@ -305,7 +322,8 @@ enum ProjectMigrationFixtureTests {
         let reopened = try library.open(url: projectURL).document
         guard reopened.trimIn == 2.5,
               reopened.webcamOverlay.size == 0.3,
-              reopened.captions.first?.text == "Edited known caption field"
+              reopened.captions.first?.text == "Edited known caption field",
+              reopened.editDecisions.first?.end == 7.5
         else {
             throw OpenRecordError.io("A nested-field-preserving save did not reopen correctly")
         }
@@ -385,6 +403,73 @@ enum ProjectMigrationFixtureTests {
         }
         guard try Data(contentsOf: documentURL) == unsupportedBytes else {
             throw OpenRecordError.io("A rejected unknown-enum save changed project.json")
+        }
+
+        let decisionProjectURL = try copyFixtureBundle(
+            named: "v4.openrecord",
+            to: root,
+            as: "Unknown Decision Enum.openrecord"
+        )
+        let decisionDocumentURL = ProjectLayout.documentURL(in: decisionProjectURL)
+        let decisionBytes = try Data(contentsOf: fixtureURL(named: "unknown-decision-enum-project.json"))
+        try decisionBytes.write(to: decisionDocumentURL, options: .atomic)
+        let decisionOpened = try library.open(url: decisionProjectURL).document
+        guard decisionOpened.editDecisions.isEmpty else {
+            throw OpenRecordError.io("Unsupported edit-decision kind was not isolated on read")
+        }
+        do {
+            try library.save(document: decisionOpened, to: decisionProjectURL)
+            throw OpenRecordError.io("Unsupported edit-decision kind was silently replaced on save")
+        } catch let error as OpenRecordError {
+            guard case .io(let message) = error,
+                  message.contains("unsupported enum values"),
+                  message.contains("editDecisions[0].kind=insert")
+            else {
+                throw error
+            }
+        }
+        guard try Data(contentsOf: decisionDocumentURL) == decisionBytes else {
+            throw OpenRecordError.io("A rejected unknown edit-decision kind changed project.json")
+        }
+    }
+
+    private static func assertMalformedEditDecisionsRemainReadOnly(
+        library: ProjectLibrary,
+        root: URL
+    ) throws {
+        let projectURL = try copyFixtureBundle(
+            named: "v4.openrecord",
+            to: root,
+            as: "Malformed Edit Decisions.openrecord"
+        )
+        let documentURL = ProjectLayout.documentURL(in: projectURL)
+        let raw = Data(
+            #"{"formatVersion":4,"trimIn":0,"trimOut":10,"editDecisions":[{"id":"11111111-aaaa-bbbb-cccc-111111111111","start":1,"end":2,"kind":"exclude"},{"id":"22222222-aaaa-bbbb-cccc-222222222222","start":"three","end":4,"kind":"exclude"},{"id":"33333333-aaaa-bbbb-cccc-333333333333","start":5,"end":6,"kind":7}]}"#.utf8
+        )
+        try raw.write(to: documentURL, options: .atomic)
+
+        let opened = try library.open(url: projectURL).document
+        guard opened.editDecisions.count == 1,
+              opened.editDecisions[0].start == 1,
+              opened.editDecisions[0].end == 2
+        else {
+            throw OpenRecordError.io("A malformed decision hid valid sibling decisions")
+        }
+
+        do {
+            try library.save(document: opened, to: projectURL)
+            throw OpenRecordError.io("Malformed edit decisions were silently discarded on save")
+        } catch let error as OpenRecordError {
+            guard case .io(let message) = error,
+                  message.contains("unsupported enum values"),
+                  message.contains("editDecisions[1].start=<missing-or-non-number>"),
+                  message.contains("editDecisions[2].kind=<missing-or-non-string>")
+            else {
+                throw error
+            }
+        }
+        guard try Data(contentsOf: documentURL) == raw else {
+            throw OpenRecordError.io("A rejected malformed-decision save changed project.json")
         }
     }
 

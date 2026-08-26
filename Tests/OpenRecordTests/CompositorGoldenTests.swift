@@ -183,8 +183,6 @@ enum CompositorGoldenSuite {
                 startPoint: Point2D(x: 0.1, y: 0),
                 endPoint: Point2D(x: 0.9, y: 1)
             )
-            let speed = SpeedTimeline(segments: [SpeedSegment(start: 1, end: 3, rate: 2)])
-            sourceTime = speed.sourceTime(atOutputTime: 1.5, sourceStart: 0, sourceEnd: 5)
             let document = ProjectDocument(
                 trimOut: 5,
                 zoomRanges: [
@@ -194,8 +192,12 @@ enum CompositorGoldenSuite {
                         amount: 1.55,
                         anchor: Point2D(x: 0.58, y: 0.46)
                     )
-                ]
+                ],
+                speedSegments: [SpeedSegment(start: 1, end: 3, rate: 2)],
+                editDecisions: [EditDecision(start: 3, end: 4)]
             )
+            sourceTime = ProjectTimeMapper(project: document, sourceDuration: 5)
+                .sourceTime(atOutputTime: 1.5)
             crop = ZoomEngine(document: document).crop(at: sourceTime)
             cursorUV = Point2D(x: 0.54, y: 0.45)
             cursorVelocity = Point2D(x: 3.6, y: -0.8)

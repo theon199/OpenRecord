@@ -193,22 +193,21 @@ private enum ExportSession {
             }
         }
 
-        let (trimStart, trimEnd) = try ExportLayout.clampedTrim(
-            trimIn: project.trimIn,
-            trimOut: project.trimOut,
-            duration: sourceDuration.seconds
+        let timeMapper = ProjectTimeMapper(
+            project: project,
+            sourceDuration: sourceDuration.seconds
         )
+        guard timeMapper.outputDuration > 0 else {
+            throw ExportFailure(
+                stage: .sourceReading,
+                detail: "The project has no included media to export."
+            )
+        }
 
         let fps = ExportLayout.outputFrameRate(
             sourceAverageFPS: await ExportMediaIO.sourceAverageFPS(track: videoTrack)
         )
-        let sourceSpan = trimEnd - trimStart
-        let speedTimeline = SpeedTimeline(segments: project.speedSegments)
-        let mappedSpan = speedTimeline.outputDuration(
-            sourceStart: trimStart,
-            sourceEnd: trimEnd
-        )
-        let frameCount = max(1, Int((mappedSpan * Double(fps)).rounded(.down)))
+        let frameCount = max(1, Int((timeMapper.outputDuration * Double(fps)).rounded(.down)))
 
         let parent = outputURL.deletingLastPathComponent()
         do {
@@ -296,9 +295,7 @@ private enum ExportSession {
         do {
             audioComposition = try await ExportAudioMux.makeComposition(
                 sources: audioSources,
-                start: trimStart,
-                duration: sourceSpan,
-                speedTimeline: speedTimeline,
+                timeMapper: timeMapper,
                 muteAudioWhenSpedUp: project.muteAudioWhenSpedUp
             )
         } catch is CancellationError {
@@ -440,9 +437,7 @@ private enum ExportSession {
             webcamDuration: webcamDuration,
             webcamOffset: webcamOffset,
             captureDiagnostics: captureDiagnostics,
-            speedTimeline: speedTimeline,
-            trimStart: trimStart,
-            trimEnd: trimEnd,
+            timeMapper: timeMapper,
             fps: fps,
             engine: engine,
             keyboardTimeline: keyboardTimeline,
@@ -667,9 +662,7 @@ private final class ExportFramePreparer: @unchecked Sendable {
     let webcamDuration: TimeInterval
     let webcamOffset: TimeInterval
     let captureDiagnostics: CaptureDiagnostics?
-    let speedTimeline: SpeedTimeline
-    let trimStart: TimeInterval
-    let trimEnd: TimeInterval
+    let timeMapper: ProjectTimeMapper
     let fps: Int32
     let engine: ZoomEngine
     let keyboardTimeline: KeyboardOverlayTimeline
@@ -685,9 +678,7 @@ private final class ExportFramePreparer: @unchecked Sendable {
         webcamDuration: TimeInterval,
         webcamOffset: TimeInterval,
         captureDiagnostics: CaptureDiagnostics?,
-        speedTimeline: SpeedTimeline,
-        trimStart: TimeInterval,
-        trimEnd: TimeInterval,
+        timeMapper: ProjectTimeMapper,
         fps: Int32,
         engine: ZoomEngine,
         keyboardTimeline: KeyboardOverlayTimeline,
@@ -702,9 +693,7 @@ private final class ExportFramePreparer: @unchecked Sendable {
         self.webcamDuration = webcamDuration
         self.webcamOffset = webcamOffset
         self.captureDiagnostics = captureDiagnostics
-        self.speedTimeline = speedTimeline
-        self.trimStart = trimStart
-        self.trimEnd = trimEnd
+        self.timeMapper = timeMapper
         self.fps = fps
         self.engine = engine
         self.keyboardTimeline = keyboardTimeline
@@ -718,11 +707,7 @@ private final class ExportFramePreparer: @unchecked Sendable {
     func prepare(index: Int) throws -> PreparedExportFrame {
         try Task.checkCancellation()
         let outputTime = Double(index) / Double(fps)
-        let sourceTime = speedTimeline.sourceTime(
-            atOutputTime: outputTime,
-            sourceStart: trimStart,
-            sourceEnd: trimEnd
-        )
+        let sourceTime = timeMapper.sourceTime(atOutputTime: outputTime)
 
         let source: CIImage
         do {

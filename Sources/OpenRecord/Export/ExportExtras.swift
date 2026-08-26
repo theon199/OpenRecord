@@ -37,17 +37,40 @@ public extension Exporter {
         try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
-    /// Writes a PNG still rendered at a source timeline position.
+    /// Writes a PNG still rendered at an output timeline position.
+    ///
+    /// The output timestamp is mapped through the same edit/speed map used by
+    /// video, GIF, and audio exports before source-timed effects are sampled.
+    func exportSnapshot(project: ProjectDocument, atOutputTime outputTime: TimeInterval, url: URL) async throws {
+        let bundleURL = projectBundleURL
+        let task = Task.detached(priority: .userInitiated) {
+            try await ExportAlternateSession.snapshot(bundleURL: bundleURL, project: project, outputTime: outputTime, outputURL: url)
+        }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    /// Source-timeline overload retained for clients built against v2.5.
+    /// New callers should use `atOutputTime:` to make the clock explicit.
     func exportSnapshot(project: ProjectDocument, at time: TimeInterval, url: URL) async throws {
         let bundleURL = projectBundleURL
         let task = Task.detached(priority: .userInitiated) {
-            try await ExportAlternateSession.snapshot(bundleURL: bundleURL, project: project, sourceTime: time, outputURL: url)
+            try await ExportAlternateSession.snapshot(
+                bundleURL: bundleURL,
+                project: project,
+                sourceTime: time,
+                outputURL: url
+            )
         }
         try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 }
 
 private enum ExportAlternateSession {
+    private enum SnapshotPosition {
+        case output(TimeInterval)
+        case source(TimeInterval)
+    }
+
     static func gif(bundleURL: URL, project: ProjectDocument, outputURL: URL, progress: ExportProgressHandler?) async throws {
         let accessed = bundleURL.startAccessingSecurityScopedResource()
         defer { if accessed { bundleURL.stopAccessingSecurityScopedResource() } }
@@ -70,7 +93,7 @@ private enum ExportAlternateSession {
         for index in 0..<count {
             try Task.checkCancellation()
             let outputTime = min(duration, Double(index) / Double(frameRate))
-            let sourceTime = frames.speedTimeline.sourceTime(atOutputTime: outputTime, sourceStart: frames.trimStart, sourceEnd: frames.trimEnd)
+            let sourceTime = frames.timeMapper.sourceTime(atOutputTime: outputTime)
             guard let image = try frames.image(at: sourceTime) else { throw OpenRecordError.io("Could not render a GIF frame.") }
             let frameProperties: [CFString: Any] = [
                 kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(frameRate)] as [CFString: Any]
@@ -83,12 +106,48 @@ private enum ExportAlternateSession {
         report(progress, 1)
     }
 
+    static func snapshot(bundleURL: URL, project: ProjectDocument, outputTime: TimeInterval, outputURL: URL) async throws {
+        try await snapshot(
+            bundleURL: bundleURL,
+            project: project,
+            position: .output(outputTime),
+            outputURL: outputURL
+        )
+    }
+
     static func snapshot(bundleURL: URL, project: ProjectDocument, sourceTime: TimeInterval, outputURL: URL) async throws {
+        try await snapshot(
+            bundleURL: bundleURL,
+            project: project,
+            position: .source(sourceTime),
+            outputURL: outputURL
+        )
+    }
+
+    private static func snapshot(
+        bundleURL: URL,
+        project: ProjectDocument,
+        position: SnapshotPosition,
+        outputURL: URL
+    ) async throws {
         let accessed = bundleURL.startAccessingSecurityScopedResource()
         defer { if accessed { bundleURL.stopAccessingSecurityScopedResource() } }
         let frames = try await ExportFrameSession(bundleURL: bundleURL, project: project)
-        let clamped = min(max(sourceTime, frames.trimStart), frames.trimEnd)
-        guard let image = try frames.image(at: clamped) else { throw OpenRecordError.io("Could not render the snapshot.") }
+        guard frames.outputDuration > 0 else {
+            throw OpenRecordError.io("The project has no included media to export.")
+        }
+        let sourceTime: TimeInterval
+        switch position {
+        case .output(let outputTime):
+            sourceTime = frames.timeMapper.sourceTime(atOutputTime: outputTime)
+        case .source(let requestedSourceTime):
+            sourceTime = frames.timeMapper.sourceTime(
+                atOutputTime: frames.timeMapper.clampedOutputTime(
+                    forSourceTime: requestedSourceTime
+                )
+            )
+        }
+        guard let image = try frames.image(at: sourceTime) else { throw OpenRecordError.io("Could not render the snapshot.") }
         let tempURL = try temporaryURL(for: outputURL, ext: "png")
         defer { try? FileManager.default.removeItem(at: tempURL) }
         guard let destination = CGImageDestinationCreateWithURL(tempURL as CFURL, UTType.png.identifier as CFString, 1, nil) else {
@@ -104,10 +163,15 @@ private enum ExportAlternateSession {
         defer { if accessed { bundleURL.stopAccessingSecurityScopedResource() } }
         let displayURL = try ExportMediaIO.requireDisplayVideo(in: bundleURL)
         let display = AVURLAsset(url: displayURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-        let duration = try await display.load(.duration)
-        let trim = try ExportLayout.clampedTrim(trimIn: project.trimIn, trimOut: project.trimOut, duration: duration.seconds)
+        let displayDuration = try await display.load(.duration)
+        let timeMapper = ProjectTimeMapper(
+            project: project,
+            sourceDuration: displayDuration.seconds
+        )
+        guard timeMapper.outputDuration > 0 else {
+            throw OpenRecordError.io("The project has no included media to export.")
+        }
         let meta = try AtomicFileWrite.readJSON(ProjectMeta.self, from: ProjectLayout.metaURL(in: bundleURL))
-        let speed = SpeedTimeline(segments: project.speedSegments)
         let rawMic = await ExportMediaIO.usableAudioURL(
             ProjectLayout.microphoneAudioURL(in: bundleURL)
         )
@@ -154,7 +218,7 @@ private enum ExportAlternateSession {
                 correction: meta.captureDiagnostics?.correction(for: .systemAudio)
             ))
         }
-        guard let prepared = try await ExportAudioMux.makeComposition(sources: sources, start: trim.start, duration: trim.end - trim.start, speedTimeline: speed, muteAudioWhenSpedUp: project.muteAudioWhenSpedUp) else {
+        guard let prepared = try await ExportAudioMux.makeComposition(sources: sources, timeMapper: timeMapper, muteAudioWhenSpedUp: project.muteAudioWhenSpedUp) else {
             throw OpenRecordError.io("This project has no audio tracks to export.")
         }
         let tempURL = try temporaryURL(for: outputURL, ext: "m4a")
@@ -197,9 +261,7 @@ private final class ExportFrameSession: @unchecked Sendable {
     let engine: ZoomEngine
     let keyboardTimeline: KeyboardOverlayTimeline
     let compositor: ExportCompositor
-    let speedTimeline: SpeedTimeline
-    let trimStart: TimeInterval
-    let trimEnd: TimeInterval
+    let timeMapper: ProjectTimeMapper
     let outputDuration: TimeInterval
     let fps: Int32
     let context: CIContext
@@ -216,7 +278,13 @@ private final class ExportFrameSession: @unchecked Sendable {
         let asset = AVURLAsset(url: displayURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw OpenRecordError.io("Recording has no video track.") }
         let duration = try await asset.load(.duration)
-        let trim = try ExportLayout.clampedTrim(trimIn: project.trimIn, trimOut: project.trimOut, duration: duration.seconds)
+        let timeMapper = ProjectTimeMapper(
+            project: project,
+            sourceDuration: duration.seconds
+        )
+        guard timeMapper.outputDuration > 0 else {
+            throw OpenRecordError.io("The project has no included media to export.")
+        }
         let renderContext = ExportMediaIO.makeCIContext()
         let ci = renderContext.context
         let colorSpace = renderContext.colorSpace
@@ -229,21 +297,29 @@ private final class ExportFrameSession: @unchecked Sendable {
             if FileManager.default.fileExists(atPath: webcamURL.path) {
                 let webcam = AVURLAsset(url: webcamURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
                 if let wt = try? await webcam.loadTracks(withMediaType: .video).first {
-                    let wduration = (try? await webcam.load(.duration))?.seconds ?? 0
+                    let assetDuration = (try? await webcam.load(.duration))?.seconds ?? 0
+                    let wduration: TimeInterval
+                    if let timeRange = try? await wt.load(.timeRange),
+                       timeRange.duration.isNumeric,
+                       timeRange.duration.seconds > 0
+                    {
+                        wduration = timeRange.duration.seconds
+                    } else {
+                        wduration = assetDuration
+                    }
                     webcamDuration = wduration
                     webcamReader = try? ExportVideoReader(asset: webcam, track: wt)
                 }
             }
         }
-        let speed = SpeedTimeline(segments: project.speedSegments)
         let fps = ExportLayout.outputFrameRate(sourceAverageFPS: await ExportMediaIO.sourceAverageFPS(track: track))
         let layout = ExportLayout.canvasLayout(canvas: project.canvas, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, resolution: project.videoExportSettings.resolution)
         let cursor = ExportCursorImage.load(document: project, bundleURL: bundleURL)
         let compositor = ExportCompositor(context: ci, colorSpace: colorSpace, canvas: project.canvas, keyboardOverlay: project.keyboardOverlay, webcamOverlay: project.webcamOverlay, webcamMirror: meta.webcam?.mirror ?? false, layout: layout, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, displayScale: meta.scale, cursorImage: cursor?.image, cursorSprite: cursor?.sprite, captions: project.captions, annotations: project.annotations)
         self.reader = reader; self.webcamReader = webcamReader; self.webcamDuration = webcamDuration; self.webcamOffset = webcamOffset; self.captureDiagnostics = meta.captureDiagnostics
         self.engine = ZoomEngine(document: project, samples: mouse, clicks: clicks, displayBounds: meta.displayBounds, targetGeometry: target)
-        self.keyboardTimeline = KeyboardOverlayTimeline(samples: keys); self.compositor = compositor; self.speedTimeline = speed; self.trimStart = trim.start; self.trimEnd = trim.end
-        self.outputDuration = speed.outputDuration(sourceStart: trim.start, sourceEnd: trim.end); self.fps = fps; self.context = ci; self.width = layout.width; self.height = layout.height
+        self.keyboardTimeline = KeyboardOverlayTimeline(samples: keys); self.compositor = compositor; self.timeMapper = timeMapper
+        self.outputDuration = timeMapper.outputDuration; self.fps = fps; self.context = ci; self.width = layout.width; self.height = layout.height
     }
 
     func image(at time: TimeInterval) throws -> CGImage? {

@@ -297,6 +297,35 @@ enum ExportAudioMux {
         )
     }
 
+    /// Builds the audio composition from the authoritative project output
+    /// map. Every destination position comes from a mapper slice, so excluded
+    /// source spans remain silent while later included spans retain their
+    /// ripple-adjusted output offsets.
+    static func makeComposition(
+        sources: [Source],
+        timeMapper: ProjectTimeMapper,
+        muteAudioWhenSpedUp: Bool
+    ) async throws -> Prepared? {
+        let slices = timeMapper.slices.map {
+            AudioSlice(
+                sourceStart: $0.sourceStart,
+                sourceEnd: $0.sourceEnd,
+                outputStart: $0.outputStart,
+                outputEnd: $0.outputEnd,
+                rate: $0.rate
+            )
+        }
+        return try await makeComposition(
+            sources: sources,
+            slices: slices,
+            outputDuration: timeMapper.outputDuration,
+            muteAudioWhenSpedUp: muteAudioWhenSpedUp
+        )
+    }
+
+    /// Compatibility entry point for callers that have not migrated to a
+    /// ProjectTimeMapper yet. Export paths in this target use the mapper
+    /// overload above; this preserves source compatibility for older clients.
     static func makeComposition(
         sources: [Source],
         start: TimeInterval,
@@ -304,7 +333,120 @@ enum ExportAudioMux {
         speedTimeline: SpeedTimeline,
         muteAudioWhenSpedUp: Bool
     ) async throws -> Prepared? {
-        guard !sources.isEmpty, duration > 0 else { return nil }
+        let slices = speedTimeline.slices(sourceStart: start, sourceEnd: start + duration).map {
+            AudioSlice(
+                sourceStart: $0.sourceStart,
+                sourceEnd: $0.sourceEnd,
+                outputStart: $0.outputStart,
+                outputEnd: $0.outputEnd,
+                rate: $0.rate
+            )
+        }
+        return try await makeComposition(
+            sources: sources,
+            slices: slices,
+            outputDuration: speedTimeline.outputDuration(sourceStart: start, sourceEnd: start + duration),
+            muteAudioWhenSpedUp: muteAudioWhenSpedUp
+        )
+    }
+
+    private struct AudioSlice: Sendable {
+        var sourceStart: TimeInterval
+        var sourceEnd: TimeInterval
+        var outputStart: TimeInterval
+        var outputEnd: TimeInterval
+        var rate: Double
+    }
+
+    struct AudioPlacement: Equatable, Sendable {
+        var localSourceStart: TimeInterval
+        var localSourceDuration: TimeInterval
+        var outputStart: TimeInterval
+        var outputDuration: TimeInterval
+        var rate: Double
+    }
+
+    /// Pure placement seam shared by composition assembly and deterministic
+    /// timing tests. Source offsets/corrections are resolved before AVFoundation
+    /// receives any insertion or scaling instructions.
+    static func placements(
+        timeMapper: ProjectTimeMapper,
+        sourceOffset: TimeInterval,
+        sourceTimelineDuration: TimeInterval,
+        sourceMediaDuration: TimeInterval,
+        correction: CaptureTrackCorrection? = nil,
+        muteAudioWhenSpedUp: Bool = false
+    ) -> [AudioPlacement] {
+        placements(
+            slices: timeMapper.slices.map {
+                AudioSlice(
+                    sourceStart: $0.sourceStart,
+                    sourceEnd: $0.sourceEnd,
+                    outputStart: $0.outputStart,
+                    outputEnd: $0.outputEnd,
+                    rate: $0.rate
+                )
+            },
+            sourceOffset: sourceOffset,
+            sourceTimelineDuration: sourceTimelineDuration,
+            sourceMediaDuration: sourceMediaDuration,
+            correction: correction,
+            muteAudioWhenSpedUp: muteAudioWhenSpedUp
+        )
+    }
+
+    private static func placements(
+        slices: [AudioSlice],
+        sourceOffset: TimeInterval,
+        sourceTimelineDuration: TimeInterval,
+        sourceMediaDuration: TimeInterval,
+        correction: CaptureTrackCorrection?,
+        muteAudioWhenSpedUp: Bool
+    ) -> [AudioPlacement] {
+        let sourceGlobalStart = sourceOffset
+        let sourceGlobalEnd = sourceOffset + sourceTimelineDuration
+        var result: [AudioPlacement] = []
+        for slice in slices {
+            if muteAudioWhenSpedUp, slice.rate > 1.000_001 { continue }
+            let intersectionStart = max(slice.sourceStart, sourceGlobalStart)
+            let intersectionEnd = min(slice.sourceEnd, sourceGlobalEnd)
+            guard intersectionEnd - intersectionStart > 0.000_001 else { continue }
+
+            let timelineLocalStart = intersectionStart - sourceOffset
+            let timelineLocalEnd = intersectionEnd - sourceOffset
+            let localStart = correction?.sourceTime(
+                forTimelineOffset: timelineLocalStart
+            ) ?? timelineLocalStart
+            let localEnd = correction?.sourceTime(
+                forTimelineOffset: timelineLocalEnd
+            ) ?? timelineLocalEnd
+            let localDuration = min(
+                max(0, localEnd - localStart),
+                max(0, sourceMediaDuration - localStart)
+            )
+            let timelineDuration = intersectionEnd - intersectionStart
+            guard localDuration > 0, timelineDuration > 0 else { continue }
+            result.append(
+                AudioPlacement(
+                    localSourceStart: localStart,
+                    localSourceDuration: localDuration,
+                    outputStart: slice.outputStart
+                        + (intersectionStart - slice.sourceStart) / slice.rate,
+                    outputDuration: timelineDuration / slice.rate,
+                    rate: slice.rate
+                )
+            )
+        }
+        return result
+    }
+
+    private static func makeComposition(
+        sources: [Source],
+        slices: [AudioSlice],
+        outputDuration: TimeInterval,
+        muteAudioWhenSpedUp: Bool
+    ) async throws -> Prepared? {
+        guard !sources.isEmpty, outputDuration > 0, !slices.isEmpty else { return nil }
 
         let composition = AVMutableComposition()
         let audioMix = AVMutableAudioMix()
@@ -326,7 +468,6 @@ enum ExportAudioMux {
                 continue
             }
             let timescale = max(trackRange.duration.timescale, 48_000)
-            let sourceGlobalStart = source.offset
             let sourceTimelineDuration: TimeInterval
             if let correction = source.correction,
                correction.sourceDuration > 0,
@@ -336,40 +477,29 @@ enum ExportAudioMux {
             } else {
                 sourceTimelineDuration = trackRange.duration.seconds
             }
-            let sourceGlobalEnd = source.offset + sourceTimelineDuration
+            let placements = placements(
+                slices: slices,
+                sourceOffset: source.offset,
+                sourceTimelineDuration: sourceTimelineDuration,
+                sourceMediaDuration: trackRange.duration.seconds,
+                correction: source.correction,
+                muteAudioWhenSpedUp: muteAudioWhenSpedUp
+            )
 
-            for slice in speedTimeline.slices(sourceStart: start, sourceEnd: start + duration) {
-                if muteAudioWhenSpedUp, slice.rate > 1.000_001 { continue }
-                let intersectionStart = max(slice.sourceStart, sourceGlobalStart)
-                let intersectionEnd = min(slice.sourceEnd, sourceGlobalEnd)
-                guard intersectionEnd - intersectionStart > 0.01 else { continue }
-
-                let timelineLocalStart = intersectionStart - source.offset
-                let timelineLocalEnd = intersectionEnd - source.offset
-                let localStart = source.correction?.sourceTime(
-                    forTimelineOffset: timelineLocalStart
-                ) ?? timelineLocalStart
-                let localEnd = source.correction?.sourceTime(
-                    forTimelineOffset: timelineLocalEnd
-                ) ?? timelineLocalEnd
-                let localDuration = min(
-                    max(0, localEnd - localStart),
-                    max(0, trackRange.duration.seconds - localStart)
-                )
-                let timelineDuration = intersectionEnd - intersectionStart
-                guard localDuration > 0, timelineDuration > 0 else { continue }
-                let destinationSeconds = slice.outputStart
-                    + (intersectionStart - slice.sourceStart) / slice.rate
+            for placement in placements {
                 let destination = CMTime(
-                    seconds: destinationSeconds,
+                    seconds: placement.outputStart,
                     preferredTimescale: timescale
                 )
                 let sourceTime = CMTimeAdd(
                     trackRange.start,
-                    CMTime(seconds: localStart, preferredTimescale: timescale)
+                    CMTime(
+                        seconds: placement.localSourceStart,
+                        preferredTimescale: timescale
+                    )
                 )
                 let insertDuration = CMTime(
-                    seconds: localDuration,
+                    seconds: placement.localSourceDuration,
                     preferredTimescale: timescale
                 )
 
@@ -380,7 +510,7 @@ enum ExportAudioMux {
                         at: destination
                     )
                     let outputDuration = CMTime(
-                        seconds: timelineDuration / slice.rate,
+                        seconds: placement.outputDuration,
                         preferredTimescale: timescale
                     )
                     dest.scaleTimeRange(
@@ -401,10 +531,6 @@ enum ExportAudioMux {
         }
         guard inserted else { return nil }
         audioMix.inputParameters = mixParameters
-        let outputDuration = speedTimeline.outputDuration(
-            sourceStart: start,
-            sourceEnd: start + duration
-        )
         return Prepared(
             composition: composition,
             audioMix: audioMix,

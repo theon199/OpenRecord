@@ -1,5 +1,5 @@
 {
-  "formatVersion" : 3,
+  "formatVersion" : 4,
   "trimIn" : 1,
   "webcamOverlay" : {
     "borderWidth" : 4,
@@ -42,6 +42,18 @@
         "position" : "bottom"
       },
       "text" : "Preserve nested fields"
+    }
+  ],
+  "editDecisions" : [
+    {
+      "end" : 7,
+      "futureReason" : {
+        "confidence" : 0.92,
+        "source" : "pause-analysis"
+      },
+      "id" : "99999999-7777-7777-7777-777777777777",
+      "kind" : "exclude",
+      "start" : 5
     }
   ]
 }

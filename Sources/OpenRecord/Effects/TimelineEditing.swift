@@ -293,6 +293,10 @@ public extension ProjectDocument {
         value.annotations = annotations.sorted(by: timelineRangeOrder).compactMap {
             normalizedAnnotation($0, sourceDuration: duration)
         }
+        value.editDecisions = ProjectTimeMapper.normalizedDecisions(
+            editDecisions,
+            sourceDuration: duration
+        )
         return value
     }
 

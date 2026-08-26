@@ -62,7 +62,14 @@ enum ProjectLibraryBundleRoundTrip {
                 aspectWidth: 16,
                 aspectHeight: 9
             ),
-            cursorSprites: []
+            cursorSprites: [],
+            editDecisions: [
+                EditDecision(
+                    id: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!,
+                    start: 3,
+                    end: 3.5
+                )
+            ]
         )
         try library.save(document: edited, to: created)
         let reopened = try library.open(url: created)
@@ -216,7 +223,7 @@ enum ProjectLibraryBundleRoundTrip {
               migrated.stylePresetID == CanvasPreset.defaultStyle.id,
               migrated.keyboardOverlay == .disabled
         else {
-            throw OpenRecordError.io("Saving a v1 project did not migrate it to v2")
+            throw OpenRecordError.io("Saving a v1 project did not migrate it to v4")
         }
 
         let copyDestination = root

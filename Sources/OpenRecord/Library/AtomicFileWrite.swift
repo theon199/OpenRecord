@@ -137,7 +137,7 @@ private enum ProjectDocumentPersistence {
         let unsupportedEnumValues = unsupportedEnumValues(in: existingRoot)
         guard unsupportedEnumValues.isEmpty else {
             throw OpenRecordError.io(
-                "This project contains unsupported enum values: "
+                "This project contains unsupported enum values or malformed edit decisions: "
                     + unsupportedEnumValues.joined(separator: ", ")
                     + ". It can be opened read-only when possible, but saving was refused to avoid discarding them."
             )
@@ -313,6 +313,40 @@ private enum ProjectDocumentPersistence {
                     at: "annotations[\(index)].kind",
                     allowed: ["text", "arrow", "spotlight"]
                 )
+            }
+        }
+        if let rawDecisions = root["editDecisions"] {
+            guard let decisions = rawDecisions as? [Any] else {
+                issues.append("editDecisions=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawDecision) in decisions.enumerated() {
+                guard let decision = rawDecision as? [String: Any] else {
+                    issues.append("editDecisions[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "editDecisions[\(index)]"
+                if let id = decision["id"] as? String,
+                   UUID(uuidString: id) != nil
+                {
+                    // Valid stable identity.
+                } else {
+                    issues.append("\(prefix).id=<missing-or-invalid>")
+                }
+                for field in ["start", "end"] {
+                    guard let number = decision[field] as? NSNumber,
+                          !(number is Bool),
+                          number.doubleValue.isFinite
+                    else {
+                        issues.append("\(prefix).\(field)=<missing-or-non-number>")
+                        continue
+                    }
+                }
+                if let kind = decision["kind"] as? String {
+                    check(kind, at: "\(prefix).kind", allowed: ["exclude"])
+                } else {
+                    issues.append("\(prefix).kind=<missing-or-non-string>")
+                }
             }
         }
 

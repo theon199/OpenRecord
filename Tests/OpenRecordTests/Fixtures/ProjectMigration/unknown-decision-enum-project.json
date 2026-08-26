@@ -1,0 +1,26 @@
+{
+  "formatVersion" : 4,
+  "trimIn" : 0,
+  "trimOut" : 10,
+  "zoomRanges" : [ ],
+  "canvas" : { },
+  "cursorSprites" : [ ],
+  "keyboardOverlay" : { },
+  "webcamOverlay" : { },
+  "autoZoomSensitivity" : "normal",
+  "zoomEasing" : "smooth",
+  "speedSegments" : [ ],
+  "muteAudioWhenSpedUp" : false,
+  "audioCleanup" : { },
+  "captions" : [ ],
+  "annotations" : [ ],
+  "videoExportSettings" : { },
+  "editDecisions" : [
+    {
+      "id" : "aaaaaaaa-1111-2222-3333-444444444444",
+      "start" : 2,
+      "end" : 3,
+      "kind" : "insert"
+    }
+  ]
+}

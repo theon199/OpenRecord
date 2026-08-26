@@ -1,0 +1,32 @@
+{
+  "formatVersion" : 4,
+  "trimIn" : 0.75,
+  "trimOut" : 45,
+  "zoomRanges" : [ ],
+  "canvas" : { },
+  "cursorSprites" : [ ],
+  "keyboardOverlay" : { },
+  "webcamOverlay" : { },
+  "autoZoomSensitivity" : "normal",
+  "zoomEasing" : "smooth",
+  "speedSegments" : [ ],
+  "muteAudioWhenSpedUp" : false,
+  "audioCleanup" : { },
+  "captions" : [ ],
+  "annotations" : [ ],
+  "videoExportSettings" : { },
+  "editDecisions" : [
+    {
+      "id" : "77777777-7777-7777-7777-777777777777",
+      "start" : 10,
+      "end" : 13,
+      "kind" : "exclude"
+    },
+    {
+      "id" : "88888888-8888-8888-8888-888888888888",
+      "start" : 21,
+      "end" : 23.5,
+      "kind" : "exclude"
+    }
+  ]
+}

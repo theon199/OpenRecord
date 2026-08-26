@@ -662,7 +662,9 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {
-    public static let currentFormatVersion = 3
+    /// v4 adds the non-destructive edit-decision lane. Older documents remain
+    /// readable and are upgraded when they are first saved.
+    public static let currentFormatVersion = 4
 
     public var formatVersion: Int
     public var trimIn: TimeInterval
@@ -681,6 +683,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var captions: [CaptionCue]
     public var annotations: [Annotation]
     public var videoExportSettings: VideoExportSettings
+    public var editDecisions: [EditDecision]
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -699,7 +702,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         audioCleanup: AudioCleanupSettings = .default,
         captions: [CaptionCue] = [],
         annotations: [Annotation] = [],
-        videoExportSettings: VideoExportSettings = .default
+        videoExportSettings: VideoExportSettings = .default,
+        editDecisions: [EditDecision] = []
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -718,6 +722,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.captions = captions
         self.annotations = annotations
         self.videoExportSettings = videoExportSettings
+        self.editDecisions = editDecisions
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -738,6 +743,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case captions
         case annotations
         case videoExportSettings
+        case editDecisions
     }
 
     private struct AnyCodingKey: CodingKey {
@@ -752,6 +758,17 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         init?(intValue: Int) {
             stringValue = String(intValue)
             self.intValue = intValue
+        }
+    }
+
+    /// Decode array elements independently so one malformed or future edit
+    /// decision cannot hide every valid decision in the document. Persistence
+    /// still refuses to overwrite unsupported raw items.
+    private struct LossyDecodable<Value: Decodable>: Decodable {
+        let value: Value?
+
+        init(from decoder: Decoder) throws {
+            value = try? Value(from: decoder)
         }
     }
 
@@ -814,6 +831,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             VideoExportSettings.self,
             forKey: .videoExportSettings
         )) ?? .default
+        editDecisions = (try? container.decode(
+            [LossyDecodable<EditDecision>].self,
+            forKey: .editDecisions
+        ))?.compactMap(\.value) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -835,6 +856,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encode(captions, forKey: .captions)
         try container.encode(annotations, forKey: .annotations)
         try container.encode(videoExportSettings, forKey: .videoExportSettings)
+        try container.encode(editDecisions, forKey: .editDecisions)
     }
 
     /// Opening a legacy project is read-only. Supported write paths call this
@@ -848,8 +870,19 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         value.canvas.cursorMotionBlur = value.canvas.cursorMotionBlur.normalized
         value.speedSegments = SpeedTimeline.normalizedSegments(value.speedSegments)
         value.audioCleanup = value.audioCleanup.normalized
-        value.captions = value.captions.map(\.normalized).sorted { $0.start < $1.start }
-        value.annotations = value.annotations.map(\.normalized).sorted { $0.start < $1.start }
+        value.captions = value.captions.map(\.normalized).sorted {
+            $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
+        }
+        value.annotations = value.annotations.map(\.normalized).sorted {
+            $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
+        }
+        // The document alone does not know the source-media duration. Preserve
+        // finite source-time decisions outside the current trim; the editor
+        // bounds them against real media when a project is opened.
+        value.editDecisions = ProjectTimeMapper.normalizedDecisions(
+            value.editDecisions,
+            sourceDuration: nil
+        )
         if value.stylePresetID == nil {
             value.stylePresetID = CanvasPreset.matching(value.canvas)?.id
         }

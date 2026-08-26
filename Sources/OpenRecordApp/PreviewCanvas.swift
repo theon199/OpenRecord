@@ -14,11 +14,16 @@ struct PreviewCanvas: View {
 
     var body: some View {
         GeometryReader { geo in
-            let liveCrop = session.engine.crop(at: session.playhead)
+            // The UI playhead is displayed on the source-authored timeline,
+            // but every preview track resolves through the same composed
+            // output/edit/speed mapper used by export. This canonicalizes cut
+            // boundaries before any source-timed telemetry or overlay lookup.
+            let sourceTime = session.previewSourceTime
+            let liveCrop = session.engine.crop(at: sourceTime)
             let crop = anchorDrag?.cropUV ?? liveCrop
-            let cursor = session.engine.interpolateCursor(at: session.playhead)
-            let cursorVelocity = session.engine.cursorVelocity(at: session.playhead)
-            let clicking = session.engine.isClicking(at: session.playhead)
+            let cursor = session.engine.interpolateCursor(at: sourceTime)
+            let cursorVelocity = session.engine.cursorVelocity(at: sourceTime)
+            let clicking = session.engine.isClicking(at: sourceTime)
             let canvas = session.document.canvas
             let sourceWidth = session.sourceWidth
             let sourceHeight = session.sourceHeight
@@ -41,10 +46,10 @@ struct PreviewCanvas: View {
             let video = mapRect(layout.videoRect, from: layout.size, into: outer)
             let corner = layout.cornerRadius * Double(viewScale)
             let clickAge = clicking
-                ? ExportLayout.primaryClickAge(at: session.playhead, clicks: session.engine.smoother.clicks)
+                ? ExportLayout.primaryClickAge(at: sourceTime, clicks: session.engine.smoother.clicks)
                 : nil
             let keyboardState = session.keyboardTimeline.state(
-                at: session.playhead,
+                at: sourceTime,
                 settings: session.document.keyboardOverlay
             )
 
@@ -57,7 +62,7 @@ struct PreviewCanvas: View {
                 videoStack(crop: crop, inner: video, cornerRadius: corner)
 
                 if let webcamPlayer = session.webcamPlayer,
-                   session.webcamIsVisible(at: session.playhead)
+                   session.webcamIsVisible(at: sourceTime)
                 {
                     webcamOverlay(
                         player: webcamPlayer,
@@ -91,11 +96,11 @@ struct PreviewCanvas: View {
                     viewScale: viewScale
                 )
 
-                ForEach(session.document.captions.filter { $0.isActive(at: session.playhead) }) { caption in
+                ForEach(session.document.captions.filter { $0.isActive(at: sourceTime) }) { caption in
                     captionOverlay(caption, outer: outer, viewScale: authoredViewScale)
                 }
 
-                ForEach(session.document.annotations.filter { $0.isActive(at: session.playhead) }) { annotation in
+                ForEach(session.document.annotations.filter { $0.isActive(at: sourceTime) }) { annotation in
                     annotationOverlay(annotation, outer: outer, viewScale: authoredViewScale)
                 }
 

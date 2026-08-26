@@ -121,6 +121,25 @@ final class EditorSession {
         max(duration, 0.01)
     }
 
+    /// The single timing authority shared with every export path. Editor
+    /// lanes remain authored in source time, while this mapper supplies the
+    /// ripple/output position and canonical source frame for the playhead.
+    var projectTimeMapper: ProjectTimeMapper {
+        ProjectTimeMapper(project: document, sourceDuration: duration)
+    }
+
+    var outputDuration: TimeInterval {
+        projectTimeMapper.outputDuration
+    }
+
+    var outputPlayhead: TimeInterval {
+        projectTimeMapper.clampedOutputTime(forSourceTime: playhead)
+    }
+
+    var previewSourceTime: TimeInterval {
+        projectTimeMapper.sourceTime(atOutputTime: outputPlayhead)
+    }
+
     var selectedZoom: ZoomRange? {
         guard let selectedZoomID else { return nil }
         return document.zoomRanges.first { $0.id == selectedZoomID }
@@ -142,7 +161,7 @@ final class EditorSession {
     }
 
     var currentPlaybackRate: Double {
-        SpeedTimeline(segments: document.speedSegments).rate(at: playhead)
+        SpeedTimeline(segments: document.speedSegments).rate(at: previewSourceTime)
     }
 
     var canAddSpeedAtPlayhead: Bool {
@@ -415,13 +434,13 @@ final class EditorSession {
     }
 
     func play() {
-        guard hasVideo else { return }
-        if playhead >= effectiveTrimOut - 0.02 {
+        guard hasVideo, outputDuration > 0 else { return }
+        if outputPlayhead >= outputDuration - 0.02 {
             seek(to: document.trimIn)
         }
         isPlaying = true
         applyPlaybackRate(force: true)
-        syncWebcam(to: playhead, playing: true)
+        syncWebcam(to: previewSourceTime, playing: true)
     }
 
     func pause() {
@@ -432,7 +451,10 @@ final class EditorSession {
     }
 
     func seek(to time: TimeInterval) {
-        let clamped = min(max(time, 0), timelineDuration)
+        let requestedSourceTime = min(max(time, 0), timelineDuration)
+        let mapper = projectTimeMapper
+        let outputTime = mapper.clampedOutputTime(forSourceTime: requestedSourceTime)
+        let clamped = mapper.sourceTime(atOutputTime: outputTime)
         playhead = clamped
         guard hasVideo else { return }
         isSeeking = true
@@ -442,7 +464,7 @@ final class EditorSession {
                 self?.isSeeking = false
             }
         }
-        syncWebcam(to: clamped, playing: false)
+        syncWebcam(to: clamped, playing: isPlaying)
     }
 
     func addZoomAtPlayhead() {
@@ -759,9 +781,9 @@ final class EditorSession {
         document = restoredDocument
         applyDocumentSelection(selection)
         let clampedPlayhead = min(max(playhead, document.trimIn), effectiveTrimOut)
-        if abs(clampedPlayhead - playhead) > 0.000_001 {
-            seek(to: clampedPlayhead)
-        }
+        // Seeking through the mapper also moves a restored playhead out of a
+        // newly excluded range, even when it is already inside the trim.
+        seek(to: clampedPlayhead)
         markDirty()
         scheduleEngineRebuild()
         applyPlaybackRate(force: true)
@@ -956,7 +978,11 @@ final class EditorSession {
                     }
                 }
             case .snapshot:
-                try await exporter.exportSnapshot(project: document, at: playhead, url: url)
+                try await exporter.exportSnapshot(
+                    project: document,
+                    atOutputTime: outputPlayhead,
+                    url: url
+                )
                 exportProgress = syntheticExportProgress(fraction: 1, phase: .completed)
             }
             try Task.checkCancellation()
@@ -1067,10 +1093,24 @@ final class EditorSession {
         guard !isSeeking else { return }
         let seconds = time.seconds
         guard seconds.isFinite else { return }
-        playhead = min(max(seconds, 0), timelineDuration)
+
+        let rawSourceTime = min(max(seconds, 0), timelineDuration)
+        let mapper = projectTimeMapper
+        let canonicalSourceTime = mapper.sourceTime(
+            atOutputTime: mapper.clampedOutputTime(forSourceTime: rawSourceTime)
+        )
+        // AVPlayer advances on the source PTS clock. Crossing an excluded
+        // range therefore requires an explicit discontinuous seek so preview
+        // follows the same ripple mapping as export.
+        if canonicalSourceTime - rawSourceTime > 0.001 {
+            seek(to: canonicalSourceTime)
+            return
+        }
+
+        playhead = canonicalSourceTime
         applyPlaybackRate()
-        syncWebcam(to: playhead, playing: isPlaying)
-        if isPlaying, playhead >= effectiveTrimOut - 0.01 {
+        syncWebcam(to: canonicalSourceTime, playing: isPlaying)
+        if isPlaying, outputPlayhead >= outputDuration - 0.01 {
             pause()
             seek(to: document.trimIn)
         }
@@ -1131,7 +1171,7 @@ final class EditorSession {
         guard force || abs(next - activePlaybackRate) > 0.001 else { return }
         activePlaybackRate = next
         player.playImmediately(atRate: next)
-        if webcamIsVisible(at: playhead) {
+        if webcamIsVisible(at: previewSourceTime) {
             let webcamRate = next * Float(
                 meta.captureDiagnostics?.sourceRate(for: .webcam) ?? 1
             )

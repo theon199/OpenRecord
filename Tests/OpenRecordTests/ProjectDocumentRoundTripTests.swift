@@ -10,7 +10,8 @@ enum ProjectDocumentJSONRoundTrip {
               CanvasSettings.default.cursorMotionBlur == .default,
               ProjectDocument().webcamOverlay == .disabled,
               ProjectDocument().speedSegments.isEmpty,
-              ProjectDocument().audioCleanup == .default
+              ProjectDocument().audioCleanup == .default,
+              ProjectDocument().editDecisions.isEmpty
         else {
             throw OpenRecordError.io("Canvas cursor defaults are incorrect")
         }
@@ -110,7 +111,14 @@ enum ProjectDocumentJSONRoundTrip {
                     dimAmount: 0.2
                 )
             ],
-            videoExportSettings: VideoExportSettings(codec: .hevc, resolution: .p2160)
+            videoExportSettings: VideoExportSettings(codec: .hevc, resolution: .p2160),
+            editDecisions: [
+                EditDecision(
+                    id: UUID(uuidString: "cccccccc-cccc-cccc-cccc-cccccccccccc")!,
+                    start: 7.5,
+                    end: 8.25
+                )
+            ]
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -142,7 +150,8 @@ enum ProjectDocumentJSONRoundTrip {
               legacy.audioCleanup == .default,
               legacy.captions.isEmpty,
               legacy.annotations.isEmpty,
-              legacy.videoExportSettings == .default
+              legacy.videoExportSettings == .default,
+              legacy.editDecisions.isEmpty
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
         }
@@ -166,7 +175,7 @@ enum ProjectDocumentJSONRoundTrip {
               upgraded.captions.isEmpty,
               upgraded.annotations.isEmpty
         else {
-            throw OpenRecordError.io("The first-save migration did not produce the v3 defaults")
+            throw OpenRecordError.io("The first-save migration did not produce the v4 defaults")
         }
 
         let futureJSON = Data(
@@ -199,7 +208,7 @@ enum ProjectDocumentJSONRoundTrip {
               versionTwo.annotations.isEmpty,
               versionTwo.upgradedForSave().formatVersion == ProjectDocument.currentFormatVersion
         else {
-            throw OpenRecordError.io("A v2 project did not decode or migrate with v3 caption defaults")
+            throw OpenRecordError.io("A v2 project did not decode or migrate with v4 caption defaults")
         }
 
         let unknownPresetJSON = Data(
@@ -259,6 +268,36 @@ enum ProjectDocumentJSONRoundTrip {
               normalizedMedia.audioCleanup.noiseGateThresholdDB == -60
         else {
             throw OpenRecordError.io("Speed or audio cleanup settings were not normalized on save")
+        }
+
+        var malformedDecisions = ProjectDocument(trimOut: 10)
+        malformedDecisions.editDecisions = [
+            EditDecision(
+                id: UUID(uuidString: "dddddddd-dddd-dddd-dddd-dddddddddddd")!,
+                start: 8,
+                end: 14
+            ),
+            EditDecision(
+                id: UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!,
+                start: 7,
+                end: 9
+            ),
+            EditDecision(
+                id: UUID(uuidString: "ffffffff-ffff-ffff-ffff-ffffffffffff")!,
+                start: .nan,
+                end: 9
+            )
+        ]
+        let normalizedDecisions = malformedDecisions.upgradedForSave().editDecisions
+        guard normalizedDecisions.count == 2,
+              normalizedDecisions[0].start == 7,
+              normalizedDecisions[0].end == 9,
+              normalizedDecisions[1].start == 9,
+              normalizedDecisions[1].end == 14
+        else {
+            throw OpenRecordError.io(
+                "Malformed or out-of-trim edit decisions were not preserved deterministically"
+            )
         }
     }
 

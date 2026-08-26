@@ -24,6 +24,11 @@ struct TimelineView: View {
                 Text(Timecode.string(session.timelineDuration))
                     .font(.system(.caption, design: .monospaced).monospacedDigit())
                     .foregroundStyle(.secondary)
+                if !session.document.editDecisions.isEmpty {
+                    Text("Output \(Timecode.string(session.outputPlayhead)) / \(Timecode.string(session.outputDuration))")
+                        .font(.system(.caption2, design: .monospaced).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 Text(String(format: "%.2g×", session.currentPlaybackRate))
                     .font(.system(.caption2, design: .rounded).weight(.semibold))
                     .foregroundStyle(
@@ -83,6 +88,10 @@ struct TimelineView: View {
 
             trimShade(from: 0, to: trimIn, width: size.width, height: size.height)
             trimShade(from: trimOut, to: duration, width: size.width, height: size.height)
+
+            ForEach(session.document.editDecisions) { decision in
+                cutShade(decision, width: size.width, height: size.height)
+            }
 
             ForEach(session.document.zoomRanges) { range in
                 zoomBlock(range, width: size.width, height: size.height)
@@ -250,6 +259,27 @@ struct TimelineView: View {
             .frame(width: max(x1 - x0, 0), height: height)
             .offset(x: x0)
             .allowsHitTesting(false)
+    }
+
+    private func cutShade(
+        _ decision: EditDecision,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        let x0 = xPosition(decision.start, width: width)
+        let x1 = xPosition(decision.end, width: width)
+        return Rectangle()
+            .fill(Color.red.opacity(0.16))
+            .overlay(alignment: .top) {
+                Text("CUT")
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.red.opacity(0.85))
+                    .padding(.top, 2)
+            }
+            .frame(width: max(x1 - x0, 1), height: height)
+            .offset(x: x0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private func dragGesture(
