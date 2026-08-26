@@ -47,6 +47,7 @@ final class AppModel {
     private(set) var projectThumbnails: [URL: NSImage] = [:]
     var permissionGranted: [CapturePermissionKind: Bool] = [:]
     var errorMessage: String?
+    private(set) var lastErrorCategory: LocalDiagnosticsErrorCategory = .none
     var selectedProjectURL: URL?
     var editor: EditorSession?
     var isRecorderPresented = false
@@ -154,8 +155,21 @@ final class AppModel {
         _ = await CapturePermissions.request(kind)
         refreshPermissions()
         if permissionGranted[kind] != true {
+            recordErrorCategory(.permissions)
             CapturePermissions.openSystemSettings(for: kind)
         }
+    }
+
+    func reportError(
+        _ message: String,
+        category: LocalDiagnosticsErrorCategory
+    ) {
+        recordErrorCategory(category)
+        errorMessage = message
+    }
+
+    private func recordErrorCategory(_ category: LocalDiagnosticsErrorCategory) {
+        lastErrorCategory = category == .none ? .unknown : category
     }
 
     func refreshProjects() {
@@ -173,7 +187,7 @@ final class AppModel {
             }
             scheduleThumbnailBackfill(for: items)
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error.localizedDescription, category: .projectContent)
         }
     }
 
@@ -185,7 +199,7 @@ final class AppModel {
         do {
             try library.reveal(url)
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error.localizedDescription, category: .projectContent)
         }
     }
 
@@ -213,7 +227,7 @@ final class AppModel {
             try library.ensureRootExists()
             refreshProjects()
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error.localizedDescription, category: .projectContent)
         }
     }
 
@@ -268,7 +282,10 @@ final class AppModel {
             batchExportProgress = Double(index + 1) / Double(items.count)
         }
         if !failures.isEmpty {
-            errorMessage = "Batch export finished with errors: " + failures.joined(separator: " ")
+            reportError(
+                "Batch export finished with errors: " + failures.joined(separator: " "),
+                category: .export
+            )
         }
         batchExportProgress = nil
     }
@@ -304,6 +321,9 @@ final class AppModel {
             }
             editor?.shutdown()
             editor = session
+            if session.lastErrorCategory != .none {
+                recordErrorCategory(session.lastErrorCategory)
+            }
             selectedProjectURL = url
             pendingDegradedOpen = nil
             degradedOpenMessage = nil
@@ -314,11 +334,12 @@ final class AppModel {
                     generateAutoZooms: generateAutoZooms
                 )
                 degradedOpenMessage = issue.localizedDescription
+                recordErrorCategory(.telemetry)
                 selectedProjectURL = editor?.projectURL
             }
         } catch {
             if generation == openGeneration {
-                errorMessage = error.localizedDescription
+                reportError(error.localizedDescription, category: .projectContent)
                 selectedProjectURL = editor?.projectURL
             }
         }
@@ -363,6 +384,7 @@ final class AppModel {
                 saveFailureMessage = nil
                 await performEditorTransition(transition)
             } catch {
+                recordErrorCategory(.projectSave)
                 saveFailureMessage = error.localizedDescription
             }
         }
@@ -394,6 +416,7 @@ final class AppModel {
                 saveFailureMessage = nil
                 await performEditorTransition(transition)
             } catch {
+                recordErrorCategory(.projectSave)
                 saveFailureMessage = error.localizedDescription
             }
         }
@@ -422,6 +445,7 @@ final class AppModel {
                 try await editor.flushSave()
             } catch {
                 pendingEditorTransition = transition
+                recordErrorCategory(.projectSave)
                 saveFailureMessage = error.localizedDescription
                 selectedProjectURL = editor.projectURL
                 return
@@ -450,7 +474,7 @@ final class AppModel {
                 try library.delete(url)
                 refreshProjects()
             } catch {
-                errorMessage = error.localizedDescription
+                reportError(error.localizedDescription, category: .projectContent)
                 refreshProjects()
             }
         case .rename(let url, let name):
@@ -477,7 +501,7 @@ final class AppModel {
                 }
                 refreshProjects()
             } catch {
-                errorMessage = error.localizedDescription
+                reportError(error.localizedDescription, category: .projectContent)
                 refreshProjects()
             }
         }
@@ -507,7 +531,10 @@ final class AppModel {
     func presentRecorder(autoStart: Bool) async {
         showMainWindow()
         refreshPermissions()
-        guard allPermissionsGranted else { return }
+        guard allPermissionsGranted else {
+            recordErrorCategory(.permissions)
+            return
+        }
         guard !isRecording, !isProcessingCapture else { return }
         isRecorderPresented = true
         await reloadCaptureSources()
@@ -526,7 +553,7 @@ final class AppModel {
                 selectedSourceID = sources.first?.id
             }
         } catch {
-            errorMessage = error.localizedDescription
+            reportError(error.localizedDescription, category: .capture)
         }
     }
 
@@ -534,7 +561,7 @@ final class AppModel {
         guard !isRecording, !isProcessingCapture else { return }
         guard countdownTask == nil else { return }
         guard selectedSource != nil else {
-            errorMessage = "Pick a display or window to record."
+            reportError("Pick a display or window to record.", category: .capture)
             return
         }
 
@@ -578,7 +605,7 @@ final class AppModel {
             let result = try await capture.stop(reason: reason)
             recordingURL = nil
             if let finalizationError = result.finalizationError {
-                errorMessage = finalizationError
+                reportError(finalizationError, category: .capture)
             }
             isRecorderPresented = false
             showMainWindow()
@@ -591,7 +618,7 @@ final class AppModel {
             }
         } catch {
             recordingURL = nil
-            errorMessage = error.localizedDescription
+            reportError(error.localizedDescription, category: .capture)
             isRecorderPresented = false
             if let url {
                 // Capture finalization only throws when the display track is
@@ -614,6 +641,7 @@ final class AppModel {
         }
         refreshPermissions()
         if !allPermissionsGranted {
+            recordErrorCategory(.permissions)
             showMainWindow()
             return
         }
@@ -640,11 +668,13 @@ final class AppModel {
                     try? FileManager.default.removeItem(at: url)
                 }
             case .failed:
+                recordErrorCategory(.capture)
                 recordingURL = nil
                 if let url {
                     try? FileManager.default.removeItem(at: url)
                 }
             case .timedOut:
+                recordErrorCategory(.capture)
                 if let url {
                     try? CaptureRecovery.markFinalizationTimedOut(at: url)
                 }
@@ -657,6 +687,7 @@ final class AppModel {
                 try await editor.flushSave()
                 return true
             } catch {
+                recordErrorCategory(.projectSave)
                 let alert = NSAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "OpenRecord Couldn’t Save Your Changes"
@@ -722,6 +753,7 @@ final class AppModel {
             _ = try await editor.saveCopy(to: destination)
             return true
         } catch {
+            recordErrorCategory(.projectSave)
             let alert = NSAlert(error: error)
             alert.runModal()
             return false
@@ -730,7 +762,7 @@ final class AppModel {
 
     private func startCapture() async {
         guard let source = selectedSource else {
-            errorMessage = "Pick a display or window to record."
+            reportError("Pick a display or window to record.", category: .capture)
             return
         }
 
@@ -777,7 +809,7 @@ final class AppModel {
                 try? FileManager.default.removeItem(at: url)
                 recordingURL = nil
             }
-            errorMessage = error.localizedDescription
+            reportError(error.localizedDescription, category: .capture)
             refreshPermissions()
         }
     }
@@ -803,7 +835,7 @@ final class AppModel {
                 case .stoppedUnexpectedly(let message):
                     await finishRecording(reason: .unexpected(message))
                 case .finalizationFailed(let message):
-                    errorMessage = message
+                    reportError(message, category: .capture)
                 case .started, .stopRequested, .finalized:
                     break
                 }

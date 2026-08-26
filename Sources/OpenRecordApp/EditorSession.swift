@@ -798,7 +798,9 @@ final class EditorSession {
         exportTask?.cancel()
     }
 
-    func copyDiagnostics() {
+    func copyDiagnostics(
+        lastErrorCategory categoryOverride: LocalDiagnosticsErrorCategory? = nil
+    ) {
         let bundle = Bundle.main
         let appVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? OpenRecordInfo.appVersion
@@ -817,10 +819,8 @@ final class EditorSession {
             appBuild: appBuild,
             operatingSystem: operatingSystem,
             architecture: architecture,
-            projectFormatVersion: document.formatVersion,
-            captureHealth: meta.captureHealth,
-            captureDiagnostics: meta.captureDiagnostics,
-            captureTiming: meta.captureTiming,
+            projectMeta: meta,
+            document: document,
             trackPresence: [
                 .displayVideo: hasVideo,
                 .systemAudio: hasSystemAudio,
@@ -831,8 +831,7 @@ final class EditorSession {
                 .displayVideo: duration,
                 .webcam: webcamDuration,
             ],
-            exportSettings: document.videoExportSettings,
-            lastErrorCategory: lastErrorCategory
+            lastErrorCategory: categoryOverride ?? lastErrorCategory
         )
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()

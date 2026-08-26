@@ -41,9 +41,7 @@ jobs:
         run: ./scripts/package-app.sh
 
       - name: Verify packaged app
-        run: |
-          test -x dist/OpenRecord.app/Contents/MacOS/OpenRecord
-          codesign --verify --deep --strict --verbose=2 dist/OpenRecord.app
+        run: ./scripts/verify-v2_5-release.sh --static-only
 
       - name: Upload packaged app
         uses: actions/upload-artifact@v4

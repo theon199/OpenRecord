@@ -4,7 +4,7 @@ import OpenRecord
 import Testing
 
 enum LocalDiagnosticsTests {
-    static let testCount = 6
+    static let testCount = 7
 
     static func run() throws {
         try requiredFieldsAndExportSettings()
@@ -13,6 +13,7 @@ enum LocalDiagnosticsTests {
         try outputIsDeterministic()
         try errorCategoryDoesNotCarryErrorText()
         try sensitiveStringsNeverAppear()
+        try projectModelsExposeOnlyAllowlistedTechnicalFields()
     }
 
     private static func makeSnapshot(
@@ -23,11 +24,11 @@ enum LocalDiagnosticsTests {
         category: LocalDiagnosticsErrorCategory = .none
     ) -> LocalDiagnosticsSnapshot {
         LocalDiagnosticsSnapshot(
-            appVersion: "2.5.0",
-            appBuild: "25001",
+            appVersion: OpenRecordInfo.appVersion,
+            appBuild: "250",
             operatingSystem: "macOS 15.6",
             architecture: "arm64",
-            projectFormatVersion: 4,
+            projectFormatVersion: ProjectDocument.currentFormatVersion,
             captureHealth: CaptureHealth(state: .recovered, warnings: [.missingWebcam, .lowDiskSpace]),
             captureDiagnostics: diagnostics,
             captureTiming: timing,
@@ -41,11 +42,11 @@ enum LocalDiagnosticsTests {
     private static func requiredFieldsAndExportSettings() throws {
         let text = makeSnapshot().text
         let required = [
-            "appVersion=2.5.0",
-            "appBuild=25001",
+            "appVersion=\(OpenRecordInfo.appVersion)",
+            "appBuild=250",
             "operatingSystem=macOS 15.6",
             "architecture=arm64",
-            "projectFormatVersion=4",
+            "projectFormatVersion=\(ProjectDocument.currentFormatVersion)",
             "captureHealth.state=recovered",
             "captureHealth.warnings=lowDiskSpace,missingWebcam",
             "export.codec=hevc",
@@ -151,8 +152,8 @@ enum LocalDiagnosticsTests {
 
     private static func sensitiveStringsNeverAppear() throws {
         let text = LocalDiagnosticsSnapshot(
-            appVersion: "2.5.0",
-            appBuild: "25001",
+            appVersion: OpenRecordInfo.appVersion,
+            appBuild: "250",
             operatingSystem: "macOS",
             architecture: "arm64",
             projectFormatVersion: 4,
@@ -166,10 +167,78 @@ enum LocalDiagnosticsTests {
             throw OpenRecordError.io("diagnostics contained a sensitive string or malformed line")
         }
     }
+
+    private static func projectModelsExposeOnlyAllowlistedTechnicalFields() throws {
+        let secrets = [
+            "private-camera-id",
+            "private-caption-text",
+            "private-annotation-text",
+            "/Users/private/project/cursor.png",
+            "private-style-name",
+        ]
+        let diagnostics = CaptureDiagnostics(
+            referenceDuration: 42,
+            driftTolerance: 0.1,
+            tracks: [
+                CaptureTrackDiagnostic(
+                    track: .displayVideo,
+                    status: .complete,
+                    duration: 42
+                )
+            ]
+        )
+        let meta = ProjectMeta(
+            appVersion: "private-project-writer-version",
+            displayBounds: Rect2D(x: 0, y: 0, width: 1920, height: 1080),
+            scale: 2,
+            captureTarget: .window(id: 987_654),
+            captureHealth: CaptureHealth(state: .recovered, warnings: [.cameraInterrupted]),
+            captureDiagnostics: diagnostics,
+            webcam: WebcamCaptureInfo(deviceID: secrets[0])
+        )
+        let document = ProjectDocument(
+            cursorSprites: [
+                CursorSprite(
+                    id: "private-cursor-id",
+                    hotspot: Point2D(x: 0, y: 0),
+                    pngRelativePath: secrets[3],
+                    standardSize: Size2D(width: 24, height: 24)
+                )
+            ],
+            stylePresetID: secrets[4],
+            captions: [CaptionCue(start: 0, end: 1, text: secrets[1])],
+            annotations: [Annotation.textCallout(start: 1, end: 2, text: secrets[2])],
+            videoExportSettings: VideoExportSettings(codec: .proRes422, resolution: .source)
+        )
+        let text = LocalDiagnosticsSnapshot(
+            appVersion: OpenRecordInfo.appVersion,
+            appBuild: "250",
+            operatingSystem: "macOS 15.6",
+            architecture: "arm64",
+            projectMeta: meta,
+            document: document,
+            trackPresence: [.displayVideo: true],
+            trackDurations: [.displayVideo: 42],
+            lastErrorCategory: .capture
+        ).text
+
+        guard secrets.allSatisfy({ !text.contains($0) }),
+              !text.contains("private-project-writer-version"),
+              !text.contains("private-cursor-id"),
+              !text.contains("987654"),
+              text.contains("captureHealth.warnings=cameraInterrupted"),
+              text.contains("track.displayVideo.duration=42"),
+              text.contains("export.codec=prores-422"),
+              text.contains("export.resolution=source"),
+              text.contains("lastErrorCategory=capture")
+        else {
+            throw OpenRecordError.io("project-aware diagnostics leaked content or omitted an allowed field")
+        }
+    }
 }
 
 @Test
-func localDiagnosticsPhase6Contracts() throws {
+func localDiagnosticsPhase7Contracts() throws {
     try LocalDiagnosticsTests.run()
 }
 

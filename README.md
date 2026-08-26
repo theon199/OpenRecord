@@ -79,7 +79,16 @@ Preview and export use the same normalized `WebcamOverlayLayout` geometry and ti
 
 The timeline clamps the playhead and trim handles to the recording duration. Trim keeps at least 0.1 seconds; zoom and speed ranges keep at least 0.12 seconds and cannot cross neighboring ranges; caption and annotation cues keep at least 0.05 seconds. Moving a range preserves its duration and clamps it at the start/end or against its neighbors. These rules also apply when dragging across a trim boundary or when the playhead is exactly at the first or last timestamp. Timeline moves/resizes, webcam gestures, and other continuous edits coalesce into meaningful history entries; use **Undo** (⌘Z) and **Redo** (⇧⌘Z) to reverse a complete gesture.
 
-If capture is interrupted, OpenRecord keeps the usable display recording as the primary recovery criterion. When display media can be finalized, it opens a recovered `.openrecord` project with a warning and retains any healthy optional tracks; a missing or truncated webcam/audio track is reported rather than discarding the display session. Capture health and track timing are retained locally in `meta.json`. Free-space guardrails are conservative: OpenRecord warns at 2 GiB available, and at 512 MiB or below it stops early to preserve and recover the display recording. Those are safety floors, not recommended working space. For long or 4K captures, keep substantially more than 2 GiB free—enough for the expected source media, project overhead, and any export destination on the same volume.
+If capture is interrupted, OpenRecord keeps the usable display recording as the primary recovery criterion. When display media can be finalized, it opens a recovered `.openrecord` project with a warning and retains any healthy optional tracks; a missing or truncated webcam/audio track is reported rather than discarding the display session. Capture health and track timing are retained locally in `meta.json`. Free-space guardrails are conservative: OpenRecord warns at 2 GiB available, and at 512 MiB or below it stops early to preserve and recover the display recording. Those are safety floors, not recommended working space.
+
+For long or 4K captures, the 2 GiB warning is only an emergency safety floor. As a conservative working-space recommendation (including headroom for the project and an export on the same volume), begin with at least:
+
+| Capture | 30 minutes | 1 hour | 2 hours |
+|---|---:|---:|---:|
+| 1080p | 20 GiB | 40 GiB | 80 GiB |
+| 4K | 50 GiB | 100 GiB | 200 GiB |
+
+Actual use varies with frame rate, codec, audio, and scene complexity. Check free space before starting and leave additional room when recording to a nearly-full volume; OpenRecord warns at 2 GiB and stops early at 512 MiB or less to preserve a recoverable display recording.
 
 ### Copy Diagnostics and privacy
 

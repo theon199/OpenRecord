@@ -57,7 +57,11 @@ struct EditorView: View {
                 }
                 .disabled(session.exportProgress != nil)
                 Button {
-                    session.copyDiagnostics()
+                    session.copyDiagnostics(
+                        lastErrorCategory: model.lastErrorCategory == .none
+                            ? session.lastErrorCategory
+                            : model.lastErrorCategory
+                    )
                 } label: {
                     Label(
                         session.diagnosticsCopied ? "Diagnostics Copied" : "Copy Diagnostics",
@@ -109,7 +113,7 @@ struct EditorView: View {
         }
         .onChange(of: session.lastError) { _, error in
             if let error {
-                model.errorMessage = error
+                model.reportError(error, category: session.lastErrorCategory)
                 session.lastError = nil
             }
         }

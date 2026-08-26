@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased — v2.5 hardening (Phases 1–6)
+## Unreleased — v2.5 hardening (Phases 1–8)
 
-This is the unreleased v2.5 hardening scope through Phase 6. It does not include the Phase 7 release-candidate soak matrix, and v2.5 has not been released.
+Implementation Phases 1–8 are complete. v2.5 remains unreleased until the
+hardware and manual release gates in
+[`docs/V2_5_RELEASE_CHECKLIST.md`](docs/V2_5_RELEASE_CHECKLIST.md) have been
+run and their evidence recorded.
 
 ### Improved
 

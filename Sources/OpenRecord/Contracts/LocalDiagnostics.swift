@@ -20,6 +20,38 @@ public enum LocalDiagnosticsErrorCategory: String, Sendable, Equatable {
 public struct LocalDiagnosticsSnapshot: Sendable, Equatable {
     private let renderedText: String
 
+    /// Builds diagnostics from the real project models while deliberately
+    /// selecting only the technical fields allowed in a copied report.
+    /// Content-bearing fields such as the capture target, camera identifier,
+    /// captions, annotations, cursor paths, and keyboard telemetry are never
+    /// inspected by this initializer.
+    public init(
+        appVersion: String,
+        appBuild: String? = nil,
+        operatingSystem: String,
+        architecture: String,
+        projectMeta: ProjectMeta,
+        document: ProjectDocument,
+        trackPresence: [CaptureTrackKind: Bool] = [:],
+        trackDurations: [CaptureTrackKind: TimeInterval] = [:],
+        lastErrorCategory: LocalDiagnosticsErrorCategory = .none
+    ) {
+        self.init(
+            appVersion: appVersion,
+            appBuild: appBuild,
+            operatingSystem: operatingSystem,
+            architecture: architecture,
+            projectFormatVersion: document.formatVersion,
+            captureHealth: projectMeta.captureHealth,
+            captureDiagnostics: projectMeta.captureDiagnostics,
+            captureTiming: projectMeta.captureTiming,
+            trackPresence: trackPresence,
+            trackDurations: trackDurations,
+            exportSettings: document.videoExportSettings,
+            lastErrorCategory: lastErrorCategory
+        )
+    }
+
     public init(
         appVersion: String,
         appBuild: String? = nil,
