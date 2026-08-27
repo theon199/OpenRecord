@@ -365,6 +365,7 @@ extension EditorSession {
     }
 
     func toggleSilenceSuggestion(_ id: UUID) {
+        let wasPreviewing = isPreviewingSilenceSuggestions
         if acceptedSilenceSuggestionIDs.contains(id) {
             acceptedSilenceSuggestionIDs.remove(id)
         } else {
@@ -374,6 +375,9 @@ extension EditorSession {
             isPreviewingSilenceSuggestions = false
         } else if isPreviewingSilenceSuggestions {
             seek(to: playhead)
+        }
+        if wasPreviewing || isPreviewingSilenceSuggestions {
+            schedulePreviewAudioRebuild()
         }
     }
 
@@ -388,6 +392,7 @@ extension EditorSession {
             isPreviewingSilenceSuggestions = false
             pause()
             seek(to: playhead)
+            schedulePreviewAudioRebuild()
             return
         }
         let accepted = silenceSuggestions.filter {
@@ -395,6 +400,7 @@ extension EditorSession {
         }
         guard let start = accepted.map(\.start).min() else { return }
         isPreviewingSilenceSuggestions = true
+        schedulePreviewAudioRebuild()
         seek(to: max(start - 0.5, document.trimIn))
         play()
     }

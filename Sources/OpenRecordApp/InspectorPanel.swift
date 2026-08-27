@@ -624,7 +624,7 @@ struct InspectorPanel: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Cleanup is local, non-destructive, and applied when video or audio is exported.")
+                    Text("Cleanup and level changes apply to preview playback and export.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

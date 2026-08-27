@@ -104,6 +104,7 @@ final class EditorSession {
     let player: AVPlayer
 
     var hasWebcamVideo: Bool { webcamPlayer != nil }
+    private(set) var hasPreviewAudio = false
     var hasMicrophoneAudio: Bool {
         FileManager.default.fileExists(
             atPath: ProjectLayout.microphoneAudioURL(in: projectURL).path
@@ -241,6 +242,8 @@ final class EditorSession {
     private var activePlaybackRate: Float = 1
     private var saveTask: Task<Void, Never>?
     private var engineTask: Task<Void, Never>?
+    private var previewAudioTask: Task<Void, Never>?
+    private let previewAudio = PreviewAudioController()
     private var exportTask: Task<Void, Never>?
     /// Monotonically increasing identity for the active export. Exporter
     /// callbacks are delivered from a detached worker and may arrive after
@@ -375,6 +378,7 @@ final class EditorSession {
             session.attachPlayer()
             session.seek(to: editorDocument.trimIn)
         }
+        session.schedulePreviewAudioRebuild()
         return session
     }
 
@@ -427,9 +431,12 @@ final class EditorSession {
         exportTask?.cancel()
         saveTask?.cancel()
         engineTask?.cancel()
+        previewAudioTask?.cancel()
         detachPlayer()
         player.pause()
         webcamPlayer?.pause()
+        previewAudio.shutdown()
+        hasPreviewAudio = false
     }
 
     func applyAutoZoomsAndSave(preserveExisting: Bool = false) async throws {
@@ -500,13 +507,16 @@ final class EditorSession {
             seek(to: document.trimIn)
         }
         isPlaying = true
+        syncPreviewAudioPosition()
         applyPlaybackRate(force: true)
+        syncPreviewAudioPlayback()
         syncWebcam(to: previewSourceTime, playing: true)
     }
 
     func pause() {
         player.pause()
         webcamPlayer?.pause()
+        previewAudio.setPlaying(false)
         isPlaying = false
         activePlaybackRate = 1
     }
@@ -520,11 +530,13 @@ final class EditorSession {
         guard hasVideo else { return }
         isSeeking = true
         let cm = CMTime(seconds: clamped, preferredTimescale: 600)
+        syncPreviewAudioPosition()
         player.seek(to: cm, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
             Task { @MainActor in
                 self?.isSeeking = false
             }
         }
+        syncPreviewAudioPlayback()
         syncWebcam(to: clamped, playing: isPlaying)
     }
 
@@ -827,6 +839,9 @@ final class EditorSession {
         if rebuildZoomEngine {
             scheduleEngineRebuild()
         }
+        if documentAffectsPreviewAudio(before, document) {
+            schedulePreviewAudioRebuild()
+        }
         scheduleSave()
     }
 
@@ -855,6 +870,7 @@ final class EditorSession {
         seek(to: clampedPlayhead)
         markDirty()
         scheduleEngineRebuild()
+        schedulePreviewAudioRebuild()
         applyPlaybackRate(force: true)
         scheduleSave()
     }
@@ -1265,6 +1281,46 @@ final class EditorSession {
             guard !Task.isCancelled else { return }
             rebuildEngine()
         }
+    }
+
+    func schedulePreviewAudioRebuild() {
+        previewAudioTask?.cancel()
+        let outputTime = outputPlayhead
+        let playing = isPlaying
+        previewAudioTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            await previewAudio.rebuild(
+                projectURL: projectURL,
+                meta: meta,
+                document: document,
+                timeMapper: projectTimeMapper
+            )
+            guard !Task.isCancelled else { return }
+            hasPreviewAudio = previewAudio.isAvailable
+            previewAudio.seek(to: outputTime)
+            previewAudio.setPlaying(playing)
+        }
+    }
+
+    private func syncPreviewAudioPosition() {
+        previewAudio.seek(to: outputPlayhead)
+    }
+
+    private func syncPreviewAudioPlayback() {
+        previewAudio.setPlaying(isPlaying)
+    }
+
+    private func documentAffectsPreviewAudio(
+        _ before: ProjectDocument,
+        _ after: ProjectDocument
+    ) -> Bool {
+        before.trimIn != after.trimIn
+            || before.trimOut != after.trimOut
+            || before.editDecisions != after.editDecisions
+            || before.speedSegments != after.speedSegments
+            || before.muteAudioWhenSpedUp != after.muteAudioWhenSpedUp
+            || before.audioCleanup != after.audioCleanup
     }
 
     private func scheduleSave() {
