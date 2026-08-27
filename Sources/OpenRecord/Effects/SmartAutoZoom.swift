@@ -489,8 +489,8 @@ public enum SmartAutoZoom: Sendable {
         return Point2D(x: x, y: y)
     }
 
-    private static func trackingMode(for signal: Signal, config: SmartAutoZoomConfig) -> ZoomTrackingMode {
-        signal.kind == .transit && signal.end - signal.start >= config.followCursorDuration ? .followCursor : .fixed
+    private static func trackingMode(for _: Signal, config _: SmartAutoZoomConfig) -> ZoomTrackingMode {
+        .followCursor
     }
 
     /// UUID generation must not use UUID() for generated ranges: users often

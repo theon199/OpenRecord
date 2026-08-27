@@ -41,9 +41,9 @@ enum V3CheckpointSmokeSuite {
             config: SmartAutoZoomConfig(minDwell: 0.6)
         )
         guard dwell.contains(where: {
-            $0.source == .automatic && $0.tracking == .fixed && $0.end - $0.start >= 0.6
+            $0.source == .automatic && $0.tracking == .followCursor && $0.end - $0.start >= 0.6
         }) else {
-            throw OpenRecordError.io("Smart zoom did not produce a fixed dwell range")
+            throw OpenRecordError.io("Smart zoom did not produce a follow-cursor dwell range")
         }
 
         let transit = SmartAutoZoom.generateRanges(

@@ -161,15 +161,12 @@ public enum AutoZoom: Sendable {
                 x: min(0.86, max(0.14, anchor.x)),
                 y: min(0.86, max(0.14, anchor.y))
             )
-            let tracking: ZoomTrackingMode = downs.contains { $0.t >= island.start && $0.t <= island.end }
-                ? .fixed
-                : .followCursor
             return ZoomRange(
                 start: island.start,
                 end: island.end,
                 amount: amount,
                 anchor: safeAnchor,
-                tracking: tracking,
+                tracking: .followCursor,
                 source: .automatic
             )
         }

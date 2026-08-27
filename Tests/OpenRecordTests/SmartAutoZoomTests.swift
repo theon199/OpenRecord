@@ -3,7 +3,7 @@ import Testing
 import OpenRecord
 
 @Test
-func smartAutoZoomDwellProducesFixedAutomaticRange() {
+func smartAutoZoomDwellProducesFollowCursorAutomaticRange() {
     let bounds = Rect2D(x: 0, y: 0, width: 1_920, height: 1_080)
     var samples: [CursorSample] = []
     for i in 0...60 {
@@ -18,7 +18,7 @@ func smartAutoZoomDwellProducesFixedAutomaticRange() {
         config: SmartAutoZoomConfig(minDwell: 0.6)
     )
     #expect(ranges.contains { $0.source == .automatic })
-    #expect(ranges.contains { $0.tracking == .fixed && $0.end - $0.start >= 0.6 })
+    #expect(ranges.contains { $0.tracking == .followCursor && $0.end - $0.start >= 0.6 })
 }
 
 @Test
