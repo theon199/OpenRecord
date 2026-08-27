@@ -110,7 +110,11 @@ func localProjectTemplateStoreIsPortableAndUsesSafeAtomicFilenames() throws {
     }
 
     let sourceStore = LocalProjectTemplateStore(directoryURL: root)
-    let template = ProjectTemplate(id: "../My tutorial", name: "My tutorial")
+    let template = ProjectTemplate(
+        id: "../My tutorial",
+        name: "My tutorial",
+        createdAt: Date(timeIntervalSince1970: 1_735_689_600)
+    )
     let saved = try sourceStore.save(template)
     #expect(saved.pathExtension == ProjectTemplate.fileExtension)
     #expect(saved.lastPathComponent == "My-tutorial.\(ProjectTemplate.fileExtension)")

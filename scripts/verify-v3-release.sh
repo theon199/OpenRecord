@@ -6,8 +6,8 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-EXPECTED_VERSION="3.2.0"
-EXPECTED_BUILD="320"
+EXPECTED_VERSION="3.2.1"
+EXPECTED_BUILD="321"
 APP_PATH="${APP_PATH:-$PROJECT_DIR/dist/OpenRecord.app}"
 ARTIFACT_DIR="$PROJECT_DIR/.build/openrecord-v3-release"
 RUN_MODE="default"

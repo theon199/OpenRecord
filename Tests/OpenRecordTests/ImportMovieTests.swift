@@ -4,6 +4,9 @@ import Dispatch
 import Foundation
 import OpenRecord
 import Testing
+import VideoToolbox
+
+private let openRecordTestVideoWriterLock = NSLock()
 
 @Test("movie import creates a portable project without changing the source")
 func movieImportCreatesPortableProject() async throws {
@@ -73,6 +76,12 @@ func failedMovieImportIsAtomic() async throws {
 }
 
 func writeOpenRecordTestVideo(to url: URL) throws {
+    // GitHub's virtualized macOS runners can expose a hardware encoder that
+    // never completes. Serialize fixture creation and require VideoToolbox's
+    // software path so these tests exercise media import, not runner hardware.
+    openRecordTestVideoWriterLock.lock()
+    defer { openRecordTestVideoWriterLock.unlock() }
+
     let width = 16
     let height = 16
     let fps: Int32 = 10
@@ -84,6 +93,9 @@ func writeOpenRecordTestVideo(to url: URL) throws {
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
+            AVVideoEncoderSpecificationKey: [
+                kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: false,
+            ],
         ]
     )
     input.expectsMediaDataInRealTime = false
@@ -138,9 +150,10 @@ func writeOpenRecordTestVideo(to url: URL) throws {
     input.markAsFinished()
     let finished = DispatchSemaphore(value: 0)
     writer.finishWriting { finished.signal() }
-    guard finished.wait(timeout: .now() + 5) == .success,
+    guard finished.wait(timeout: .now() + 30) == .success,
           writer.status == .completed
     else {
+        writer.cancelWriting()
         throw OpenRecordError.io(writer.error?.localizedDescription ?? "test writer timed out")
     }
 }

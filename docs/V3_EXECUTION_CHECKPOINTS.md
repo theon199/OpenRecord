@@ -2,7 +2,7 @@
 
 This file is the execution companion to [`V3_PLAN.md`](V3_PLAN.md). The detailed feature scope stays in the main plan; this file defines the few points where an autonomous implementation agent should stop and verify that the foundation is sound before continuing.
 
-> **Implementation status (v3.2.0):** Checkpoints 1–4 are implemented. The
+> **Implementation status (v3.2.1):** Checkpoints 1–4 are implemented. The
 > deterministic release gates and the remaining hardware-only evidence are
 > tracked in [`V3_RELEASE_CHECKLIST.md`](V3_RELEASE_CHECKLIST.md).
 

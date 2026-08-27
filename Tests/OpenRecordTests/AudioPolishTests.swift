@@ -112,7 +112,7 @@ func fadesUseTrackRelativeTime() {
     )
     #expect(output[0] == 0)
     #expect(output[10] > 0.45 && output[10] < 0.55)
-    #expect(output[20] > 0.99)
+    #expect(output[20] >= 0.99)
     #expect(output[89] > 0.45 && output[89] < 0.55)
     #expect(output[99] == 0)
 }

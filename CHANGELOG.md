@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.2.1 — 2026-08-26
+
+### Fixed
+
+- Made project-template store tests deterministic across ISO-8601 implementations by using an explicit second-precision creation time.
+- Made audio fade boundary verification tolerant of valid floating-point equality at the expected 0.99 threshold.
+- Serialized synthetic video fixture creation and forced software H.264 encoding so the full suite completes reliably on virtualized macOS CI runners.
+
 ## 3.2.0 — 2026-08-26
 
 OpenRecord v3 is complete through the v3.2 workflow and automation checkpoint.

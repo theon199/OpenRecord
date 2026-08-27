@@ -1,4 +1,4 @@
-name: Publish OpenRecord v3.2.0
+name: Publish OpenRecord v3.2.1
 
 on:
   workflow_dispatch:
@@ -12,9 +12,9 @@ jobs:
     timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Library/Developer/CommandLineTools
-      RELEASE_TAG: v3.2.0
-      APP_ZIP: OpenRecord-v3.2.0-macos-arm64.zip
-      CLI_ZIP: openrecord-cli-v3.2.0-macos-arm64.zip
+      RELEASE_TAG: v3.2.1
+      APP_ZIP: OpenRecord-v3.2.1-macos-arm64.zip
+      CLI_ZIP: openrecord-cli-v3.2.1-macos-arm64.zip
 
     steps:
       - name: Check out release commit
@@ -41,13 +41,13 @@ jobs:
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
-              --title "OpenRecord v3.2.0" \
+              --title "OpenRecord v3.2.1" \
               --notes-file docs/V3_RELEASE_NOTES.md \
               --latest
           else
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
-              --title "OpenRecord v3.2.0" \
+              --title "OpenRecord v3.2.1" \
               --notes-file docs/V3_RELEASE_NOTES.md \
               --latest
           fi
