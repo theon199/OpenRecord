@@ -29,8 +29,8 @@ func movieImportCreatesPortableProject() async throws {
 
     #expect(projectURL.lastPathComponent == "iPhone Demo.openrecord")
     #expect(opened.meta.captureTarget == .display(id: 0))
-    #expect(opened.meta.displayBounds.width == 16)
-    #expect(opened.meta.displayBounds.height == 16)
+    #expect(opened.meta.displayBounds.width == 640)
+    #expect(opened.meta.displayBounds.height == 360)
     #expect(opened.document.canvas.padding == 72)
     #expect(opened.document.trimOut != nil)
     #expect((opened.document.trimOut ?? 0) > 0)
