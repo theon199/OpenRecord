@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -301,19 +302,68 @@ public enum ExportLayout: Sendable {
         return Point2D(x: x, y: y)
     }
 
+    /// Primary-button down flag and, when down, seconds since that press.
+    ///
+    /// `clicks` may be the full telemetry list or a primary-button-only index;
+    /// non-primary events are skipped. Lookup is a binary search plus a short
+    /// reverse walk, so preview/export do not rescan the whole array.
+    public static func primaryClickState(
+        at time: TimeInterval,
+        clicks: [ClickSample]
+    ) -> (isDown: Bool, age: TimeInterval?) {
+        guard let click = lastPrimaryClick(at: time, clicks: clicks) else {
+            return (false, nil)
+        }
+        if click.down {
+            return (true, max(0, time - click.t))
+        }
+        return (false, nil)
+    }
+
     /// Seconds since the primary button went down, if it is still down at `time`.
     public static func primaryClickAge(
         at time: TimeInterval,
         clicks: [ClickSample]
     ) -> TimeInterval? {
-        var downTime: TimeInterval?
-        for click in clicks where click.t <= time {
-            if click.button == .left || click.button == .other {
-                downTime = click.down ? click.t : nil
+        primaryClickState(at: time, clicks: clicks).age
+    }
+
+    /// Bitmap pixel size used to place a captured cursor sprite. Walks
+    /// `NSImage.representations` once; callers should cache the result.
+    public static func cursorPixelSize(for image: NSImage) -> Size2D {
+        let bitmap = image.representations
+            .compactMap { $0 as? NSBitmapImageRep }
+            .max { lhs, rhs in lhs.pixelsWide * lhs.pixelsHigh < rhs.pixelsWide * rhs.pixelsHigh }
+        return Size2D(
+            width: Double(max(bitmap?.pixelsWide ?? Int(image.size.width), 1)),
+            height: Double(max(bitmap?.pixelsHigh ?? Int(image.size.height), 1))
+        )
+    }
+
+    private static func lastPrimaryClick(
+        at time: TimeInterval,
+        clicks: [ClickSample]
+    ) -> ClickSample? {
+        guard !clicks.isEmpty else { return nil }
+        var lo = 0
+        var hi = clicks.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if clicks[mid].t <= time {
+                lo = mid + 1
+            } else {
+                hi = mid
             }
         }
-        guard let downTime else { return nil }
-        return max(0, time - downTime)
+        var index = lo - 1
+        while index >= 0 {
+            let click = clicks[index]
+            if click.button == .left || click.button == .other {
+                return click
+            }
+            index -= 1
+        }
+        return nil
     }
 
     public static func clickRipple(

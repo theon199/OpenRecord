@@ -14,33 +14,33 @@ struct TranscriptPanel: View {
                 transcriptionMenu
             }
 
-            TextField("Search spoken text", text: $session.transcriptSearchText)
-                .textFieldStyle(.roundedBorder)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Search spoken text", text: $session.transcriptSearchText)
+                        .textFieldStyle(.roundedBorder)
 
-            if session.document.transcript.isEmpty {
-                ContentUnavailableView {
-                    Label("No Transcript", systemImage: "waveform")
-                } description: {
-                    Text("Generate speech text locally from the microphone, system audio, or both.")
+                    if session.document.transcript.isEmpty {
+                        Text("Generate speech text locally from the microphone, system audio, or both.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        transcriptList
+                        transcriptActions
+                    }
+
+                    Divider()
+                    silenceControls
+
+                    if let status = session.transcriptionStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .frame(maxWidth: .infinity, minHeight: 110)
-            } else {
-                transcriptList
-                transcriptActions
-            }
-
-            Divider()
-            silenceControls
-
-            if let status = session.transcriptionStatus {
-                Text(status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(12)
-        .frame(minHeight: 250)
     }
 
     private var transcriptionMenu: some View {
@@ -63,59 +63,56 @@ struct TranscriptPanel: View {
     }
 
     private var transcriptList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 4) {
-                ForEach(session.filteredTranscript) { segment in
-                    let selected = session.selectedTranscriptSegmentIDs.contains(segment.id)
-                    let visibility = transcriptVisibility(segment)
-                    Button {
-                        session.selectTranscriptSegment(
-                            segment.id,
-                            extending: NSEvent.modifierFlags.contains(.shift)
-                        )
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(Timecode.compact(segment.start))
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                Text(segment.source.label)
+        LazyVStack(alignment: .leading, spacing: 4) {
+            ForEach(session.filteredTranscript) { segment in
+                let selected = session.selectedTranscriptSegmentIDs.contains(segment.id)
+                let visibility = transcriptVisibility(segment)
+                Button {
+                    session.selectTranscriptSegment(
+                        segment.id,
+                        extending: NSEvent.modifierFlags.contains(.shift)
+                    )
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(Timecode.compact(segment.start))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(segment.source.label)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            if segment.editedText != nil {
+                                Image(systemName: "pencil")
                                     .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                if segment.editedText != nil {
-                                    Image(systemName: "pencil")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if visibility == .removed {
-                                    Text("Removed")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                } else if visibility == .partial {
-                                    Text("Partially cut")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.orange)
-                                }
+                                    .foregroundStyle(.secondary)
                             }
-                            Text(segment.displayText)
-                                .font(.callout)
-                                .foregroundStyle(
-                                    visibility == .removed ? Color.secondary : Color.primary
-                                )
-                                .strikethrough(visibility == .removed, color: .secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if visibility == .removed {
+                                Text("Removed")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            } else if visibility == .partial {
+                                Text("Partially cut")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                            }
                         }
-                        .padding(6)
-                        .background(
-                            selected ? Color.accentColor.opacity(0.16) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        )
+                        Text(segment.displayText)
+                            .font(.callout)
+                            .foregroundStyle(
+                                visibility == .removed ? Color.secondary : Color.primary
+                            )
+                            .strikethrough(visibility == .removed, color: .secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .buttonStyle(.plain)
+                    .padding(6)
+                    .background(
+                        selected ? Color.accentColor.opacity(0.16) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    )
                 }
+                .buttonStyle(.plain)
             }
         }
-        .frame(minHeight: 100, maxHeight: 210)
     }
 
     @ViewBuilder
@@ -209,34 +206,31 @@ struct TranscriptPanel: View {
             .controlSize(.small)
 
             if !session.silenceSuggestions.isEmpty {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 3) {
-                        ForEach(session.silenceSuggestions) { suggestion in
-                            HStack(spacing: 6) {
-                                Toggle(
-                                    "",
-                                    isOn: Binding(
-                                        get: { session.acceptedSilenceSuggestionIDs.contains(suggestion.id) },
-                                        set: { _ in session.toggleSilenceSuggestion(suggestion.id) }
-                                    )
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(session.silenceSuggestions) { suggestion in
+                        HStack(spacing: 6) {
+                            Toggle(
+                                "",
+                                isOn: Binding(
+                                    get: { session.acceptedSilenceSuggestionIDs.contains(suggestion.id) },
+                                    set: { _ in session.toggleSilenceSuggestion(suggestion.id) }
                                 )
-                                .labelsHidden()
-                                Button {
-                                    session.seek(to: suggestion.cutStart)
-                                } label: {
-                                    Text("\(Timecode.compact(suggestion.cutStart))–\(Timecode.compact(suggestion.cutEnd))")
-                                        .font(.system(.caption, design: .monospaced))
-                                }
-                                .buttonStyle(.plain)
-                                Spacer()
-                                Text(suggestion.source.label)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                            )
+                            .labelsHidden()
+                            Button {
+                                session.seek(to: suggestion.cutStart)
+                            } label: {
+                                Text("\(Timecode.compact(suggestion.cutStart))–\(Timecode.compact(suggestion.cutEnd))")
+                                    .font(.system(.caption, design: .monospaced))
                             }
+                            .buttonStyle(.plain)
+                            Spacer()
+                            Text(suggestion.source.label)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
-                .frame(maxHeight: 96)
             }
         }
     }

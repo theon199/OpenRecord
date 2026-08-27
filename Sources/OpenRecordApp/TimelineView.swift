@@ -4,8 +4,6 @@ import SwiftUI
 
 struct TimelineView: View {
     @Bindable var session: EditorSession
-    @State private var drag: TimelineDrag?
-    @State private var dragOriginalDocument: ProjectDocument?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -101,8 +99,15 @@ struct TimelineView: View {
                         width: max(geo.size.width * session.timelineZoom, geo.size.width),
                         height: geo.size.height
                     )
-                    timeline(size: contentSize)
-                        .frame(width: contentSize.width, height: contentSize.height)
+                    ZStack(alignment: .topLeading) {
+                        TimelineLanesView(session: session, size: contentSize)
+                        TimelinePlayheadNeedle(
+                            session: session,
+                            width: contentSize.width,
+                            height: contentSize.height
+                        )
+                    }
+                    .frame(width: contentSize.width, height: contentSize.height)
                 }
                 .scrollIndicators(.hidden)
             }
@@ -110,8 +115,36 @@ struct TimelineView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
+}
 
-    private func timeline(size: CGSize) -> some View {
+private struct TimelinePlayheadNeedle: View {
+    @Bindable var session: EditorSession
+    var width: CGFloat
+    var height: CGFloat
+
+    var body: some View {
+        let x = CGFloat(session.playhead / session.timelineDuration) * width
+        return Rectangle()
+            .fill(Color.red)
+            .frame(width: 2, height: height)
+            .offset(x: x)
+            .overlay(alignment: .top) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
+                    .offset(x: x - 3, y: -1)
+            }
+            .allowsHitTesting(false)
+    }
+}
+
+private struct TimelineLanesView: View {
+    @Bindable var session: EditorSession
+    var size: CGSize
+    @State private var drag: TimelineDrag?
+    @State private var dragOriginalDocument: ProjectDocument?
+
+    var body: some View {
         let duration = session.timelineDuration
         let trimIn = session.document.trimIn
         let trimOut = session.effectiveTrimOut
@@ -160,8 +193,6 @@ struct TimelineView: View {
             ForEach(session.document.drawings) { drawing in
                 drawingBlock(drawing, width: size.width)
             }
-
-            playhead(width: size.width, height: size.height)
 
             trimHandle(time: trimIn, width: size.width, height: size.height)
             trimHandle(time: trimOut, width: size.width, height: size.height)
@@ -356,21 +387,6 @@ struct TimelineView: View {
             .offset(x: x0, y: 122)
     }
 
-    private func playhead(width: CGFloat, height: CGFloat) -> some View {
-        let x = xPosition(session.playhead, width: width)
-        return Rectangle()
-            .fill(Color.red)
-            .frame(width: 2, height: height)
-            .offset(x: x)
-            .overlay(alignment: .top) {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 8, height: 8)
-                    .offset(x: x - 3, y: -1)
-            }
-            .allowsHitTesting(false)
-    }
-
     private func trimHandle(time: TimeInterval, width: CGFloat, height: CGFloat) -> some View {
         Rectangle()
             .fill(Color.primary.opacity(0.55))
@@ -452,7 +468,14 @@ struct TimelineView: View {
                 apply(drag: drag, time: time)
             }
             .onEnded { _ in
-                session.endDocumentEdit()
+                let rebuildZoom: Bool
+                switch drag {
+                case .zoomStart, .zoomEnd, .zoomBody:
+                    rebuildZoom = true
+                default:
+                    rebuildZoom = false
+                }
+                session.endDocumentEdit(rebuildZoomEngine: rebuildZoom)
                 drag = nil
                 dragOriginalDocument = nil
                 NSCursor.arrow.set()

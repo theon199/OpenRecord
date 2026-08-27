@@ -95,6 +95,7 @@ final class EditorSession {
     var sourceWidth: Int
     var sourceHeight: Int
     var cursorImage: NSImage?
+    var cursorImagePixelSize: Size2D?
     var cursorSprite: CursorSprite?
     var webcamPlayer: AVPlayer?
     var webcamDuration: TimeInterval
@@ -105,16 +106,8 @@ final class EditorSession {
 
     var hasWebcamVideo: Bool { webcamPlayer != nil }
     private(set) var hasPreviewAudio = false
-    var hasMicrophoneAudio: Bool {
-        FileManager.default.fileExists(
-            atPath: ProjectLayout.microphoneAudioURL(in: projectURL).path
-        )
-    }
-    var hasSystemAudio: Bool {
-        FileManager.default.fileExists(
-            atPath: ProjectLayout.systemAudioURL(in: projectURL).path
-        )
-    }
+    private(set) var hasMicrophoneAudio = false
+    private(set) var hasSystemAudio = false
     var webcamAspect: Double {
         Double(max(webcamWidth, 1)) / Double(max(webcamHeight, 1))
     }
@@ -152,26 +145,11 @@ final class EditorSession {
     /// lanes remain authored in source time, while this mapper supplies the
     /// ripple/output position and canonical source frame for the playhead.
     var committedProjectTimeMapper: ProjectTimeMapper {
-        ProjectTimeMapper(project: document, sourceDuration: duration)
+        resolvedProjectTimeMapper(previewingSilence: false)
     }
 
     var projectTimeMapper: ProjectTimeMapper {
-        guard isPreviewingSilenceSuggestions else {
-            return committedProjectTimeMapper
-        }
-        let accepted = silenceSuggestions.filter {
-            acceptedSilenceSuggestionIDs.contains($0.id)
-        }
-        guard !accepted.isEmpty else { return committedProjectTimeMapper }
-        var preview = document
-        let proposed = accepted.map {
-            EditDecision(start: $0.cutStart, end: $0.cutEnd)
-        }
-        preview.editDecisions = ProjectTimeMapper.normalizedDecisions(
-            document.editDecisions + proposed,
-            sourceDuration: duration
-        )
-        return ProjectTimeMapper(project: preview, sourceDuration: duration)
+        resolvedProjectTimeMapper(previewingSilence: isPreviewingSilenceSuggestions)
     }
 
     var outputDuration: TimeInterval {
@@ -245,6 +223,8 @@ final class EditorSession {
     private var previewAudioTask: Task<Void, Never>?
     private let previewAudio = PreviewAudioController()
     private var exportTask: Task<Void, Never>?
+    private var cachedProjectTimeMapper: ProjectTimeMapper?
+    private var cachedProjectTimeMapperInputs: ProjectTimeMapperInputs?
     /// Monotonically increasing identity for the active export. Exporter
     /// callbacks are delivered from a detached worker and may arrive after
     /// the worker has finished, so the identity also acts as a callback fence.
@@ -373,6 +353,7 @@ final class EditorSession {
         session.loadCursorSprite()
         session.reloadLocalStylePresets()
         session.reloadLocalProjectTemplates()
+        session.refreshAudioPresence()
         session.playhead = editorDocument.trimIn
         if hasVideo {
             session.attachPlayer()
@@ -425,6 +406,7 @@ final class EditorSession {
         self.saveCoordinator = ProjectSaveCoordinator(library: library, projectURL: projectURL)
         player.currentItem?.audioTimePitchAlgorithm = .spectral
         webcamPlayer?.currentItem?.audioTimePitchAlgorithm = .spectral
+        refreshAudioPresence()
     }
 
     func shutdown() {
@@ -668,7 +650,7 @@ final class EditorSession {
         documentDidChange(from: before, actionName: actionName)
     }
 
-    func updateSelectedZoom(_ body: (inout ZoomRange) -> Void) {
+    func updateSelectedZoom(syncLiveCrop: Bool = true, _ body: (inout ZoomRange) -> Void) {
         guard let selectedZoomID,
               let index = document.zoomRanges.firstIndex(where: { $0.id == selectedZoomID })
         else { return }
@@ -682,9 +664,11 @@ final class EditorSession {
         document.zoomRanges[index] = next
         documentDidChange(
             from: before,
-            actionName: "Adjust Zoom",
-            rebuildZoomEngine: true
+            actionName: "Adjust Zoom"
         )
+        if syncLiveCrop {
+            applyLiveZoomDocument()
+        }
     }
 
     func replaceZoom(_ range: ZoomRange) {
@@ -695,9 +679,9 @@ final class EditorSession {
         document.zoomRanges[index] = next
         documentDidChange(
             from: before,
-            actionName: "Adjust Zoom",
-            rebuildZoomEngine: true
+            actionName: "Adjust Zoom"
         )
+        applyLiveZoomDocument()
     }
 
     func setTrimIn(_ time: TimeInterval) {
@@ -1145,7 +1129,7 @@ final class EditorSession {
             queue: .main
         ) { [weak self] time in
             guard let self else { return }
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self.playerTimeDidChange(time)
             }
         }
@@ -1154,7 +1138,7 @@ final class EditorSession {
             object: player.currentItem,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.pause()
                 if let self {
                     self.seek(to: self.document.trimIn)
@@ -1274,6 +1258,59 @@ final class EditorSession {
         )
     }
 
+    /// Point the live engine at the current zoom ranges without rebuilding the
+    /// cursor smoother. Preview `crop(at:)` then uses bake/live evaluation.
+    private func applyLiveZoomDocument() {
+        engine.document = document
+    }
+
+    func refreshAudioPresence() {
+        hasMicrophoneAudio = FileManager.default.fileExists(
+            atPath: ProjectLayout.microphoneAudioURL(in: projectURL).path
+        )
+        hasSystemAudio = FileManager.default.fileExists(
+            atPath: ProjectLayout.systemAudioURL(in: projectURL).path
+        )
+    }
+
+    private func resolvedProjectTimeMapper(previewingSilence: Bool) -> ProjectTimeMapper {
+        let inputs = ProjectTimeMapperInputs(
+            duration: duration,
+            trimIn: document.trimIn,
+            trimOut: document.trimOut,
+            editDecisions: previewEditDecisions(previewingSilence: previewingSilence),
+            speedSegments: document.speedSegments
+        )
+        if let cachedProjectTimeMapper, cachedProjectTimeMapperInputs == inputs {
+            return cachedProjectTimeMapper
+        }
+        let mapper = ProjectTimeMapper(
+            sourceDuration: inputs.duration,
+            trimIn: inputs.trimIn,
+            trimOut: inputs.trimOut,
+            editDecisions: inputs.editDecisions,
+            speedSegments: inputs.speedSegments
+        )
+        cachedProjectTimeMapper = mapper
+        cachedProjectTimeMapperInputs = inputs
+        return mapper
+    }
+
+    private func previewEditDecisions(previewingSilence: Bool) -> [EditDecision] {
+        guard previewingSilence else { return document.editDecisions }
+        let accepted = silenceSuggestions.filter {
+            acceptedSilenceSuggestionIDs.contains($0.id)
+        }
+        guard !accepted.isEmpty else { return document.editDecisions }
+        let proposed = accepted.map {
+            EditDecision(start: $0.cutStart, end: $0.cutEnd)
+        }
+        return ProjectTimeMapper.normalizedDecisions(
+            document.editDecisions + proposed,
+            sourceDuration: duration
+        )
+    }
+
     private func scheduleEngineRebuild() {
         engineTask?.cancel()
         engineTask = Task { @MainActor in
@@ -1388,12 +1425,14 @@ final class EditorSession {
             ?? "\(ProjectLayout.recordingDirectoryName)/\(ProjectLayout.cursorsDirectoryName)/\(CaptureMediaFormat.defaultCursorSpriteID).png"
         guard let url = ProjectAssetResolver.cursorPNG(relativePath: relative, in: projectURL) else {
             cursorImage = nil
+            cursorImagePixelSize = nil
             if cursorSprite != nil {
                 persistentWarnings.append("The cursor image path is outside the project bundle and was ignored.")
             }
             return
         }
         cursorImage = NSImage(contentsOf: url)
+        cursorImagePixelSize = cursorImage.map(ExportLayout.cursorPixelSize(for:))
     }
 
     private func attachCursorSpriteIfMissing() {
@@ -1479,4 +1518,12 @@ final class EditorSession {
             max(Int(abs(size.height).rounded()), 1)
         )
     }
+}
+
+private struct ProjectTimeMapperInputs: Equatable {
+    var duration: TimeInterval
+    var trimIn: TimeInterval
+    var trimOut: TimeInterval?
+    var editDecisions: [EditDecision]
+    var speedSegments: [SpeedSegment]
 }

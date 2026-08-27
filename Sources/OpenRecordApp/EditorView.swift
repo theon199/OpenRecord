@@ -5,6 +5,7 @@ import SwiftUI
 struct EditorView: View {
     @Bindable var model: AppModel
     @Bindable var session: EditorSession
+    @State private var showingTranscript = false
 
     var body: some View {
         HSplitView {
@@ -18,13 +19,8 @@ struct EditorView: View {
             }
             .frame(minWidth: 560)
 
-            VSplitView {
-                InspectorPanel(session: session)
-                    .frame(minHeight: 280)
-                TranscriptPanel(session: session)
-                    .frame(minHeight: 250)
-            }
-            .frame(minWidth: 260, idealWidth: 300, maxWidth: 340)
+            InspectorPanel(session: session)
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 340)
         }
         .navigationTitle(session.title)
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -49,31 +45,35 @@ struct EditorView: View {
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    session.togglePlay()
+                    showingTranscript.toggle()
                 } label: {
-                    Label(
-                        session.isPlaying ? "Pause" : "Play",
-                        systemImage: session.isPlaying ? "pause.fill" : "play.fill"
-                    )
+                    HStack(spacing: 5) {
+                        if session.isTranscribing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "waveform")
+                        }
+                        Text("Transcript")
+                        if !session.document.transcript.isEmpty {
+                            Text("\(session.document.transcript.count)")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
                 }
-                .disabled(!session.hasVideo)
+                .help(transcriptToolbarHelp)
+                .accessibilityLabel("Transcript")
+                .popover(isPresented: $showingTranscript, arrowEdge: .bottom) {
+                    TranscriptPanel(session: session)
+                        .frame(width: 340, height: 420)
+                }
                 Button("Export…") {
                     session.presentExportPanel()
                 }
                 .disabled(session.exportProgress != nil)
-                Button {
-                    session.copyDiagnostics(
-                        lastErrorCategory: model.lastErrorCategory == .none
-                            ? session.lastErrorCategory
-                            : model.lastErrorCategory
-                    )
-                } label: {
-                    Label(
-                        session.diagnosticsCopied ? "Diagnostics Copied" : "Copy Diagnostics",
-                        systemImage: session.diagnosticsCopied ? "checkmark" : "doc.on.doc"
-                    )
-                }
-                .help("Copy privacy-safe technical diagnostics to the clipboard")
             }
         }
         .overlay {
@@ -134,6 +134,13 @@ struct EditorView: View {
         .onDisappear {
             session.pause()
         }
+    }
+
+    private var transcriptToolbarHelp: String {
+        if session.isTranscribing {
+            return session.transcriptionStatus ?? "Transcribing…"
+        }
+        return "Transcript"
     }
 
     private func formattedDuration(_ seconds: Double) -> String {

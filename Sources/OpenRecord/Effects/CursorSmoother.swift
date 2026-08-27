@@ -20,6 +20,9 @@ public struct CursorSmoother: Sendable {
     public let clicks: [ClickSample]
     public let targetGeometry: [TargetGeometrySample]
     private let rawSamples: [CursorSample]
+    /// Primary-button edges only, in time order, so preview/export click
+    /// lookups are binary searches instead of scanning the full click list.
+    private let primaryClicks: [ClickSample]
 
     public var isEmpty: Bool { samples.isEmpty }
 
@@ -38,6 +41,9 @@ public struct CursorSmoother: Sendable {
             geometry: sortedGeometry,
             fallback: displayBounds
         )
+        self.primaryClicks = self.clicks.filter {
+            $0.button == .left || $0.button == .other
+        }
         self.targetGeometry = sortedGeometry
         self.rawSamples = sortedRaw
 
@@ -242,15 +248,13 @@ public struct CursorSmoother: Sendable {
 
     /// Whether the primary button is down at `time` (last click event at or before `time`).
     public func isClicking(at time: TimeInterval) -> Bool {
-        guard !clicks.isEmpty else { return false }
-        var down = false
-        for click in clicks {
-            if click.t > time { break }
-            if click.button == .left || click.button == .other {
-                down = click.down
-            }
-        }
-        return down
+        clickState(at: time).isDown
+    }
+
+    /// Primary-button down flag and, when down, seconds since that press.
+    /// Same semantics as `isClicking` plus `ExportLayout.primaryClickAge`.
+    public func clickState(at time: TimeInterval) -> (isDown: Bool, age: TimeInterval?) {
+        ExportLayout.primaryClickState(at: time, clicks: primaryClicks)
     }
 
     // MARK: - Shake filter

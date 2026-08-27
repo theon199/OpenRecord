@@ -118,6 +118,17 @@ struct OpenRecordApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(model.editor == nil)
+                Divider()
+                Button(model.editor?.diagnosticsCopied == true ? "Diagnostics Copied" : "Copy Diagnostics") {
+                    guard let editor = model.editor else { return }
+                    editor.copyDiagnostics(
+                        lastErrorCategory: model.lastErrorCategory == .none
+                            ? editor.lastErrorCategory
+                            : model.lastErrorCategory
+                    )
+                }
+                .disabled(model.editor == nil)
+                .help("Copy privacy-safe technical diagnostics to the clipboard")
             }
         }
 
@@ -149,6 +160,8 @@ struct OpenRecordApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var terminationHandler: (() async -> Bool)?
+    private static let preferredMainWindowContentSize = NSSize(width: 1_100, height: 720)
+    private static let visibleWorkspaceMargin: CGFloat = 12
     private var terminationInProgress = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -186,8 +199,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if window.isMiniaturized {
                 window.deminiaturize(nil)
             }
+            if window.canBecomeMain {
+                normalizeMainWindowFrame(window)
+            }
             window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    /// SwiftUI's `defaultSize` is only a launch suggestion. A malformed saved
+    /// frame or a first-layout negotiation failure can therefore create a
+    /// window taller than the active display. Reset oversized/off-screen main
+    /// windows to the preferred launch size and keep ordinary saved sizes
+    /// entirely inside the usable macOS workspace.
+    @MainActor
+    private static func normalizeMainWindowFrame(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let workspace = screen.visibleFrame.insetBy(
+            dx: visibleWorkspaceMargin,
+            dy: visibleWorkspaceMargin
+        )
+        guard workspace.width > 0, workspace.height > 0 else { return }
+
+        let current = window.frame
+        let hasInvalidSize = !current.width.isFinite
+            || !current.height.isFinite
+            || current.width <= 0
+            || current.height <= 0
+        let isOversized = current.width > workspace.width
+            || current.height > workspace.height
+        let isOffscreen = !current.intersects(workspace)
+
+        var target = current
+        if hasInvalidSize || isOversized || isOffscreen {
+            let preferredFrameSize = window.frameRect(
+                forContentRect: NSRect(
+                    origin: .zero,
+                    size: preferredMainWindowContentSize
+                )
+            ).size
+            target.size = NSSize(
+                width: min(preferredFrameSize.width, workspace.width),
+                height: min(preferredFrameSize.height, workspace.height)
+            )
+            target.origin = NSPoint(
+                x: workspace.midX - target.width / 2,
+                y: workspace.midY - target.height / 2
+            )
+        } else {
+            target.origin.x = min(
+                max(target.origin.x, workspace.minX),
+                workspace.maxX - target.width
+            )
+            target.origin.y = min(
+                max(target.origin.y, workspace.minY),
+                workspace.maxY - target.height
+            )
+        }
+
+        guard target != current else { return }
+        window.setFrame(target, display: true, animate: false)
     }
 }
 

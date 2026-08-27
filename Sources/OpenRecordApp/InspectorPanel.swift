@@ -6,9 +6,22 @@ struct InspectorPanel: View {
     @State private var confirmRegenerateZooms = false
     @State private var newPresetName = ""
     @State private var newProjectTemplateName = ""
+    @State private var selectedTab: InspectorTab = .edit
 
     var body: some View {
-        Form {
+        VStack(spacing: 0) {
+            Picker("Inspector", selection: $selectedTab) {
+                ForEach(InspectorTab.allCases, id: \.self) { tab in
+                    Text(tab.title).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Form {
+            if selectedTab == .edit {
             if session.selectedZoom != nil {
                 Section("Zoom") {
                     LabeledContent("Amount") {
@@ -81,7 +94,7 @@ struct InspectorPanel: View {
                             )
                         }
                     }
-                    Text("Cursor treatments are source-timed and remain non-destructive.")
+                    Text("Treatments stay on the source timeline.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -229,11 +242,13 @@ struct InspectorPanel: View {
                         session.deleteSelectedTimelineItem()
                     }
                 }
-                Text("Choose a tool, then drag on the preview. Each stroke is a scalable vector and one undo step.")
+                Text("Draw on the preview. Each stroke is one undo step.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            }
 
+            if selectedTab == .style {
             Section("Device Frame") {
                 Picker("Frame", selection: deviceFrameID) {
                     ForEach(DeviceFrameID.allCases, id: \.self) { frame in
@@ -329,87 +344,6 @@ struct InspectorPanel: View {
                 }
             }
 
-            Section("Reusable Presets") {
-                ForEach(EditorStylePreset.builtIns) { preset in
-                    Button("Apply \(preset.name)") {
-                        session.applyStylePreset(preset)
-                    }
-                }
-                ForEach(session.localStylePresets) { preset in
-                    Button("Apply \(preset.name)") {
-                        session.applyStylePreset(preset)
-                    }
-                }
-                HStack {
-                    TextField("Preset name", text: $newPresetName)
-                    Button("Save Current") {
-                        session.saveCurrentStylePreset(named: newPresetName)
-                        newPresetName = ""
-                    }
-                    .disabled(newPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                if let status = session.presetStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if !session.document.appliedPresetIDs.isEmpty {
-                    LabeledContent("Applied") {
-                        Text(session.document.appliedPresetIDs.joined(separator: ", "))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Text("Preset values are copied into the project for portability; optional IDs record provenance.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Project Templates") {
-                ForEach(ProjectTemplate.builtIns) { template in
-                    Button("Apply \(template.name)") {
-                        session.applyProjectTemplate(template)
-                    }
-                }
-                ForEach(session.localProjectTemplates) { template in
-                    HStack {
-                        Button("Apply \(template.name)") {
-                            session.applyProjectTemplate(template)
-                        }
-                        Spacer()
-                        Button {
-                            session.exportProjectTemplatePanel(template)
-                        } label: {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Export \(template.name)")
-                    }
-                }
-                HStack {
-                    TextField("Template name", text: $newProjectTemplateName)
-                    Button("Save Current") {
-                        session.saveCurrentProjectTemplate(named: newProjectTemplateName)
-                        newProjectTemplateName = ""
-                    }
-                    .disabled(
-                        newProjectTemplateName
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty
-                    )
-                }
-                Button("Import Template…") {
-                    session.importProjectTemplatePanel()
-                }
-                if let status = session.projectTemplateStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("Project templates are media-free portable JSON. Applying one changes presentation defaults without replacing source media, cuts, transcript, or timed content.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("Webcam") {
                 if session.hasWebcamVideo {
                     Toggle("Show webcam", isOn: webcamOverlayEnabled)
@@ -494,12 +428,12 @@ struct InspectorPanel: View {
                                 $0.size = WebcamOverlaySettings.defaultSize
                             }
                         }
-                        Text("Click the webcam in the preview to select it, then drag it or use its lower-right resize handle.")
+                        Text("Drag in the preview or use the resize handle.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    Text("This project has no recording/webcam.mp4. Add that file to the project bundle to use a webcam overlay.")
+                    Text("Add recording/webcam.mp4 to this project to enable overlay.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -535,6 +469,90 @@ struct InspectorPanel: View {
                 }
             }
 
+            Section("Reusable Presets") {
+                ForEach(EditorStylePreset.builtIns) { preset in
+                    Button("Apply \(preset.name)") {
+                        session.applyStylePreset(preset)
+                    }
+                }
+                ForEach(session.localStylePresets) { preset in
+                    Button("Apply \(preset.name)") {
+                        session.applyStylePreset(preset)
+                    }
+                }
+                HStack {
+                    TextField("Preset name", text: $newPresetName)
+                    Button("Save Current") {
+                        session.saveCurrentStylePreset(named: newPresetName)
+                        newPresetName = ""
+                    }
+                    .disabled(newPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let status = session.presetStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !session.document.appliedPresetIDs.isEmpty {
+                    LabeledContent("Applied") {
+                        Text(session.document.appliedPresetIDs.joined(separator: ", "))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Values are copied into the project.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Project Templates") {
+                ForEach(ProjectTemplate.builtIns) { template in
+                    Button("Apply \(template.name)") {
+                        session.applyProjectTemplate(template)
+                    }
+                }
+                ForEach(session.localProjectTemplates) { template in
+                    HStack {
+                        Button("Apply \(template.name)") {
+                            session.applyProjectTemplate(template)
+                        }
+                        Spacer()
+                        Button {
+                            session.exportProjectTemplatePanel(template)
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Export \(template.name)")
+                    }
+                }
+                HStack {
+                    TextField("Template name", text: $newProjectTemplateName)
+                    Button("Save Current") {
+                        session.saveCurrentProjectTemplate(named: newProjectTemplateName)
+                        newProjectTemplateName = ""
+                    }
+                    .disabled(
+                        newProjectTemplateName
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty
+                    )
+                }
+                Button("Import Template…") {
+                    session.importProjectTemplatePanel()
+                }
+                if let status = session.projectTemplateStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Applies presentation defaults; media and timeline stay intact.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            }
+
+            if selectedTab == .edit {
             Section("Speed") {
                 if let segment = session.selectedSpeedSegment {
                     labeledSlider(
@@ -547,7 +565,7 @@ struct InspectorPanel: View {
                     )
                     LabeledContent("Start", value: Timecode.string(segment.start))
                     LabeledContent("End", value: Timecode.string(segment.end))
-                    Text("Drag the orange or blue region and its edges on the timeline to adjust it.")
+                    Text("Drag the region and its edges on the timeline to adjust it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Delete Speed Region", role: .destructive) {
@@ -565,6 +583,16 @@ struct InspectorPanel: View {
                 Toggle("Mute audio in sped-up regions", isOn: muteAudioWhenSpedUp)
             }
 
+            Section("Trim") {
+                LabeledContent("In", value: Timecode.string(session.document.trimIn))
+                LabeledContent("Out", value: Timecode.string(session.effectiveTrimOut))
+                Text("Drag the handles on the timeline to trim.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            }
+
+            if selectedTab == .audioExport {
             Section("Audio") {
                 if session.hasMicrophoneAudio {
                     labeledSlider(
@@ -630,14 +658,6 @@ struct InspectorPanel: View {
                 }
             }
 
-            Section("Trim") {
-                LabeledContent("In", value: Timecode.string(session.document.trimIn))
-                LabeledContent("Out", value: Timecode.string(session.effectiveTrimOut))
-                Text("Drag the handles on the timeline to trim.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("Export") {
                 Toggle("Copy into library folder", isOn: $session.copyExportToLibrary)
                 Picker("Codec", selection: exportCodec) {
@@ -661,13 +681,23 @@ struct InspectorPanel: View {
                     Button("Snapshot…") { session.presentExportPanel(kind: .snapshot) }
                 }
                 .disabled(session.exportProgress != nil)
-                Text("Video uses the selected codec and resolution. GIF, mixed M4A audio, and a PNG of the current playhead are available separately.")
+                Text("GIF, mixed audio, and a playhead snapshot export separately.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            }
+            }
+            .formStyle(.grouped)
+            .controlSize(.small)
         }
-        .formStyle(.grouped)
-        .controlSize(.small)
+        .onChange(of: session.timelineSelection.primary) { _, primary in
+            switch primary?.kind {
+            case .zoom, .caption, .annotation, .speed, .redaction, .drawing, .cursorEffect:
+                selectedTab = .edit
+            default:
+                break
+            }
+        }
         .confirmationDialog(
             "Regenerate Automatic Zooms?",
             isPresented: $confirmRegenerateZooms,
@@ -695,7 +725,7 @@ struct InspectorPanel: View {
                 Text("Cinematic").tag(ZoomEasingPreset.cinematic)
             }
 
-            Text("Sensitivity applies when auto-zooms are regenerated. Easing updates preview and export immediately.")
+            Text("Sensitivity applies on regenerate; easing updates immediately.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -1471,6 +1501,20 @@ struct InspectorPanel: View {
     }
 
     private static let customPresetID = "custom"
+}
+
+private enum InspectorTab: String, CaseIterable, Hashable {
+    case edit
+    case style
+    case audioExport
+
+    var title: String {
+        switch self {
+        case .edit: "Edit"
+        case .style: "Style"
+        case .audioExport: "Audio & Export"
+        }
+    }
 }
 
 private enum CanvasBackgroundMode: String, CaseIterable, Identifiable {

@@ -27,7 +27,8 @@ struct PreviewCanvas: View {
             let crop = anchorDrag?.cropUV ?? liveCrop
             let cursor = session.engine.interpolateCursor(at: sourceTime)
             let cursorVelocity = session.engine.cursorVelocity(at: sourceTime)
-            let clicking = session.engine.isClicking(at: sourceTime)
+            let click = session.engine.smoother.clickState(at: sourceTime)
+            let clicking = session.engine.smoother.isVisible(at: sourceTime) && click.isDown
             let canvas = session.document.canvas
             let cursorTreatment = CursorTreatmentEvaluator(
                 ranges: session.document.cursorEffects
@@ -64,9 +65,7 @@ struct PreviewCanvas: View {
                 ? Double(deviceGeometry.cornerRadius * 0.55)
                 : layout.cornerRadius
             let corner = screenCorner * Double(viewScale)
-            let clickAge = clicking
-                ? ExportLayout.primaryClickAge(at: sourceTime, clicks: session.engine.smoother.clicks)
-                : nil
+            let clickAge = clicking ? click.age : nil
             let keyboardState = session.keyboardTimeline.state(
                 at: sourceTime,
                 settings: session.document.keyboardOverlay
@@ -1145,7 +1144,7 @@ struct PreviewCanvas: View {
                     cropUV: anchorDrag.cropUV,
                     videoRect: anchorDrag.videoRect
                 )
-                session.updateSelectedZoom { $0.anchor = anchor }
+                session.updateSelectedZoom(syncLiveCrop: false) { $0.anchor = anchor }
                 NSCursor.closedHand.set()
             }
             .onEnded { _ in
@@ -1241,7 +1240,8 @@ struct PreviewCanvas: View {
             Group {
                 if let image = session.cursorImage {
                     let sprite = session.cursorSprite
-                    let pixelSize = cursorPixelSize(image)
+                    let pixelSize = session.cursorImagePixelSize
+                        ?? ExportLayout.cursorPixelSize(for: image)
                     let placement = sprite.map {
                         CursorSpriteLayout.placement(
                             sprite: $0,
@@ -1275,16 +1275,6 @@ struct PreviewCanvas: View {
         }
         .position(x: point.x, y: point.y)
         .allowsHitTesting(false)
-    }
-
-    private func cursorPixelSize(_ image: NSImage) -> Size2D {
-        let bitmap = image.representations
-            .compactMap { $0 as? NSBitmapImageRep }
-            .max { lhs, rhs in lhs.pixelsWide * lhs.pixelsHigh < rhs.pixelsWide * rhs.pixelsHigh }
-        return Size2D(
-            width: Double(max(bitmap?.pixelsWide ?? Int(image.size.width), 1)),
-            height: Double(max(bitmap?.pixelsHigh ?? Int(image.size.height), 1))
-        )
     }
 
     @ViewBuilder
