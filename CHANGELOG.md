@@ -6,7 +6,7 @@
 
 - Made project-template store tests deterministic across ISO-8601 implementations by using an explicit second-precision creation time.
 - Made audio fade boundary verification tolerant of valid floating-point equality at the expected 0.99 threshold.
-- Serialized synthetic video fixture creation and forced software H.264 encoding so the full suite completes reliably on virtualized macOS CI runners.
+- Replaced runtime video encoding with a deterministic repository-owned media fixture so the full suite completes without hardware codecs on virtualized macOS CI runners.
 
 ## 3.2.0 — 2026-08-26
 

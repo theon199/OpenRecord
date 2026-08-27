@@ -1,12 +1,6 @@
-import AVFoundation
-import CoreVideo
-import Dispatch
 import Foundation
 import OpenRecord
 import Testing
-import VideoToolbox
-
-private let openRecordTestVideoWriterLock = NSLock()
 
 @Test("movie import creates a portable project without changing the source")
 func movieImportCreatesPortableProject() async throws {
@@ -76,84 +70,16 @@ func failedMovieImportIsAtomic() async throws {
 }
 
 func writeOpenRecordTestVideo(to url: URL) throws {
-    // GitHub's virtualized macOS runners can expose a hardware encoder that
-    // never completes. Serialize fixture creation and require VideoToolbox's
-    // software path so these tests exercise media import, not runner hardware.
-    openRecordTestVideoWriterLock.lock()
-    defer { openRecordTestVideoWriterLock.unlock() }
-
-    let width = 16
-    let height = 16
-    let fps: Int32 = 10
-    let fileType: AVFileType = url.pathExtension.lowercased() == "mov" ? .mov : .mp4
-    let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
-    let input = AVAssetWriterInput(
-        mediaType: .video,
-        outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoEncoderSpecificationKey: [
-                kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: false,
-            ],
-        ]
-    )
-    input.expectsMediaDataInRealTime = false
-    guard writer.canAdd(input) else {
-        throw OpenRecordError.io("test writer rejected video input")
+    guard let resources = Bundle.module.resourceURL else {
+        throw OpenRecordError.io("test media resources are unavailable")
     }
-    writer.add(input)
-    let adaptor = AVAssetWriterInputPixelBufferAdaptor(
-        assetWriterInput: input,
-        sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: width,
-            kCVPixelBufferHeightKey as String: height,
-        ]
-    )
-    guard writer.startWriting() else {
-        throw OpenRecordError.io(writer.error?.localizedDescription ?? "test writer failed")
+    let fixtureURL = resources
+        .appendingPathComponent("Fixtures", isDirectory: true)
+        .appendingPathComponent("Media", isDirectory: true)
+        .appendingPathComponent("tiny-display.mp4.base64", isDirectory: false)
+    let encoded = try Data(contentsOf: fixtureURL)
+    guard let media = Data(base64Encoded: encoded, options: [.ignoreUnknownCharacters]) else {
+        throw OpenRecordError.io("test media fixture is invalid")
     }
-    writer.startSession(atSourceTime: .zero)
-    guard let pool = adaptor.pixelBufferPool else {
-        throw OpenRecordError.io("test writer created no pixel buffer pool")
-    }
-    for frame in 0..<3 {
-        while !input.isReadyForMoreMediaData {
-            if writer.status == .failed {
-                throw OpenRecordError.io(writer.error?.localizedDescription ?? "test writer failed")
-            }
-            Thread.sleep(forTimeInterval: 0.001)
-        }
-        var buffer: CVPixelBuffer?
-        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess,
-              let buffer
-        else {
-            throw OpenRecordError.io("test writer could not allocate a frame")
-        }
-        CVPixelBufferLockBaseAddress(buffer, [])
-        if let base = CVPixelBufferGetBaseAddress(buffer) {
-            base.initializeMemory(
-                as: UInt8.self,
-                repeating: UInt8(32 + frame * 48),
-                count: CVPixelBufferGetDataSize(buffer)
-            )
-        }
-        CVPixelBufferUnlockBaseAddress(buffer, [])
-        guard adaptor.append(
-            buffer,
-            withPresentationTime: CMTime(value: Int64(frame), timescale: fps)
-        ) else {
-            throw OpenRecordError.io(writer.error?.localizedDescription ?? "test frame append failed")
-        }
-    }
-    input.markAsFinished()
-    let finished = DispatchSemaphore(value: 0)
-    writer.finishWriting { finished.signal() }
-    guard finished.wait(timeout: .now() + 30) == .success,
-          writer.status == .completed
-    else {
-        writer.cancelWriting()
-        throw OpenRecordError.io(writer.error?.localizedDescription ?? "test writer timed out")
-    }
+    try media.write(to: url, options: .atomic)
 }

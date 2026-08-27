@@ -2,7 +2,7 @@
 
 OpenRecord v3 is the production-workflow release: faster local editing, a more expressive visual stack, and portable automation without accounts or cloud dependencies.
 
-v3.2.1 preserves the v3.2 feature set and hardens its automated macOS release validation: portable-template timestamps are deterministic, audio boundary assertions are platform-tolerant, and media fixtures use a serialized software encoder on virtual CI runners.
+v3.2.1 preserves the v3.2 feature set and hardens its automated macOS release validation: portable-template timestamps are deterministic, audio boundary assertions are platform-tolerant, and media tests use a deterministic repository fixture without depending on codecs exposed by virtual CI runners.
 
 ## Highlights
 
