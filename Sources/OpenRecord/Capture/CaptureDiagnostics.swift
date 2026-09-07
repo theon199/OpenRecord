@@ -155,9 +155,18 @@ public enum WebcamTimeline: Sendable {
            let webcamDiagnostic = diagnostics.diagnostic(for: .webcam),
            webcamDiagnostic.status == .complete || webcamDiagnostic.status == .truncated
         {
-            return diagnostics.sourceTime(
+            if let mapped = diagnostics.sourceTime(
                 for: .webcam,
                 atTimelineTime: timelineTime
+            ) {
+                return mapped
+            }
+            let offset = webcamDiagnostic.initialOffset ?? 0
+            let duration = webcamDiagnostic.timelineDuration ?? sourceDuration
+            return holdOpeningFrame(
+                timelineTime: timelineTime,
+                offset: offset,
+                sourceDuration: duration
             )
         }
 
@@ -165,9 +174,45 @@ public enum WebcamTimeline: Sendable {
               sourceDuration >= 0,
               legacyOffset.isFinite
         else { return nil }
-        let offset = legacyOffset
+        if let mapped = mappedSourceTime(
+            timelineTime: timelineTime,
+            offset: legacyOffset,
+            sourceDuration: sourceDuration
+        ) {
+            return mapped
+        }
+        return holdOpeningFrame(
+            timelineTime: timelineTime,
+            offset: legacyOffset,
+            sourceDuration: sourceDuration
+        )
+    }
+
+    private static func mappedSourceTime(
+        timelineTime: TimeInterval,
+        offset: TimeInterval,
+        sourceDuration: TimeInterval
+    ) -> TimeInterval? {
         let localTime = timelineTime - offset
         return localTime >= 0 && localTime <= sourceDuration ? localTime : nil
+    }
+
+    /// Camera startup often lands a second after the display origin. Hold the
+    /// first encoded frame so the overlay is present from t=0.
+    private static func holdOpeningFrame(
+        timelineTime: TimeInterval,
+        offset: TimeInterval,
+        sourceDuration: TimeInterval
+    ) -> TimeInterval? {
+        guard timelineTime.isFinite,
+              offset.isFinite,
+              sourceDuration.isFinite,
+              sourceDuration > 0,
+              timelineTime < offset
+        else {
+            return nil
+        }
+        return 0
     }
 }
 

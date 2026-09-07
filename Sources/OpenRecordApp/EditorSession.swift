@@ -1192,19 +1192,21 @@ final class EditorSession {
               localTime <= webcamDuration
         else {
             webcamPlayer.pause()
-            if screenTime < webcamTimelineOffset {
-                webcamPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-            }
             return
         }
 
+        let holdingOpeningFrame = screenTime < webcamTimelineOffset
         let current = webcamPlayer.currentTime().seconds
-        if !current.isFinite || abs(current - localTime) > 0.15 || !playing {
+        if !current.isFinite || abs(current - localTime) > 0.15 || !playing || holdingOpeningFrame {
             webcamPlayer.seek(
                 to: CMTime(seconds: localTime, preferredTimescale: 600),
                 toleranceBefore: .zero,
                 toleranceAfter: .zero
             )
+        }
+        if holdingOpeningFrame {
+            webcamPlayer.pause()
+            return
         }
         let desiredRate = activePlaybackRate * Float(
             meta.captureDiagnostics?.sourceRate(for: .webcam) ?? 1
@@ -1240,7 +1242,9 @@ final class EditorSession {
         guard force || abs(next - activePlaybackRate) > 0.001 else { return }
         activePlaybackRate = next
         player.playImmediately(atRate: next)
-        if webcamIsVisible(at: previewSourceTime) {
+        if webcamIsVisible(at: previewSourceTime),
+           previewSourceTime >= webcamTimelineOffset
+        {
             let webcamRate = next * Float(
                 meta.captureDiagnostics?.sourceRate(for: .webcam) ?? 1
             )

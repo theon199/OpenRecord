@@ -14,9 +14,11 @@ public enum CaptureMediaFormat: Sendable {
     public static let videoPixelFormat: OSType = kCVPixelFormatType_32BGRA
     public static let maxFrameRate: Int32 = 60
 
-    /// `recording/webcam.mp4` — optional H.264 camera track. Samples share the
-    /// display host clock; `CaptureTiming.webcamOffset` records its first frame
-    /// and `CaptureDiagnostics` records any long-session time-scale correction.
+    /// `recording/webcam.mp4` — optional H.264 camera track. Camera PTS values
+    /// are restamped onto the display host clock before encoding so preview and
+    /// export stay aligned with the microphone. `CaptureTiming.webcamOffset`
+    /// records the first encoded frame and `CaptureDiagnostics` records any
+    /// long-session time-scale correction.
 
     /// `recording/system.m4a` — AAC, stereo, 48 kHz (ScreenCaptureKit `capturesAudio`).
     public static let systemAudioSampleRate: Double = 48_000

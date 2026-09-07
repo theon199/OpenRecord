@@ -729,15 +729,27 @@ final class AppModel {
         }
 
         countdownTask = Task { @MainActor in
+            let warmup = Task { [capturesWebcam] in
+                if capturesWebcam {
+                    await capture.prepareWebcam()
+                }
+            }
             for value in [3, 2, 1] {
                 countdownRemaining = value
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled {
                     countdownRemaining = nil
+                    warmup.cancel()
+                    await capture.cancelWebcamPrepare()
                     return
                 }
             }
             countdownRemaining = nil
+            _ = await warmup.result
+            if Task.isCancelled {
+                await capture.cancelWebcamPrepare()
+                return
+            }
             await startCapture()
         }
         await countdownTask?.value
@@ -748,6 +760,7 @@ final class AppModel {
         countdownTask?.cancel()
         countdownTask = nil
         countdownRemaining = nil
+        Task { await capture.cancelWebcamPrepare() }
     }
 
     func stopRecording() async {
@@ -970,6 +983,7 @@ final class AppModel {
             }
             reportError(error.localizedDescription, category: .capture)
             refreshPermissions()
+            await capture.cancelWebcamPrepare()
         }
     }
 

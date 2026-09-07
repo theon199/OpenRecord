@@ -21,6 +21,8 @@ public final class CaptureSession: @unchecked Sendable {
     private var finalResult: CaptureStopResult?
     private let eventContinuation: AsyncStream<CaptureEvent>.Continuation
 
+    private var primedWebcam: WebcamRecorder?
+
     public init() {
         var continuation: AsyncStream<CaptureEvent>.Continuation!
         events = AsyncStream { continuation = $0 }
@@ -28,6 +30,36 @@ public final class CaptureSession: @unchecked Sendable {
     }
 
     deinit { eventContinuation.finish() }
+
+    /// Starts the camera during the record countdown so the first display frame
+    /// already has a warmed-up webcam sample to pin at t=0.
+    public func prepareWebcam() async {
+        if !CapturePermissions.isGranted(.camera) {
+            _ = await CapturePermissions.request(.camera)
+        }
+        guard CapturePermissions.isGranted(.camera) else { return }
+
+        let recorder = WebcamRecorder()
+        unfairLock.withLock { primedWebcam = recorder }
+        do {
+            try await recorder.prepare()
+        } catch {
+            await cancelWebcamPrepare()
+            return
+        }
+        if Task.isCancelled {
+            await cancelWebcamPrepare()
+        }
+    }
+
+    public func cancelWebcamPrepare() async {
+        let recorder = unfairLock.withLock { () -> WebcamRecorder? in
+            let value = primedWebcam
+            primedWebcam = nil
+            return value
+        }
+        try? await recorder?.stop()
+    }
 
     public func start(
         target: CaptureTarget,
@@ -50,7 +82,14 @@ public final class CaptureSession: @unchecked Sendable {
             return true
         }
         guard reserved else { throw OpenRecordError.io("Capture is already running.") }
-        let pipeline = CapturePipeline()
+        let webcam = unfairLock.withLock { () -> WebcamRecorder in
+            if let primedWebcam {
+                self.primedWebcam = nil
+                return primedWebcam
+            }
+            return WebcamRecorder()
+        }
+        let pipeline = CapturePipeline(webcam: webcam)
         unfairLock.withLock { self.pipeline = pipeline }
         pipeline.onUnexpectedStop = { [weak self] error in
             guard let self else { return }
@@ -68,6 +107,7 @@ public final class CaptureSession: @unchecked Sendable {
                 capturesWebcam: capturesWebcam
             )
         } catch {
+            try? await webcam.stop()
             unfairLock.withLock {
                 if stopTask == nil {
                     sessionState = .idle

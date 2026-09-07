@@ -12,7 +12,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private let stateLock = NSLock()
     private let cursor = CursorMonitor()
     private let mic = MicrophoneRecorder()
-    private let webcam = WebcamRecorder()
+    private let webcam: WebcamRecorder
     private let healthMonitor = CaptureHealthMonitor()
     private var stream: SCStream?
     private var videoWriter: SampleBufferWriter?
@@ -39,6 +39,11 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private var webcamActive = false
     private var microphoneActive = false
     var onUnexpectedStop: (@Sendable (Error) -> Void)?
+
+    init(webcam: WebcamRecorder = WebcamRecorder()) {
+        self.webcam = webcam
+        super.init()
+    }
 
     func start(
         target: CaptureTarget,
@@ -107,6 +112,13 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         webcam.onFailure = { [weak self] error in
             self?.recordOptionalFailure(error, warning: .cameraInterrupted)
         }
+        let webcamStartTask: Task<Void, Error>?
+        if capturesWebcam {
+            let webcamURL = ProjectLayout.webcamVideoURL(in: projectURL)
+            webcamStartTask = Task { try await self.webcam.start(url: webcamURL) }
+        } else {
+            webcamStartTask = nil
+        }
         do {
             try await MainActor.run {
                 try cursor.start(mouseURL: ProjectLayout.mouseURL(in: projectURL), clicksURL: ProjectLayout.clicksURL(in: projectURL), target: target, initialBounds: targetInitialBounds, targetURL: targetURL, keysURL: keysURL)
@@ -126,9 +138,9 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         } catch {
             recordOptionalFailure(error, warning: .missingMicrophone)
         }
-        if capturesWebcam {
+        if let webcamStartTask {
             do {
-                try await webcam.start(url: ProjectLayout.webcamVideoURL(in: projectURL))
+                try await webcamStartTask.value
                 webcamActive = true
             } catch {
                 recordOptionalFailure(error, warning: .missingWebcam)

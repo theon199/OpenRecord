@@ -3,16 +3,22 @@ import CoreMedia
 import CoreVideo
 import Foundation
 
-/// Captures the default camera into `recording/webcam.mp4`. Camera samples and
-/// ScreenCaptureKit frames share the host clock; samples are buffered until the
-/// first complete display frame establishes the recording origin.
+/// Captures the default camera into `recording/webcam.mp4`. Each sample is
+/// restamped onto the host clock that ScreenCaptureKit and the microphone use,
+/// then buffered until the first complete display frame establishes the origin.
 final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let queue = DispatchQueue(label: "app.openrecord.desktop.capture.webcam")
+    private let hostClock = CMClockGetHostTimeClock()
+    /// Newest host-aligned frames waiting for the display origin. A sliding
+    /// window keeps startup from locking onto camera frames that are already
+    /// several seconds old.
+    private static let pendingFrameLimit = 90
     private var session: AVCaptureSession?
     private var writer: SampleBufferWriter?
     private var outputURL: URL?
     private var recordingOrigin: CMTime?
     private var pendingFrames: [CMSampleBuffer] = []
+    private var lastAppendedPTS: CMTime?
     private var failure: Error?
     private var notificationObservers: [NSObjectProtocol] = []
 
@@ -24,7 +30,23 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     var appendError: Error? { failure ?? writer?.appendError }
     var droppedSamples: Bool { writer?.droppedSamples == true }
 
+    func prepare(mirror: Bool = true) async throws {
+        try await startSession(mirror: mirror)
+        await waitForBufferedFrame(timeout: 2.0)
+    }
+
     func start(url: URL, mirror: Bool = true) async throws {
+        outputURL = url
+        if session != nil {
+            if let captureInfo {
+                self.captureInfo = WebcamCaptureInfo(deviceID: captureInfo.deviceID, mirror: mirror)
+            }
+            return
+        }
+        try await startSession(mirror: mirror)
+    }
+
+    private func startSession(mirror: Bool) async throws {
         guard let device = AVCaptureDevice.default(for: .video) else {
             throw OpenRecordError.io("No camera is available for webcam recording.")
         }
@@ -98,10 +120,10 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         ]
 
         self.session = session
-        outputURL = url
         captureInfo = WebcamCaptureInfo(deviceID: device.uniqueID, mirror: mirror)
         recordingOrigin = nil
         pendingFrames.removeAll(keepingCapacity: true)
+        lastAppendedPTS = nil
         failure = nil
         firstFrameOffset = nil
 
@@ -127,14 +149,36 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
     }
 
+    private func waitForBufferedFrame(timeout: TimeInterval) async {
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        while ContinuousClock.now < deadline {
+            if Task.isCancelled { return }
+            let hasFrame = await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume(returning: !self.pendingFrames.isEmpty)
+                }
+            }
+            if hasFrame { return }
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+    }
+
     func setRecordingStart(_ origin: CMTime) {
         queue.async { [weak self] in
             guard let self, self.recordingOrigin == nil else { return }
             self.recordingOrigin = origin
             let frames = self.pendingFrames
             self.pendingFrames.removeAll(keepingCapacity: true)
-            for frame in frames {
-                self.append(frame, origin: origin)
+            let times = frames.map {
+                CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp($0))
+            }
+            guard let selection = CaptureHostTimestamp.openingFrameSelection(
+                times: times,
+                origin: CMTimeGetSeconds(origin)
+            ) else { return }
+            self.append(frames[selection.opener], origin: origin)
+            for index in selection.followUp {
+                self.append(frames[index], origin: origin)
             }
         }
     }
@@ -166,21 +210,52 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         guard failure == nil,
               CMSampleBufferIsValid(sampleBuffer),
               CMSampleBufferDataIsReady(sampleBuffer),
-              CMSampleBufferGetImageBuffer(sampleBuffer) != nil
+              CMSampleBufferGetImageBuffer(sampleBuffer) != nil,
+              let aligned = alignedSampleBuffer(sampleBuffer)
         else { return }
 
         guard let origin = recordingOrigin else {
-            if pendingFrames.count < 180 {
-                pendingFrames.append(sampleBuffer)
+            if pendingFrames.count >= Self.pendingFrameLimit {
+                pendingFrames.removeFirst(pendingFrames.count - Self.pendingFrameLimit + 1)
             }
+            pendingFrames.append(aligned)
             return
         }
-        append(sampleBuffer, origin: origin)
+        append(aligned, origin: origin)
+    }
+
+    private func alignedSampleBuffer(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer? {
+        let hostNow = CMClockGetTime(hostClock)
+        let presentationTime = CaptureHostTimestamp.alignedPresentationTime(
+            sampleTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+            captureClock: session?.synchronizationClock,
+            hostClock: hostClock,
+            hostNow: hostNow
+        )
+        return CaptureHostTimestamp.replacingPresentationTime(
+            sampleBuffer,
+            presentationTime: presentationTime
+        )
     }
 
     private func append(_ sampleBuffer: CMSampleBuffer, origin: CMTime) {
-        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard pts.isNumeric, pts >= origin else { return }
+        var sampleBuffer = sampleBuffer
+        var pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard pts.isNumeric else { return }
+
+        if lastAppendedPTS == nil {
+            guard let pinned = CaptureHostTimestamp.replacingPresentationTime(
+                sampleBuffer,
+                presentationTime: origin
+            ) else { return }
+            sampleBuffer = pinned
+            pts = origin
+        } else {
+            guard pts >= origin else { return }
+            if lastAppendedPTS!.isNumeric, pts <= lastAppendedPTS! {
+                return
+            }
+        }
 
         if writer == nil {
             guard let outputURL, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
@@ -210,6 +285,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
         writer?.startSession(at: origin)
         writer?.append(sampleBuffer)
+        lastAppendedPTS = pts
     }
 
     private func recordFailure(_ error: Error) {

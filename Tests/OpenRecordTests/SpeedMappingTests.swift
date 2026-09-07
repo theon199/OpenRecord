@@ -274,6 +274,15 @@ enum SpeedMappingSuite {
         )
         try expectOptionalClose(
             WebcamTimeline.sourceTime(
+                atTimelineTime: 0,
+                sourceDuration: 4,
+                legacyOffset: 0.5
+            ),
+            0,
+            "legacy webcam holds first frame at recording start"
+        )
+        try expectOptionalClose(
+            WebcamTimeline.sourceTime(
                 atTimelineTime: 4.5,
                 sourceDuration: 4,
                 legacyOffset: 0.5
@@ -281,13 +290,14 @@ enum SpeedMappingSuite {
             4,
             "legacy webcam last frame"
         )
-        try expectNil(
+        try expectOptionalClose(
             WebcamTimeline.sourceTime(
                 atTimelineTime: 0.499_999,
                 sourceDuration: 4,
                 legacyOffset: 0.5
             ),
-            "legacy webcam before first frame"
+            0,
+            "legacy webcam before first frame holds opening sample"
         )
         try expectNil(
             WebcamTimeline.sourceTime(
@@ -351,6 +361,15 @@ enum SpeedMappingSuite {
             ),
             0,
             "corrected webcam first frame"
+        )
+        try expectOptionalClose(
+            WebcamTimeline.sourceTime(
+                atTimelineTime: 0,
+                sourceDuration: 11,
+                diagnostics: corrected
+            ),
+            0,
+            "corrected webcam holds first frame at recording start"
         )
         try expectOptionalClose(
             WebcamTimeline.sourceTime(
