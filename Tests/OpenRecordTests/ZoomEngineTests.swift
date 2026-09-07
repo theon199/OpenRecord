@@ -625,6 +625,126 @@ func easingPresetsProduceOrderedMotion() throws {
     try ZoomEngineSuite.easingPresetsProduceOrderedMotion()
 }
 
+// MARK: - Follow-cam
+
+/// Zig-zag sweep with a fast flick: the follow-cam must keep the cursor inside
+/// the crop on every frame, including the zoom-in and the flick.
+@Test
+func followCamKeepsCursorInFrame() throws {
+    let bounds = ZoomEngineSuite.bounds
+    var samples: [CursorSample] = []
+    samples += ZoomEngineSuite.hold(x: 300, y: 300, from: 0, to: 1.0)
+    samples += ZoomEngineSuite.move(from: Point2D(x: 300, y: 300), to: Point2D(x: 1_700, y: 400), start: 1.0, end: 2.5)
+    samples += ZoomEngineSuite.move(from: Point2D(x: 1_700, y: 400), to: Point2D(x: 200, y: 900), start: 2.5, end: 4.0)
+    // Fast flick: full screen width in 0.15s.
+    samples += ZoomEngineSuite.move(from: Point2D(x: 200, y: 900), to: Point2D(x: 1_800, y: 150), start: 4.0, end: 4.15)
+    samples += ZoomEngineSuite.hold(x: 1_800, y: 150, from: 4.15, to: 6.0)
+    samples += ZoomEngineSuite.move(from: Point2D(x: 1_800, y: 150), to: Point2D(x: 900, y: 600), start: 6.0, end: 7.0)
+    samples += ZoomEngineSuite.hold(x: 900, y: 600, from: 7.0, to: 8.0)
+
+    let range = ZoomRange(start: 0.5, end: 7.5, amount: 2, anchor: Point2D(x: 0.5, y: 0.5), tracking: .followCursor)
+    let engine = ZoomEngine(
+        document: ProjectDocument(trimOut: 8, zoomRanges: [range]),
+        samples: samples,
+        displayBounds: bounds
+    )
+    var t = range.start
+    var worst = 0.0
+    while t <= range.end {
+        let crop = engine.crop(at: t)
+        if let cursor = engine.interpolateCursor(at: t) {
+            let slack = Double(crop.width) * 0.02
+            let outside = max(
+                max(Double(crop.minX) - cursor.x, cursor.x - Double(crop.maxX)),
+                max(Double(crop.minY) - cursor.y, cursor.y - Double(crop.maxY))
+            )
+            worst = max(worst, outside - slack)
+        }
+        t += 1.0 / 60.0
+    }
+    #expect(worst <= 0, "cursor left the crop by \(worst) UV")
+
+    let settled = engine.crop(at: 5.5)
+    #expect(abs(settled.width - 0.5) < 0.01)
+}
+
+/// Sub-deadzone jitter must not move the camera at all.
+@Test
+func followCamIgnoresSmallJitter() throws {
+    let bounds = ZoomEngineSuite.bounds
+    var samples: [CursorSample] = []
+    var t = 0.0
+    var i = 0
+    while t <= 8 {
+        let dx = Double((i * 7) % 11) - 5 // ±5 px wobble
+        let dy = Double((i * 3) % 9) - 4
+        samples.append(CursorSample(t: t, x: 960 + dx, y: 540 + dy))
+        t += 1.0 / 30.0
+        i += 1
+    }
+    let range = ZoomRange(start: 1, end: 7, amount: 2, anchor: Point2D(x: 0.5, y: 0.5), tracking: .followCursor)
+    let engine = ZoomEngine(
+        document: ProjectDocument(trimOut: 8, zoomRanges: [range]),
+        samples: samples,
+        displayBounds: bounds
+    )
+    let a = engine.crop(at: 3)
+    let b = engine.crop(at: 4.5)
+    let c = engine.crop(at: 6.5)
+    #expect(abs(a.origin.x - b.origin.x) < 1e-6 && abs(a.origin.y - b.origin.y) < 1e-6)
+    #expect(abs(b.origin.x - c.origin.x) < 1e-6 && abs(b.origin.y - c.origin.y) < 1e-6)
+    #expect(abs(a.midX - 0.5) < 0.02 && abs(a.midY - 0.5) < 0.02)
+}
+
+/// Camera motion is continuous across an adjacent range boundary and a
+/// hold-through gap: no per-frame jump larger than a smooth pan produces.
+@Test
+func followCamHasNoPopAtRangeBoundaries() throws {
+    let bounds = ZoomEngineSuite.bounds
+    var samples: [CursorSample] = []
+    samples += ZoomEngineSuite.move(from: Point2D(x: 300, y: 300), to: Point2D(x: 1_600, y: 800), start: 0, end: 8)
+    let ranges = [
+        ZoomRange(start: 1, end: 3, amount: 2, anchor: Point2D(x: 0.2, y: 0.2), tracking: .followCursor),
+        ZoomRange(start: 3, end: 5, amount: 2, anchor: Point2D(x: 0.8, y: 0.8), tracking: .followCursor),
+        // 0.5s gap, inside holdThroughGap.
+        ZoomRange(start: 5.5, end: 7.5, amount: 1.5, anchor: Point2D(x: 0.5, y: 0.5), tracking: .followCursor),
+    ]
+    let engine = ZoomEngine(
+        document: ProjectDocument(trimOut: 8, zoomRanges: ranges),
+        samples: samples,
+        displayBounds: bounds
+    )
+    // Start once the opening zoom-in (which legitimately slides the crop
+    // center from 0.5 toward the cursor) has settled.
+    var t = 1.0 + ZoomEasingPreset.smooth.zoomInDuration
+    var previous = engine.crop(at: t)
+    var maxJump = 0.0
+    while t <= 7.5 {
+        t += 1.0 / 60.0
+        let crop = engine.crop(at: t)
+        let jump = hypot(Double(crop.midX - previous.midX), Double(crop.midY - previous.midY))
+        maxJump = max(maxJump, jump)
+        previous = crop
+    }
+    // A pop re-seeding the camera on the cursor would move the center by
+    // ~0.1 UV or more in a single frame; a smooth pan stays far below that.
+    #expect(maxJump < 0.02, "largest per-frame center jump was \(maxJump)")
+
+    let held = engine.crop(at: 5.25)
+    #expect(held.width < 0.75, "hold-through gap should stay zoomed, got \(held)")
+}
+
+@Test
+func viewportSpringPresetsAreOrderedFastToCinematic() {
+    let from = Point2D(x: 0.2, y: 0.5)
+    let to = Point2D(x: 0.8, y: 0.5)
+    let progress = [ZoomEasingPreset.fast, .smooth, .cinematic].map { preset in
+        SpringSolver.settle(from: from, to: to, elapsed: 0.3, config: preset.viewportSpring).x
+    }
+    #expect(progress[0] > progress[1])
+    #expect(progress[1] > progress[2])
+}
+
 #if compiler(>=6.2)
 @section("__DATA,__mod_init_func")
 @used

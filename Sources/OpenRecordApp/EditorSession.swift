@@ -43,6 +43,7 @@ final class EditorSession {
     var samples: [CursorSample]
     var clicks: [ClickSample]
     var keys: [KeySample]
+    var typing: [TypingSample]
     var targetGeometry: [TargetGeometrySample]
     var engine: ZoomEngine
     var keyboardTimeline: KeyboardOverlayTimeline
@@ -248,6 +249,10 @@ final class EditorSession {
             KeySample.self,
             from: ProjectLayout.keysURL(in: opened.url)
         ) }
+        let typingResult = Result { try ProjectJSON.decodeJSONL(
+            TypingSample.self,
+            from: ProjectLayout.typingURL(in: opened.url)
+        ) }
         let targetGeometryResult = Result { try ProjectJSON.decodeJSONL(
             TargetGeometrySample.self,
             from: ProjectLayout.targetGeometryURL(in: opened.url)
@@ -256,6 +261,7 @@ final class EditorSession {
         let mouse = (try? mouseResult.get()) ?? []
         let clicks = (try? clicksResult.get()) ?? []
         let keys = (try? keysResult.get()) ?? []
+        let typing = (try? typingResult.get()) ?? []
         let targetGeometry = (try? targetGeometryResult.get()) ?? []
         if case .failure(let error) = mouseResult {
             messages.append("Mouse telemetry: \(error.localizedDescription)")
@@ -326,6 +332,7 @@ final class EditorSession {
             samples: mouse,
             clicks: clicks,
             keys: keys,
+            typing: typing,
             targetGeometry: targetGeometry,
             engine: engine,
             duration: media.duration,
@@ -371,6 +378,7 @@ final class EditorSession {
         samples: [CursorSample],
         clicks: [ClickSample],
         keys: [KeySample],
+        typing: [TypingSample] = [],
         targetGeometry: [TargetGeometrySample],
         engine: ZoomEngine,
         duration: TimeInterval,
@@ -390,6 +398,7 @@ final class EditorSession {
         self.samples = samples
         self.clicks = clicks
         self.keys = keys
+        self.typing = typing
         self.targetGeometry = targetGeometry
         self.engine = engine
         self.keyboardTimeline = KeyboardOverlayTimeline(samples: keys)
@@ -428,6 +437,7 @@ final class EditorSession {
                 existing: document.zoomRanges,
                 samples: samples,
                 clicks: clicks,
+                typing: typing,
                 duration: max(duration, 0.01),
                 displayBounds: meta.displayBounds,
                 config: config,
@@ -438,6 +448,7 @@ final class EditorSession {
             document.zoomRanges = SmartAutoZoom.generateRanges(
                 samples: samples,
                 clicks: clicks,
+                typing: typing,
                 duration: max(duration, 0.01),
                 displayBounds: meta.displayBounds,
                 config: config,

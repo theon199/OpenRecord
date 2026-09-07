@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
@@ -13,8 +14,11 @@ final class CursorMonitor: @unchecked Sendable {
     private var mouseWriter: JSONLWriter<CursorSample>?
     private var clickWriter: JSONLWriter<ClickSample>?
     private var keyWriter: JSONLWriter<KeySample>?
+    private var typingWriter: JSONLWriter<TypingSample>?
     private var targetWriter: JSONLWriter<TargetGeometrySample>?
     private let stateLock = NSLock()
+    private var cachedTextBoxTime: TimeInterval = -1
+    private var cachedTextBox: (point: CGPoint, size: CGSize)?
     private var recordingStart: CFTimeInterval?
     private var lastMoveTime: TimeInterval = -1
     private var lastLocation: CGPoint?
@@ -31,10 +35,19 @@ final class CursorMonitor: @unchecked Sendable {
         try start(mouseURL: mouseURL, clicksURL: clicksURL, target: nil, initialBounds: nil, targetURL: nil)
     }
 
-    func start(mouseURL: URL, clicksURL: URL, target: CaptureTarget?, initialBounds: Rect2D?, targetURL: URL?, keysURL: URL? = nil) throws {
+    func start(
+        mouseURL: URL,
+        clicksURL: URL,
+        target: CaptureTarget?,
+        initialBounds: Rect2D?,
+        targetURL: URL?,
+        keysURL: URL? = nil,
+        typingURL: URL? = nil
+    ) throws {
         mouseWriter = try JSONLWriter(url: mouseURL)
         clickWriter = try JSONLWriter(url: clicksURL)
         if let keysURL { keyWriter = try JSONLWriter(url: keysURL) }
+        if let typingURL { typingWriter = try JSONLWriter(url: typingURL) }
         if let targetURL { targetWriter = try JSONLWriter(url: targetURL) }
         pressedKeys.removeAll()
         closeWarnings.removeAll()
@@ -71,6 +84,8 @@ final class CursorMonitor: @unchecked Sendable {
         stateLock.lock()
         recordingStart = time
         lastMoveTime = -1
+        cachedTextBoxTime = -1
+        cachedTextBox = nil
         pressedKeys.removeAll()
         let geometry = pendingGeometry
         pendingGeometry = nil
@@ -93,16 +108,19 @@ final class CursorMonitor: @unchecked Sendable {
         stateLock.lock()
         pressedKeys.removeAll()
         recordingStart = nil
+        cachedTextBoxTime = -1
+        cachedTextBox = nil
         stateLock.unlock()
     }
 
     func closeFiles() throws {
-        mouseWriter?.close(); clickWriter?.close(); keyWriter?.close(); targetWriter?.close()
+        mouseWriter?.close(); clickWriter?.close(); keyWriter?.close(); typingWriter?.close(); targetWriter?.close()
         let mouseError = mouseWriter?.writeError
         let clickError = clickWriter?.writeError
         let keyError = keyWriter?.writeError
+        let typingError = typingWriter?.writeError
         let targetError = targetWriter?.writeError
-        mouseWriter = nil; clickWriter = nil; keyWriter = nil; targetWriter = nil
+        mouseWriter = nil; clickWriter = nil; keyWriter = nil; typingWriter = nil; targetWriter = nil
         if mouseError != nil { closeWarnings.insert(.truncatedMouseTelemetry) }
         if clickError != nil { closeWarnings.insert(.truncatedClickTelemetry) }
         if keyError != nil { closeWarnings.insert(.truncatedKeyboardTelemetry) }
@@ -110,6 +128,7 @@ final class CursorMonitor: @unchecked Sendable {
         if let mouseError { throw mouseError }
         if let clickError { throw clickError }
         if let keyError { throw keyError }
+        if let typingError { throw typingError }
         if let targetError { throw targetError }
     }
 
@@ -141,7 +160,7 @@ final class CursorMonitor: @unchecked Sendable {
     }
 
     private func handleKeyboard(type: CGEventType, event: CGEvent) {
-        guard keyWriter != nil else { return }
+        guard keyWriter != nil || typingWriter != nil else { return }
         if IsSecureEventInputEnabled() {
             stateLock.lock()
             pressedKeys.removeAll()
@@ -159,6 +178,12 @@ final class CursorMonitor: @unchecked Sendable {
         let modifiers = Self.modifiers(from: event.flags)
         let isDown = type == .keyDown
         let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+
+        if isDown, let typingWriter {
+            recordTypingIfApplicable(t: t, keyCode: keyCode, modifiers: modifiers, writer: typingWriter)
+        }
+
+        guard keyWriter != nil else { return }
         let rawLabel = KeyboardCapturePolicy.specialKeyLabel(keyCode: keyCode)
             ?? NSEvent(cgEvent: event)?.charactersIgnoringModifiers
             ?? ""
@@ -180,6 +205,86 @@ final class CursorMonitor: @unchecked Sendable {
             guard let pressed else { return }
             keyWriter?.write(KeySample(t: t, key: pressed.label, modifiers: pressed.modifiers, down: false))
         }
+    }
+
+    private func recordTypingIfApplicable(
+        t: TimeInterval,
+        keyCode: UInt16,
+        modifiers: [KeyModifier],
+        writer: JSONLWriter<TypingSample>
+    ) {
+        // Skip pure modifier keys (Shift, Ctrl, Opt, Cmd, Fn, CapsLock)
+        guard !KeyboardCapturePolicy.isModifierKey(keyCode: keyCode) else { return }
+
+        // Skip non-editing app navigation shortcuts (e.g. Cmd+Q, Cmd+W, Cmd+Tab)
+        if modifiers.contains(.command) {
+            // Carbon keycodes for common text editing shortcuts: A=0, Z=6, X=7, C=8, V=9
+            let isEditShortcut = [0, 6, 7, 8, 9].contains(Int(keyCode))
+            guard isEditShortcut else { return }
+        }
+
+        let box = resolveFocusedTextBox(at: t)
+        stateLock.lock()
+        let fallback = lastLocation
+        stateLock.unlock()
+
+        if let box {
+            writer.write(TypingSample(
+                t: t,
+                x: Double(box.point.x),
+                y: Double(box.point.y),
+                width: Double(box.size.width),
+                height: Double(box.size.height)
+            ))
+        } else if let fallback {
+            writer.write(TypingSample(
+                t: t,
+                x: Double(fallback.x),
+                y: Double(fallback.y)
+            ))
+        }
+    }
+
+    private func resolveFocusedTextBox(at t: TimeInterval) -> (point: CGPoint, size: CGSize)? {
+        stateLock.lock()
+        if cachedTextBoxTime >= 0, t - cachedTextBoxTime < 0.35, let cached = cachedTextBox {
+            stateLock.unlock()
+            return cached
+        }
+        stateLock.unlock()
+
+        let fresh = queryFocusedTextBox()
+        stateLock.lock()
+        cachedTextBoxTime = t
+        cachedTextBox = fresh
+        stateLock.unlock()
+        return fresh
+    }
+
+    private func queryFocusedTextBox() -> (point: CGPoint, size: CGSize)? {
+        guard AXIsProcessTrusted() else { return nil }
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedAppVal: AnyObject?
+        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focusedAppVal) == .success,
+              let focusedApp = focusedAppVal else { return nil }
+        var focusedUIVal: AnyObject?
+        guard AXUIElementCopyAttributeValue(focusedApp as! AXUIElement, kAXFocusedUIElementAttribute as CFString, &focusedUIVal) == .success,
+              let element = focusedUIVal else { return nil }
+
+        var posVal: AnyObject?
+        var sizeVal: AnyObject?
+        guard AXUIElementCopyAttributeValue(element as! AXUIElement, kAXPositionAttribute as CFString, &posVal) == .success,
+              AXUIElementCopyAttributeValue(element as! AXUIElement, kAXSizeAttribute as CFString, &sizeVal) == .success,
+              let posAX = posVal, let sizeAX = sizeVal else { return nil }
+
+        var pt = CGPoint.zero
+        var sz = CGSize.zero
+        if AXValueGetValue(posAX as! AXValue, .cgPoint, &pt),
+           AXValueGetValue(sizeAX as! AXValue, .cgSize, &sz),
+           sz.width > 0, sz.height > 0 {
+            return (pt, sz)
+        }
+        return nil
     }
 
     private func writeMove(t: TimeInterval, location: CGPoint, force: Bool) {

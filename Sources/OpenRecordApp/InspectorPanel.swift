@@ -707,7 +707,7 @@ struct InspectorPanel: View {
                 session.regenerateAutoZooms()
             }
         } message: {
-            Text("Automatic zooms will be regenerated from clicks, dwell, and cursor activity. Locked and manual zooms are preserved.")
+            Text("Automatic zooms will be regenerated from clicks, text typing, dwell, and focused activity. Locked and manual zooms are preserved.")
         }
     }
 
@@ -735,7 +735,7 @@ struct InspectorPanel: View {
     }
 
     private var regenerateZoomsButton: some View {
-        Button("Regenerate from Cursor Activity") {
+        Button("Regenerate from Activity & Typing") {
             if session.document.zoomRanges.isEmpty {
                 session.regenerateAutoZooms()
             } else {

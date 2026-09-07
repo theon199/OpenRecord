@@ -5,8 +5,10 @@ import Foundation
 ///
 /// `crop(at:)` returns a UV rect (origin top-left, 0...1). With no zoom ranges it is the unit rect.
 /// Amount eases with an analytical spring (zoom-in faster than zoom-out); with cursor samples the
-/// viewport pans using a safe zone and 1s lookahead (jitter cancellation). Short gaps hold zoom
-/// and pan between ranges instead of returning to 1×.
+/// viewport is a spring-driven camera with a central deadzone: it stays still while the cursor
+/// moves inside the middle of the frame, pans continuously once the cursor pushes past it, and
+/// never lets the cursor leave the frame. Short gaps hold zoom and pan between ranges instead of
+/// returning to 1×.
 ///
 /// After capture stop, generate ranges then build an engine:
 /// ```
@@ -21,10 +23,10 @@ import Foundation
 public struct ZoomEngine: Sendable {
     /// Seconds for a full zoom-in spring.
     public static let zoomInDuration: TimeInterval = 0.85
-    /// Seconds for a full zoom-out spring (slower settle).
-    public static let zoomOutDuration: TimeInterval = 1.35
+    /// Seconds for a full zoom-out spring (prompt disengagement).
+    public static let zoomOutDuration: TimeInterval = 0.70
     /// If the next range starts within this gap, stay zoomed and pan instead of easing to 1×.
-    public static let holdThroughGap: TimeInterval = 2.0
+    public static let holdThroughGap: TimeInterval = 0.85
     /// Compatibility alias for `zoomInDuration`.
     public static let zoomDuration: TimeInterval = zoomInDuration
 
@@ -219,12 +221,16 @@ private struct ZoomEvaluator {
         var nextSegment: ZoomRange?
     }
 
+    /// Sequential follow-cam state. The spring body is the camera center in UV
+    /// space; its target is pushed by the deadzone rule below.
     struct PlaybackState {
-        var lockedCenter: Point2D?
-        var lockedSegStart: TimeInterval?
         var spring: SpringState2D
         var lastTime: TimeInterval?
-        var lastRetargetTime: TimeInterval?
+
+        static let initial = PlaybackState(
+            spring: SpringState2D.rest(at: Point2D(x: 0.5, y: 0.5)),
+            lastTime: nil
+        )
     }
 
     var ranges: [ZoomRange]
@@ -232,12 +238,20 @@ private struct ZoomEvaluator {
     var easing: ZoomEasingPreset
     var viewportSpring: SpringConfig
 
-    private static let viewportEdgeThresh = 0.19
-    private static let recenterLookahead: TimeInterval = 1
-    private static let recenterLookaheadSamples = 10
-    private static let recenterAvgWindow: TimeInterval = 0.5
-    private static let recenterEpsilon = 0.01
-    private static let recenterCooldown: TimeInterval = 0.25
+    /// Half-extent of the deadzone as a fraction of the viewport size. The
+    /// camera target does not move while the (lead) cursor stays inside the
+    /// central 30% of the frame; beyond it the target is pushed just enough to
+    /// keep the cursor on the deadzone boundary, so pans are continuous.
+    static let deadzoneFraction = 0.15
+    /// The live cursor is never allowed closer to a viewport edge than this
+    /// fraction of the viewport size. Enforced on the camera position, after
+    /// the spring, so spring lag can never push the cursor off-frame.
+    static let edgeGuardFraction = 0.06
+    /// The camera target anticipates the cursor by averaging its path over
+    /// this window (telemetry is complete after capture, so this is lookahead,
+    /// not prediction).
+    static let leadWindow: TimeInterval = 0.25
+    private static let leadSamples = 5
 
     func evaluateLive(at time: TimeInterval) -> CGRect {
         let sorted = ranges.sorted { $0.start < $1.start }
@@ -256,30 +270,19 @@ private struct ZoomEvaluator {
                 : activeRange?.anchor
         }
         let zoom = interpolatedZoom(cursor: cursor, cursorCenter: center, ranges: sorted)
-        if activeRange?.tracking == .followCursor,
-           let live = smoother.interpolateIfVisible(at: time)
-        {
-            return boundsToCrop(ensureCursorVisible(zoom, cursorX: live.x, cursorY: live.y).bounds)
-        }
         return boundsToCrop(zoom.bounds)
     }
 
     func evaluateSequential(at time: TimeInterval, state: inout PlaybackState) -> CGRect {
         let sorted = ranges.sorted { $0.start < $1.start }
         if sorted.isEmpty {
-            state.lockedCenter = nil
-            state.lockedSegStart = nil
-            state.lastTime = nil
-            state.lastRetargetTime = nil
+            state = .initial
             return .uvUnit
         }
 
         let cursor = segmentCursor(at: time, ranges: sorted)
         if cursor.segment == nil, cursor.prevSegment == nil {
-            state.lockedCenter = nil
-            state.lockedSegStart = nil
-            state.lastTime = nil
-            state.lastRetargetTime = nil
+            state = .initial
             return .uvUnit
         }
 
@@ -296,103 +299,65 @@ private struct ZoomEvaluator {
         state.lastTime = time
 
         let activeRange = cursor.segment ?? cursor.prevSegment
-        let isAuto = !smoother.isEmpty && activeRange?.tracking == .followCursor
-        let liveCursor: Point2D? = isAuto ? smoother.interpolate(at: time) : nil
+        let follows = Self.followsCursor(cursor) && !smoother.isEmpty
 
-        var zoomCenter: Point2D?
-        if isAuto {
-            let curSegStart = cursor.segment?.start
-            if let curSegStart, curSegStart != state.lockedSegStart {
-                let lock = liveCursor ?? cursor.segment?.anchor
-                state.lockedCenter = lock
-                state.lockedSegStart = curSegStart
-                state.lastRetargetTime = time
-                if let lock {
-                    state.spring = SpringState2D.rest(at: lock)
-                }
-            } else if state.lockedCenter == nil {
-                let lock = liveCursor ?? cursor.segment?.anchor
-                state.lockedCenter = lock
-                state.lastRetargetTime = time
-                if let lock {
-                    state.spring = SpringState2D.rest(at: lock)
-                }
+        // Zoom level is independent of the camera center, so probe it first.
+        let probe = interpolatedZoom(cursor: cursor, cursorCenter: state.spring.position, ranges: sorted)
+        let z = probe.bounds.brX - probe.bounds.tlX
+
+        if z <= 1.001 {
+            // Fully zoomed out: park the camera where the next zoom should open
+            // so a zoom-in always starts on the cursor (or the fixed anchor).
+            let upcoming = cursor.segment ?? cursor.nextSegment ?? activeRange
+            let seed: Point2D
+            if upcoming?.tracking == .followCursor, !smoother.isEmpty {
+                seed = leadTarget(at: time)
+            } else {
+                seed = upcoming?.anchor ?? Point2D(x: 0.5, y: 0.5)
             }
-            zoomCenter = state.lockedCenter ?? liveCursor
-        } else if let active = cursor.segment ?? cursor.prevSegment {
-            zoomCenter = active.anchor
+            state.spring = SpringState2D.rest(at: seed)
+            return boundsToCrop(probe.bounds)
         }
 
-        guard isAuto, let liveCursor else {
-            let zoom = interpolatedZoom(cursor: cursor, cursorCenter: zoomCenter, ranges: sorted)
-            return boundsToCrop(zoom.bounds)
+        guard follows else {
+            // Fixed framing: keep the spring parked on the anchor so an
+            // adjacent follow-cursor range pans away from it smoothly.
+            if let anchor = activeRange?.anchor {
+                state.spring = SpringState2D.rest(at: anchor)
+            }
+            return boundsToCrop(probe.bounds)
         }
 
-        let actualZoom = interpolatedZoom(
-            cursor: cursor,
-            cursorCenter: state.spring.position,
-            ranges: sorted
+        let live = smoother.interpolate(at: time)
+        let lead = leadTarget(at: time)
+        let viewport = 1 / z
+        let deadzone = viewport * Self.deadzoneFraction
+        // Camera centers are clamped by the *settled* amount, not the current
+        // transitional zoom level: while zooming in the crop is a lerp toward
+        // the settled viewport, so the center must already be free to reach
+        // the settled clamp or a cursor near the canvas edge is cut off.
+        let settledAmount = max(
+            1,
+            cursor.segment?.amount ?? 1,
+            cursor.prevSegment?.amount ?? 1,
+            cursor.nextSegment?.amount ?? 1
         )
-        let z = actualZoom.bounds.brX - actualZoom.bounds.tlX
+        let half = 0.5 / settledAmount
 
-        if z > 1.001 {
-            let vpSize = 1 / z
-            let vpLeft = -actualZoom.bounds.tlX / z
-            let vpTop = -actualZoom.bounds.tlY / z
-            let triggerMargin = vpSize * Self.viewportEdgeThresh
-
-            let inSafe =
-                liveCursor.x >= vpLeft + triggerMargin
-                && liveCursor.x <= vpLeft + vpSize - triggerMargin
-                && liveCursor.y >= vpTop + triggerMargin
-                && liveCursor.y <= vpTop + vpSize - triggerMargin
-
-            if !inSafe {
-                var cancelRecenter = false
-                for i in 1...Self.recenterLookaheadSamples {
-                    let futureT =
-                        time + (Self.recenterLookahead * Double(i) / Double(Self.recenterLookaheadSamples))
-                    guard let fc = smoother.interpolateIfVisible(at: futureT) else { continue }
-                    let futureInSafe =
-                        fc.x >= vpLeft + triggerMargin
-                        && fc.x <= vpLeft + vpSize - triggerMargin
-                        && fc.y >= vpTop + triggerMargin
-                        && fc.y <= vpTop + vpSize - triggerMargin
-                    if futureInSafe {
-                        cancelRecenter = true
-                        break
-                    }
-                }
-
-                if !cancelRecenter {
-                    var sumU = liveCursor.x
-                    var sumV = liveCursor.y
-                    let n = Self.recenterLookaheadSamples
-                    for i in 1...n {
-                        guard let fc = smoother.interpolateIfVisible(
-                            at: time + (Self.recenterAvgWindow * Double(i) / Double(n))
-                        ) else { continue }
-                        sumU += fc.x
-                        sumV += fc.y
-                    }
-                    let target = Point2D(x: sumU / Double(n + 1), y: sumV / Double(n + 1))
-                    var tooSoon = false
-                    if let last = state.lastRetargetTime, time - last < Self.recenterCooldown {
-                        tooSoon = true
-                    }
-                    var close = false
-                    if let current = state.lockedCenter {
-                        close = hypot(target.x - current.x, target.y - current.y) < Self.recenterEpsilon
-                    }
-                    if !tooSoon && !close {
-                        state.lockedCenter = target
-                        state.spring.targetU = target.x
-                        state.spring.targetV = target.y
-                        state.lastRetargetTime = time
-                    }
-                }
-            }
+        var targetX = state.spring.targetU
+        var targetY = state.spring.targetV
+        if lead.x > targetX + deadzone {
+            targetX = lead.x - deadzone
+        } else if lead.x < targetX - deadzone {
+            targetX = lead.x + deadzone
         }
+        if lead.y > targetY + deadzone {
+            targetY = lead.y - deadzone
+        } else if lead.y < targetY - deadzone {
+            targetY = lead.y + deadzone
+        }
+        state.spring.targetU = min(1 - half, max(half, targetX))
+        state.spring.targetV = min(1 - half, max(half, targetY))
 
         if seekDetected {
             state.spring.posU = state.spring.targetU
@@ -403,15 +368,91 @@ private struct ZoomEvaluator {
             SpringSolver.step(&state.spring, dt: dt, config: viewportSpring)
         }
 
-        if z > 1.001 {
-            let visualZoom = interpolatedZoom(
-                cursor: cursor,
-                cursorCenter: state.spring.position,
-                ranges: sorted
-            )
-            return boundsToCrop(visualZoom.bounds)
+        var crop = boundsToCrop(
+            interpolatedZoom(cursor: cursor, cursorCenter: state.spring.position, ranges: sorted).bounds
+        )
+
+        // Hard visibility guard. During transitions the crop center is not the
+        // spring position, so measure how the crop responds to a center shift
+        // and correct the camera by exactly the amount needed.
+        let guardInset = Double(crop.width) * Self.edgeGuardFraction
+        var shiftX = 0.0
+        var shiftY = 0.0
+        if live.x < Double(crop.minX) + guardInset {
+            shiftX = live.x - guardInset - Double(crop.minX)
+        } else if live.x > Double(crop.maxX) - guardInset {
+            shiftX = live.x + guardInset - Double(crop.maxX)
         }
-        return boundsToCrop(actualZoom.bounds)
+        if live.y < Double(crop.minY) + guardInset {
+            shiftY = live.y - guardInset - Double(crop.minY)
+        } else if live.y > Double(crop.maxY) - guardInset {
+            shiftY = live.y + guardInset - Double(crop.maxY)
+        }
+        if shiftX != 0 || shiftY != 0 {
+            let epsilon = 0.01
+            let probeCenter = Point2D(
+                x: state.spring.posU + (shiftX >= 0 ? epsilon : -epsilon),
+                y: state.spring.posV + (shiftY >= 0 ? epsilon : -epsilon)
+            )
+            let shifted = boundsToCrop(
+                interpolatedZoom(cursor: cursor, cursorCenter: probeCenter, ranges: sorted).bounds
+            )
+            let slopeX = abs(Double(shifted.minX - crop.minX)) / epsilon
+            let slopeY = abs(Double(shifted.minY - crop.minY)) / epsilon
+            if shiftX != 0, slopeX > 1e-6 {
+                state.spring.posU = min(1 - half, max(half, state.spring.posU + shiftX / slopeX))
+                state.spring.velU = 0
+                if (shiftX > 0 && state.spring.targetU < state.spring.posU)
+                    || (shiftX < 0 && state.spring.targetU > state.spring.posU)
+                {
+                    state.spring.targetU = state.spring.posU
+                }
+            }
+            if shiftY != 0, slopeY > 1e-6 {
+                state.spring.posV = min(1 - half, max(half, state.spring.posV + shiftY / slopeY))
+                state.spring.velV = 0
+                if (shiftY > 0 && state.spring.targetV < state.spring.posV)
+                    || (shiftY < 0 && state.spring.targetV > state.spring.posV)
+                {
+                    state.spring.targetV = state.spring.posV
+                }
+            }
+            crop = boundsToCrop(
+                interpolatedZoom(cursor: cursor, cursorCenter: state.spring.position, ranges: sorted).bounds
+            )
+        }
+        return crop
+    }
+
+    /// Whether the camera should track the cursor at this point of the
+    /// timeline. Inside a range this is the range's mode; across a
+    /// hold-through gap either neighbor following is enough (the lerp between
+    /// them reads the spring for the follow side); during a zoom-out the
+    /// closing range decides.
+    static func followsCursor(_ cursor: SegmentCursor) -> Bool {
+        if let segment = cursor.segment {
+            return segment.tracking == .followCursor
+        }
+        guard let prev = cursor.prevSegment else { return false }
+        if let next = cursor.nextSegment, next.start - prev.end <= ZoomEngine.holdThroughGap {
+            return prev.tracking == .followCursor || next.tracking == .followCursor
+        }
+        return prev.tracking == .followCursor
+    }
+
+    /// Mean smoothed cursor position over the upcoming lead window.
+    func leadTarget(at time: TimeInterval) -> Point2D {
+        var sumX = 0.0
+        var sumY = 0.0
+        for index in 0...Self.leadSamples {
+            let sample = smoother.interpolate(
+                at: time + Self.leadWindow * Double(index) / Double(Self.leadSamples)
+            )
+            sumX += sample.x
+            sumY += sample.y
+        }
+        let count = Double(Self.leadSamples + 1)
+        return Point2D(x: sumX / count, y: sumY / count)
     }
 
     func segmentCursor(at time: TimeInterval, ranges: [ZoomRange]) -> SegmentCursor {
@@ -542,57 +583,6 @@ private struct ZoomEvaluator {
         if zoom <= 0 { return .uvUnit }
         return CGRect(x: -b.tlX / zoom, y: -b.tlY / zoom, width: 1 / zoom, height: 1 / zoom)
     }
-
-    func ensureCursorVisible(
-        _ zoom: InterpolatedZoom,
-        cursorX: Double,
-        cursorY: Double
-    ) -> InterpolatedZoom {
-        let currentZoom = zoom.bounds.brX - zoom.bounds.tlX
-        if currentZoom <= 1.001 { return zoom }
-
-        let viewportSize = 1 / currentZoom
-        let viewportLeft = -zoom.bounds.tlX / currentZoom
-        let viewportTop = -zoom.bounds.tlY / currentZoom
-        let triggerMargin = viewportSize * Self.viewportEdgeThresh
-
-        let inSafeZone =
-            cursorX >= viewportLeft + triggerMargin
-            && cursorX <= viewportLeft + viewportSize - triggerMargin
-            && cursorY >= viewportTop + triggerMargin
-            && cursorY <= viewportTop + viewportSize - triggerMargin
-        if inSafeZone { return zoom }
-
-        let placeMargin = viewportSize * 0.20
-        var newVpLeft = viewportLeft
-        var newVpTop = viewportTop
-
-        if cursorX < viewportLeft + triggerMargin {
-            newVpLeft = cursorX - placeMargin
-        } else if cursorX > viewportLeft + viewportSize - triggerMargin {
-            newVpLeft = cursorX - viewportSize + placeMargin
-        }
-        if cursorY < viewportTop + triggerMargin {
-            newVpTop = cursorY - placeMargin
-        } else if cursorY > viewportTop + viewportSize - triggerMargin {
-            newVpTop = cursorY - viewportSize + placeMargin
-        }
-
-        newVpLeft = min(1 - viewportSize, max(0, newVpLeft))
-        newVpTop = min(1 - viewportSize, max(0, newVpTop))
-
-        let newTlX = -newVpLeft * currentZoom
-        let newTlY = -newVpTop * currentZoom
-        return InterpolatedZoom(
-            t: zoom.t,
-            bounds: SegmentBounds(
-                tlX: newTlX,
-                tlY: newTlY,
-                brX: newTlX + currentZoom,
-                brY: newTlY + currentZoom
-            )
-        )
-    }
 }
 
 // MARK: - Bake cache
@@ -668,13 +658,7 @@ private final class BakeCache: @unchecked Sendable {
             easing: easing,
             viewportSpring: viewportSpring
         )
-        var state = ZoomEvaluator.PlaybackState(
-            lockedCenter: nil,
-            lockedSegStart: nil,
-            spring: SpringState2D.rest(at: Point2D(x: 0.5, y: 0.5)),
-            lastTime: nil,
-            lastRetargetTime: nil
-        )
+        var state = ZoomEvaluator.PlaybackState.initial
 
         var t: TimeInterval = 0
         let end = duration + 1e-9

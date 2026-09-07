@@ -102,6 +102,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         }
         let targetURL = ProjectLayout.targetGeometryURL(in: projectURL)
         let keysURL = capturesKeyboardShortcuts ? ProjectLayout.keysURL(in: projectURL) : nil
+        let typingURL = ProjectLayout.typingURL(in: projectURL)
         cursor.onTargetUnavailable = { [weak self] in
             guard let self else { return }
             self.recordWarning(.captureTargetUnavailable)
@@ -126,7 +127,15 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         }
         do {
             try await MainActor.run {
-                try cursor.start(mouseURL: ProjectLayout.mouseURL(in: projectURL), clicksURL: ProjectLayout.clicksURL(in: projectURL), target: target, initialBounds: targetInitialBounds, targetURL: targetURL, keysURL: keysURL)
+                try cursor.start(
+                    mouseURL: ProjectLayout.mouseURL(in: projectURL),
+                    clicksURL: ProjectLayout.clicksURL(in: projectURL),
+                    target: target,
+                    initialBounds: targetInitialBounds,
+                    targetURL: targetURL,
+                    keysURL: keysURL,
+                    typingURL: typingURL
+                )
             }
         } catch {
             recordWarning(.truncatedMouseTelemetry)

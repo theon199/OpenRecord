@@ -32,8 +32,8 @@ public struct SpringConfig: Sendable, Hashable {
     public static let cursorSnappy = SpringConfig(tension: 700, mass: 1, friction: 30)
     /// Heavier feel while the primary button is held.
     public static let cursorDrag = SpringConfig(tension: 136, mass: 1.2, friction: 26)
-    /// Snappy viewport pan.
-    public static let viewportFocused = SpringConfig(tension: 300, mass: 6.75, friction: 120)
+    /// Snappy viewport pan (settles in roughly half the time of `viewportSmooth`).
+    public static let viewportFocused = SpringConfig(tension: 300, mass: 2.5, friction: 60)
     /// Cinematic viewport pan.
     public static let viewportSmooth = SpringConfig(tension: 240, mass: 3.375, friction: 80)
     /// Slower, weightier viewport pan for the Cinematic preset.
@@ -57,9 +57,9 @@ public extension ZoomEasingPreset {
 
     var zoomOutDuration: TimeInterval {
         switch self {
-        case .fast: 0.8
-        case .smooth: 1.35
-        case .cinematic: 1.9
+        case .fast: 0.45
+        case .smooth: 0.70
+        case .cinematic: 1.10
         }
     }
 
