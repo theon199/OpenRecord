@@ -39,10 +39,15 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private var webcamActive = false
     private var microphoneActive = false
     var onUnexpectedStop: (@Sendable (Error) -> Void)?
+    var webcamPreviewSession: AVCaptureSession? { webcam.previewCaptureSession }
 
     init(webcam: WebcamRecorder = WebcamRecorder()) {
         self.webcam = webcam
         super.init()
+    }
+
+    func setMicrophoneMuted(_ muted: Bool) {
+        mic.setMuted(muted)
     }
 
     func start(

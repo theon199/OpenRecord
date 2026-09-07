@@ -11,6 +11,14 @@ public struct SmartAutoZoomConfig: Sendable, Hashable {
     /// target. Set `requireDwellEngagement` for workflows that classify only
     /// post-motion/post-click dwells as targets.
     public var minDwell: TimeInterval
+    /// A still cursor counts as an intentional target only for this long. Past
+    /// it the dwell is idle time: the range holds briefly and eases back out,
+    /// and any later motion, click or typing opens a fresh range.
+    public var maxDwell: TimeInterval
+    /// Extra hold allowed after the cursor has stopped moving. Typing keeps its
+    /// own reading hold; clicks, dwells and transit ease out once this grace
+    /// elapses so a long idle pause does not stay zoomed in.
+    public var idleZoomOut: TimeInterval
     /// Minimum time between the end of a dwell and the next activity island.
     public var dwellPadding: TimeInterval
     /// Speeds above this value are treated as transit when an island is too
@@ -27,28 +35,46 @@ public struct SmartAutoZoomConfig: Sendable, Hashable {
     /// Keep anchor centers away from canvas edges. This is intentionally
     /// conservative because crop clamping alone can put the cursor on an edge.
     public var edgeSafeInset: Double
-    /// Treat a cluster with mostly stationary samples as a fixed target; use
-    /// follow-cursor for longer motion clusters.
+    /// Retained for configuration compatibility. Generated ranges now follow
+    /// the cursor regardless of motion length; only typing bursts whose
+    /// pointer stays in frame receive a fixed anchor.
     public var followCursorDuration: TimeInterval
     /// When true, only post-motion/post-click dwells are targets. This is the
     /// compatibility switch used by callers that still treat a long reading
     /// pause as silence; v3 defaults to using dwell as an intentional signal.
     public var requireDwellEngagement: Bool
+    /// Hold time after typing finishes so viewers have time to read the text.
+    public var typingHold: TimeInterval
+    /// Lead-in time before the first keystroke of a typing burst.
+    public var typingLeadIn: TimeInterval
+    /// Minimum sustained duration for pure cursor motion to trigger a zoom.
+    /// Casual pointer sweeps shorter than this without a click or dwell are dropped.
+    public var minMotionEngagement: TimeInterval
+    /// Whether hold time scales proportionally with engagement duration.
+    public var dynamicHoldScaling: Bool
 
     public init(
         base: AutoZoomConfig = .default,
         minDwell: TimeInterval = 0.75,
+        maxDwell: TimeInterval = 1.6,
+        idleZoomOut: TimeInterval = 0.45,
         dwellPadding: TimeInterval = 0.2,
-        transitVelocity: Double = 2_200,
+        transitVelocity: Double = 1_400,
         minTransitDuration: TimeInterval = 0.28,
         clusterRadius: Double = 0.085,
         minUsefulDuration: TimeInterval = 0.35,
         edgeSafeInset: Double = 0.14,
         followCursorDuration: TimeInterval = 1.8,
-        requireDwellEngagement: Bool = false
+        requireDwellEngagement: Bool = false,
+        typingHold: TimeInterval = 2.0,
+        typingLeadIn: TimeInterval = 0.25,
+        minMotionEngagement: TimeInterval = 0.6,
+        dynamicHoldScaling: Bool = true
     ) {
         self.base = base
         self.minDwell = max(0, minDwell)
+        self.maxDwell = max(self.minDwell, maxDwell)
+        self.idleZoomOut = max(0, idleZoomOut)
         self.dwellPadding = max(0, dwellPadding)
         self.transitVelocity = max(0, transitVelocity)
         self.minTransitDuration = max(0, minTransitDuration)
@@ -57,6 +83,10 @@ public struct SmartAutoZoomConfig: Sendable, Hashable {
         self.edgeSafeInset = min(0.49, max(0, edgeSafeInset))
         self.followCursorDuration = max(0, followCursorDuration)
         self.requireDwellEngagement = requireDwellEngagement
+        self.typingHold = max(0, typingHold)
+        self.typingLeadIn = max(0, typingLeadIn)
+        self.minMotionEngagement = max(0, minMotionEngagement)
+        self.dynamicHoldScaling = dynamicHoldScaling
     }
 
     public static let `default` = SmartAutoZoomConfig()
@@ -74,6 +104,7 @@ public enum SmartAutoZoom: Sendable {
     public static func generate(
         samples: [CursorSample],
         clicks: [ClickSample] = [],
+        typing: [TypingSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
         config: SmartAutoZoomConfig = .default,
@@ -82,6 +113,7 @@ public enum SmartAutoZoom: Sendable {
         generateRanges(
             samples: samples,
             clicks: clicks,
+            typing: typing,
             duration: duration,
             displayBounds: displayBounds,
             config: config,
@@ -89,10 +121,11 @@ public enum SmartAutoZoom: Sendable {
         )
     }
 
-    /// Build ranges from cursor motion, dwell, clicks and target geometry.
+    /// Build ranges from cursor motion, dwell, clicks, typing and target geometry.
     public static func generateRanges(
         samples: [CursorSample],
         clicks: [ClickSample] = [],
+        typing: [TypingSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
         config: SmartAutoZoomConfig = .default,
@@ -115,6 +148,14 @@ public enum SmartAutoZoom: Sendable {
         let downs = visibleClicks.filter(\.down)
 
         var signals: [Signal] = []
+        signals.append(contentsOf: typingSignals(
+            typing: typing,
+            samples: visibleSamples,
+            duration: end,
+            config: config,
+            displayBounds: displayBounds,
+            targetGeometry: targetGeometry
+        ))
         signals.append(contentsOf: motionSignals(
             samples: visibleSamples,
             clicks: downs,
@@ -139,13 +180,17 @@ public enum SmartAutoZoom: Sendable {
         let useful = merged.filter { signal in
             let span = signal.end - signal.start
             guard span >= config.minUsefulDuration else {
-                return signal.kind == .click || signal.kind == .dwell
+                return signal.kind == .click || signal.kind == .dwell || signal.kind == .typing
             }
             // Fast pointer motion is transit, not a useful target. Do not
-            // apply this to click/dwell clusters: their intent is explicit.
+            // apply this to click/dwell/typing clusters: their intent is explicit.
             if signal.kind == .transit,
                signal.velocity >= config.transitVelocity
             {
+                return false
+            }
+            // Casual pointer movement across the screen without an intentional interaction
+            if signal.kind == .transit, span < config.minMotionEngagement {
                 return false
             }
             return true
@@ -153,7 +198,11 @@ public enum SmartAutoZoom: Sendable {
         let held = expandSignals(
             useful,
             minHold: config.base.minZoomHold,
-            duration: end
+            duration: end,
+            config: config,
+            samples: visibleSamples,
+            displayBounds: displayBounds,
+            targetGeometry: targetGeometry
         )
 
         return held.enumerated().map { index, signal in
@@ -181,7 +230,15 @@ public enum SmartAutoZoom: Sendable {
             // construction in one place makes legacy migration straightforward
             // and prevents accidental manual ranges during regeneration.
             range.source = .automatic
-            range.tracking = trackingMode(for: signal, config: config)
+            range.tracking = trackingMode(
+                for: signal,
+                anchor: anchor,
+                amount: range.amount,
+                samples: visibleSamples,
+                displayBounds: displayBounds,
+                targetGeometry: targetGeometry,
+                config: config
+            )
             return range
         }
     }
@@ -194,6 +251,7 @@ public enum SmartAutoZoom: Sendable {
         existing: [ZoomRange],
         samples: [CursorSample],
         clicks: [ClickSample] = [],
+        typing: [TypingSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
         config: SmartAutoZoomConfig = .default,
@@ -203,6 +261,7 @@ public enum SmartAutoZoom: Sendable {
         let generated = generateRanges(
             samples: samples,
             clicks: clicks,
+            typing: typing,
             duration: duration,
             displayBounds: displayBounds,
             config: config,
@@ -253,6 +312,7 @@ public enum SmartAutoZoom: Sendable {
         existing: [ZoomRange],
         samples: [CursorSample],
         clicks: [ClickSample] = [],
+        typing: [TypingSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
         config: SmartAutoZoomConfig = .default,
@@ -263,6 +323,7 @@ public enum SmartAutoZoom: Sendable {
             existing: existing,
             samples: samples,
             clicks: clicks,
+            typing: typing,
             duration: duration,
             displayBounds: displayBounds,
             config: config,
@@ -277,6 +338,7 @@ public enum SmartAutoZoom: Sendable {
         case transit = 0
         case dwell = 1
         case click = 2
+        case typing = 3
     }
 
     private struct Signal {
@@ -286,6 +348,67 @@ public enum SmartAutoZoom: Sendable {
         var kind: SignalKind
         var velocity: Double
         var anchor: Point2D?
+        /// Set when signals with anchors farther apart than the cluster radius
+        /// were folded into one range. Such a range spans more than one place
+        /// on screen, so the camera must follow the cursor rather than pin the
+        /// strongest signal's anchor.
+        var mixedAnchors = false
+    }
+
+    private static func typingSignals(
+        typing: [TypingSample],
+        samples: [CursorSample],
+        duration: TimeInterval,
+        config: SmartAutoZoomConfig,
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample]
+    ) -> [Signal] {
+        guard !typing.isEmpty else { return [] }
+        let sorted = typing.sorted { $0.t < $1.t }
+
+        var bursts: [(start: TimeInterval, end: TimeInterval, sample: TypingSample)] = []
+        var cur: (start: TimeInterval, end: TimeInterval, sample: TypingSample)?
+
+        for sample in sorted {
+            if let c = cur {
+                if sample.t <= c.end + 1.2 {
+                    cur = (c.start, sample.t, c.sample)
+                } else {
+                    bursts.append(c)
+                    cur = (sample.t, sample.t, sample)
+                }
+            } else {
+                cur = (sample.t, sample.t, sample)
+            }
+        }
+        if let c = cur { bursts.append(c) }
+
+        return bursts.map { burst in
+            let burstStart = max(0, burst.start - config.typingLeadIn)
+            let burstEnd = min(duration, burst.end)
+
+            let rawAnchor: Point2D
+            if let w = burst.sample.width, let h = burst.sample.height, w > 0, h > 0 {
+                let targetX = burst.sample.x + min(w * 0.35, 120)
+                let targetY = burst.sample.y + h * 0.5
+                rawAnchor = CursorSmoother.uv(x: targetX, y: targetY, displayBounds: displayBounds)
+            } else {
+                rawAnchor = CursorSmoother.uv(x: burst.sample.x, y: burst.sample.y, displayBounds: displayBounds)
+            }
+
+            let safeX = min(1 - config.edgeSafeInset, max(config.edgeSafeInset, rawAnchor.x))
+            let safeY = min(1 - config.edgeSafeInset, max(config.edgeSafeInset, rawAnchor.y))
+            let anchor = Point2D(x: safeX, y: safeY)
+
+            return Signal(
+                start: burstStart,
+                end: burstEnd,
+                anchorTime: burst.start,
+                kind: .typing,
+                velocity: 0,
+                anchor: anchor
+            )
+        }
     }
 
     private static func motionSignals(
@@ -374,8 +497,11 @@ public enum SmartAutoZoom: Sendable {
             }
             if same { continue }
             let start = samples[runStart].t
-            let end = samples[index - 1].t
-            let span = end - start
+            let fullEnd = samples[index - 1].t
+            let span = fullEnd - start
+            // Only the first `maxDwell` of a still cursor is a target; the
+            // rest is idle time and should let the zoom ease back out.
+            let end = min(fullEnd, start + config.maxDwell)
             if span >= config.minDwell {
                 let arrivedByMotion = runStart > 0 && samples[runStart - 1].t < start
                 let nearbyClick = clicks.contains { abs($0.t - start) <= config.dwellPadding || ($0.t >= start && $0.t <= end) }
@@ -410,12 +536,7 @@ public enum SmartAutoZoom: Sendable {
         var result: [Signal] = []
         for next in ordered.dropFirst() {
             let closeInTime = next.start <= current.end + gap
-            let closeInSpace: Bool
-            if let a = current.anchor, let b = next.anchor {
-                closeInSpace = hypot(a.x - b.x, a.y - b.y) <= clusterRadius
-            } else {
-                closeInSpace = true
-            }
+            let closeInSpace = anchorsAreClose(current, next, radius: clusterRadius)
             let sameTransit = current.kind == .transit && next.kind == .transit
             if closeInTime && (sameTransit || closeInSpace) {
                 current.end = max(current.end, next.end)
@@ -424,6 +545,7 @@ public enum SmartAutoZoom: Sendable {
                     current.anchorTime = next.anchorTime
                 }
                 current.velocity = max(current.velocity, next.velocity)
+                current.mixedAnchors = current.mixedAnchors || next.mixedAnchors || !closeInSpace
             } else {
                 result.append(current)
                 current = next
@@ -433,26 +555,83 @@ public enum SmartAutoZoom: Sendable {
         return result
     }
 
-    private static func expandSignals(_ signals: [Signal], minHold: TimeInterval, duration: TimeInterval) -> [Signal] {
+    private static func expandSignals(
+        _ signals: [Signal],
+        minHold: TimeInterval,
+        duration: TimeInterval,
+        config: SmartAutoZoomConfig,
+        samples: [CursorSample],
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample]
+    ) -> [Signal] {
         guard minHold > 0 else { return signals }
         var result = signals.map { signal -> Signal in
-            let span = signal.end - signal.start
-            guard span < minHold else { return signal }
+            let activeSpan = signal.end - signal.start
             var value = signal
-            let after = min(minHold - span, max(0, duration - value.end))
-            value.end += after
-            let remaining = minHold - (value.end - value.start)
-            value.start = max(0, value.start - remaining)
+            let idle = cursorIsIdle(
+                after: value.end,
+                samples: samples,
+                displayBounds: displayBounds,
+                targetGeometry: targetGeometry
+            )
+
+            if config.dynamicHoldScaling {
+                let holdAfter: TimeInterval
+                switch signal.kind {
+                case .typing:
+                    // Reading hold is intentional even when the pointer is still.
+                    holdAfter = config.typingHold
+                case .click:
+                    holdAfter = idle
+                        ? config.idleZoomOut
+                        : min(config.base.minZoomHold, 1.4)
+                case .dwell:
+                    holdAfter = config.idleZoomOut
+                case .transit:
+                    holdAfter = idle
+                        ? config.idleZoomOut
+                        : min(config.base.minZoomHold, max(1.2, 1.2 + 0.4 * (activeSpan - 0.6)))
+                }
+                let extendEnd = min(holdAfter, max(0, duration - value.end))
+                value.end += extendEnd
+
+                let currentSpan = value.end - value.start
+                if currentSpan < minHold {
+                    let needed = minHold - currentSpan
+                    value.start = max(0, value.start - needed)
+                    let stillNeeded = minHold - (value.end - value.start)
+                    if stillNeeded > 0 {
+                        let extra = (signal.kind == .typing || !idle)
+                            ? stillNeeded
+                            : min(stillNeeded, config.idleZoomOut)
+                        value.end = min(duration, value.end + extra)
+                    }
+                }
+            } else {
+                if activeSpan < minHold {
+                    let needed = minHold - activeSpan
+                    let after = min(needed, max(0, duration - value.end))
+                    let extra = (signal.kind == .typing || !idle)
+                        ? after
+                        : min(after, config.idleZoomOut)
+                    value.end += extra
+                    let remaining = minHold - (value.end - value.start)
+                    if remaining > 0 {
+                        value.start = max(0, value.start - remaining)
+                    }
+                }
+            }
             return value
         }
         result.sort { $0.start < $1.start }
         // Hold expansion can make otherwise independent islands overlap. A
         // generated set must remain non-overlapping; preserve the strongest
-        // intent (click > dwell > transit) and the first stable anchor.
+        // intent (typing > click > dwell > transit) and the first stable anchor.
         guard var current = result.first else { return [] }
         var coalesced: [Signal] = []
         for next in result.dropFirst() {
             if next.start < current.end {
+                let close = anchorsAreClose(current, next, radius: config.clusterRadius)
                 current.end = max(current.end, next.end)
                 if next.kind.rawValue > current.kind.rawValue {
                     current.kind = next.kind
@@ -460,6 +639,7 @@ public enum SmartAutoZoom: Sendable {
                     current.anchor = next.anchor
                 }
                 current.velocity = max(current.velocity, next.velocity)
+                current.mixedAnchors = current.mixedAnchors || next.mixedAnchors || !close
             } else {
                 coalesced.append(current)
                 current = next
@@ -477,6 +657,9 @@ public enum SmartAutoZoom: Sendable {
         targetGeometry: [TargetGeometrySample],
         config: SmartAutoZoomConfig
     ) -> Point2D {
+        if signal.kind == .typing, let anchor = signal.anchor {
+            return anchor
+        }
         let anchorTime = clicks.first(where: { $0.t >= signal.start && $0.t <= signal.end })?.t ?? signal.anchorTime
         let anchor = AutoZoom.nearestUV(
             at: anchorTime,
@@ -489,8 +672,95 @@ public enum SmartAutoZoom: Sendable {
         return Point2D(x: x, y: y)
     }
 
-    private static func trackingMode(for _: Signal, config _: SmartAutoZoomConfig) -> ZoomTrackingMode {
-        .followCursor
+    private static func anchorsAreClose(_ a: Signal, _ b: Signal, radius: Double) -> Bool {
+        guard let pa = a.anchor, let pb = b.anchor else { return true }
+        return hypot(pa.x - pb.x, pa.y - pb.y) <= radius
+    }
+
+    /// True when the pointer stays put after `time` — the cue to ease zoom out
+    /// instead of holding the last target through a long pause.
+    private static func cursorIsIdle(
+        after time: TimeInterval,
+        samples: [CursorSample],
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample]
+    ) -> Bool {
+        guard let origin = AutoZoom.nearestUV(
+            at: time,
+            samples: samples,
+            displayBounds: displayBounds,
+            targetGeometry: targetGeometry
+        ) else {
+            return true
+        }
+        let later = samples.filter { $0.t > time + 0.04 && $0.t <= time + 0.8 }
+        if later.isEmpty { return true }
+        return later.allSatisfy { sample in
+            let uv = AutoZoom.nearestUV(
+                at: sample.t,
+                samples: samples,
+                displayBounds: displayBounds,
+                targetGeometry: targetGeometry
+            ) ?? origin
+            return hypot(uv.x - origin.x, uv.y - origin.y) <= 0.004
+        }
+    }
+
+    /// Ranges follow the cursor by default: the follow-cam's deadzone keeps a
+    /// still cursor perfectly stable, while a fixed anchor can strand the
+    /// viewer looking at a spot the cursor has already left. The only fixed
+    /// framing is a typing burst, where the text box (not the pointer) is the
+    /// subject, and only when the pointer never leaves that frame.
+    private static func trackingMode(
+        for signal: Signal,
+        anchor: Point2D,
+        amount: Double,
+        samples: [CursorSample],
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample],
+        config: SmartAutoZoomConfig
+    ) -> ZoomTrackingMode {
+        guard signal.kind == .typing, !signal.mixedAnchors else { return .followCursor }
+        return fixedAnchorKeepsCursorInFrame(
+            anchor: anchor,
+            amount: amount,
+            samples: samples,
+            start: signal.start,
+            end: signal.end,
+            displayBounds: displayBounds,
+            targetGeometry: targetGeometry
+        ) ? .fixed : .followCursor
+    }
+
+    /// Whether every visible cursor sample inside `start...end` stays well
+    /// inside the viewport a fixed range at `anchor` would show.
+    static func fixedAnchorKeepsCursorInFrame(
+        anchor: Point2D,
+        amount: Double,
+        samples: [CursorSample],
+        start: TimeInterval,
+        end: TimeInterval,
+        displayBounds: Rect2D,
+        targetGeometry: [TargetGeometrySample]
+    ) -> Bool {
+        let half = 0.5 / max(amount, 1)
+        // The engine clamps the center so the viewport stays on the canvas.
+        let cx = min(1 - half, max(half, anchor.x))
+        let cy = min(1 - half, max(half, anchor.y))
+        let reach = half * 0.8
+        let times = samples.map(\.t).filter { $0 >= start && $0 <= end } + [start, end]
+        for time in times {
+            guard let uv = AutoZoom.nearestUV(
+                at: time,
+                samples: samples,
+                displayBounds: displayBounds,
+                targetGeometry: targetGeometry
+            ) else { continue }
+            if abs(uv.x - cx) > reach || abs(uv.y - cy) > reach {
+                return false
+            }
+        }
+        return true
     }
 
     /// UUID generation must not use UUID() for generated ranges: users often
@@ -521,6 +791,7 @@ public extension AutoZoom {
     static func generateSmartRanges(
         samples: [CursorSample],
         clicks: [ClickSample] = [],
+        typing: [TypingSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
         config: SmartAutoZoomConfig = .default,
@@ -529,6 +800,7 @@ public extension AutoZoom {
         SmartAutoZoom.generateRanges(
             samples: samples,
             clicks: clicks,
+            typing: typing,
             duration: duration,
             displayBounds: displayBounds,
             config: config,
@@ -540,6 +812,7 @@ public extension AutoZoom {
         existing: [ZoomRange],
         samples: [CursorSample],
         clicks: [ClickSample] = [],
+        typing: [TypingSample] = [],
         duration: TimeInterval,
         displayBounds: Rect2D,
         config: SmartAutoZoomConfig = .default,
@@ -550,6 +823,7 @@ public extension AutoZoom {
             existing: existing,
             samples: samples,
             clicks: clicks,
+            typing: typing,
             duration: duration,
             displayBounds: displayBounds,
             config: config,

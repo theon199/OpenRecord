@@ -160,3 +160,28 @@ public enum CursorSpriteLayout: Sendable {
         )
     }
 }
+
+/// One typing / text-focus event. Written as a single JSONL line in `recording/typing.jsonl`.
+/// Coordinates are in Quartz points. Contains no key characters or text content (100% private).
+public struct TypingSample: Codable, Sendable, Hashable {
+    public var t: TimeInterval
+    public var x: Double
+    public var y: Double
+    public var width: Double?
+    public var height: Double?
+
+    public init(
+        t: TimeInterval,
+        x: Double,
+        y: Double,
+        width: Double? = nil,
+        height: Double? = nil
+    ) {
+        self.t = t
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+

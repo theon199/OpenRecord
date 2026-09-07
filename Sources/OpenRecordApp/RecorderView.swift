@@ -147,7 +147,7 @@ struct RecorderView: View {
 
             Toggle("Record webcam", isOn: $model.capturesWebcam)
                 .toggleStyle(.switch)
-            Text("Uses the default camera and records a separate, movable picture-in-picture track. Camera permission is requested when recording starts.")
+            Text("Uses the default camera. A live circular preview appears while you record so you can see how you look; the same picture-in-picture is composited in the editor.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

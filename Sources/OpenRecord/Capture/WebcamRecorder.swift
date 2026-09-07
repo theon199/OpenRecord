@@ -14,6 +14,10 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// several seconds old.
     private static let pendingFrameLimit = 90
     private var session: AVCaptureSession?
+    /// The live `AVCaptureSession` used for file writing. Attach an
+    /// `AVCaptureVideoPreviewLayer` to this same session — a second camera
+    /// session will fail on hardware that grants exclusive access.
+    var previewCaptureSession: AVCaptureSession? { session }
     private var writer: SampleBufferWriter?
     private var outputURL: URL?
     private var recordingOrigin: CMTime?

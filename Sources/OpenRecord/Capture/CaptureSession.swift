@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import AVFoundation
 import Foundation
 import os
 import ScreenCaptureKit
@@ -13,6 +14,19 @@ public final class CaptureSession: @unchecked Sendable {
     }
 
     public var isRunning: Bool { state == .recording }
+
+    /// Live camera session for an in-recording preview layer. Returns the
+    /// primed recorder during countdown and the active pipeline recorder once
+    /// capture has started.
+    public var webcamPreviewSession: AVCaptureSession? {
+        unfairLock.withLock {
+            primedWebcam?.previewCaptureSession ?? pipeline?.webcamPreviewSession
+        }
+    }
+
+    public func setMicrophoneMuted(_ muted: Bool) {
+        unfairLock.withLock { pipeline?.setMicrophoneMuted(muted) }
+    }
 
     private let unfairLock = OSAllocatedUnfairLock()
     private var pipeline: CapturePipeline?

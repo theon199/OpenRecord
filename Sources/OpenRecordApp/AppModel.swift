@@ -85,6 +85,8 @@ final class AppModel {
     }
     var projectTemplates: [ProjectTemplate] = ProjectTemplate.builtIns
     var selectedProjectTemplateID: String?
+    var isMicrophoneMuted = false
+    var isRecordingCameraCollapsed = false
 
     var allPermissionsGranted: Bool {
         CapturePermissionKind.requiredForScreenCapture.allSatisfy {
@@ -111,6 +113,7 @@ final class AppModel {
     }
 
     private let capture = CaptureSession()
+    private let recordingOverlay = RecordingOverlayController()
     private var recordingURL: URL?
     private var countdownTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
@@ -151,6 +154,7 @@ final class AppModel {
         refreshProjects()
         installRecordShortcut()
         observeCaptureEvents()
+        configureRecordingOverlay()
         AppDelegate.terminationHandler = { [weak self] in
             await self?.prepareForTermination() ?? true
         }
@@ -729,25 +733,34 @@ final class AppModel {
         }
 
         countdownTask = Task { @MainActor in
+            isMicrophoneMuted = false
+            isRecordingCameraCollapsed = false
             let warmup = Task { [capturesWebcam] in
                 if capturesWebcam {
                     await capture.prepareWebcam()
+                    await MainActor.run {
+                        self.recordingOverlay.setPreviewSession(self.capture.webcamPreviewSession)
+                        self.refreshRecordingHUD()
+                    }
                 }
             }
             for value in [3, 2, 1] {
                 countdownRemaining = value
+                refreshRecordingHUD()
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled {
                     countdownRemaining = nil
                     warmup.cancel()
                     await capture.cancelWebcamPrepare()
+                    refreshRecordingHUD()
                     return
                 }
             }
-            countdownRemaining = nil
             _ = await warmup.result
             if Task.isCancelled {
+                countdownRemaining = nil
                 await capture.cancelWebcamPrepare()
+                refreshRecordingHUD()
                 return
             }
             await startCapture()
@@ -761,6 +774,9 @@ final class AppModel {
         countdownTask = nil
         countdownRemaining = nil
         Task { await capture.cancelWebcamPrepare() }
+        if !isRecording {
+            refreshRecordingHUD()
+        }
     }
 
     func stopRecording() async {
@@ -772,7 +788,9 @@ final class AppModel {
         elapsedTask?.cancel()
         elapsedTask = nil
         guard isRecording || recordingURL != nil else { return }
+        persistRecordingHUDOverlay()
         isRecording = false
+        recordingOverlay.dismiss()
         isProcessingCapture = true
         defer { isProcessingCapture = false }
 
@@ -835,6 +853,7 @@ final class AppModel {
             elapsedTask?.cancel()
             elapsedTask = nil
             isRecording = false
+            recordingOverlay.dismiss()
             let url = recordingURL
             let outcome = await stopCaptureForTermination()
             switch outcome {
@@ -959,6 +978,14 @@ final class AppModel {
                 ?? ProjectDocument()
             initialDocument.keyboardOverlay.enabled = capturesKeyboardShortcuts
             initialDocument.webcamOverlay.enabled = capturesWebcam
+            if capturesWebcam, recordingHUDMapsToOverlay {
+                initialDocument.webcamOverlay = RecordingHUDLayout.overlaySettings(
+                    cameraFrame: recordingOverlay.currentCameraFrame,
+                    displayBounds: recordingHUDClampBounds(),
+                    existing: initialDocument.webcamOverlay
+                )
+                initialDocument.webcamOverlay.enabled = true
+            }
             try library.save(document: initialDocument, to: url)
             recordingURL = url
             try await capture.start(
@@ -967,14 +994,25 @@ final class AppModel {
                 capturesKeyboardShortcuts: capturesKeyboardShortcuts,
                 capturesWebcam: capturesWebcam
             )
-            guard capture.isRunning else { return }
+            guard capture.isRunning else {
+                countdownRemaining = nil
+                refreshRecordingHUD()
+                return
+            }
+            capture.setMicrophoneMuted(isMicrophoneMuted)
             isRecording = true
+            countdownRemaining = nil
+            isRecorderPresented = false
             recordedDuration = 0
             startElapsedTimer()
+            recordingOverlay.setPreviewSession(capture.webcamPreviewSession)
+            refreshRecordingHUD()
         } catch {
+            countdownRemaining = nil
             if capture.state == .stopping || capture.state == .finalized {
                 // An unexpected-stop or termination finalizer owns this exact
                 // bundle; do not race it by deleting a potentially playable capture.
+                refreshRecordingHUD()
                 return
             }
             if let url = recordingURL {
@@ -984,6 +1022,7 @@ final class AppModel {
             reportError(error.localizedDescription, category: .capture)
             refreshPermissions()
             await capture.cancelWebcamPrepare()
+            refreshRecordingHUD()
         }
     }
 
@@ -993,6 +1032,15 @@ final class AppModel {
         elapsedTask = Task { @MainActor in
             while !Task.isCancelled, isRecording {
                 recordedDuration = Date().timeIntervalSince(started)
+                recordingOverlay.update(
+                    countdownRemaining: countdownRemaining,
+                    elapsed: recordedDuration,
+                    isRecording: isRecording,
+                    isMuted: isMicrophoneMuted,
+                    collapsed: isRecordingCameraCollapsed,
+                    showsCamera: capturesWebcam,
+                    clampBounds: recordingHUDClampBounds()
+                )
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
@@ -1029,6 +1077,99 @@ final class AppModel {
             Task { @MainActor in
                 await self?.handleRecordShortcut()
             }
+        }
+    }
+
+    private func configureRecordingOverlay() {
+        recordingOverlay.onStop = { [weak self] in
+            Task { await self?.stopRecording() }
+        }
+        recordingOverlay.onCancel = { [weak self] in
+            self?.cancelCountdown()
+        }
+        recordingOverlay.onToggleMute = { [weak self] in
+            self?.toggleRecordingMicrophoneMuted()
+        }
+        recordingOverlay.onToggleCollapsed = { [weak self] in
+            self?.toggleRecordingCameraCollapsed()
+        }
+        recordingOverlay.onLayoutCommitted = { [weak self] in
+            self?.persistRecordingHUDOverlay()
+        }
+    }
+
+    func toggleRecordingMicrophoneMuted() {
+        isMicrophoneMuted.toggle()
+        capture.setMicrophoneMuted(isMicrophoneMuted)
+        refreshRecordingHUD()
+    }
+
+    func toggleRecordingCameraCollapsed() {
+        isRecordingCameraCollapsed.toggle()
+        refreshRecordingHUD()
+    }
+
+    private var recordingHUDMapsToOverlay: Bool {
+        capturesWebcam && selectedSource?.isDisplay == true
+    }
+
+    private func recordingHUDClampBounds() -> CGRect {
+        if case .display(let id) = selectedSource?.target,
+           let screen = Self.screen(forDisplayID: id)
+        {
+            return screen.frame
+        }
+        let cameraFrame = recordingOverlay.currentCameraFrame
+        if let screen = NSScreen.screens.first(where: { $0.frame.intersects(cameraFrame) }) {
+            return screen.frame
+        }
+        return NSScreen.main?.frame
+            ?? NSScreen.screens.first?.frame
+            ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+    }
+
+    private func refreshRecordingHUD() {
+        let shouldShow = countdownRemaining != nil || isRecording
+        if shouldShow {
+            recordingOverlay.present(
+                clampBounds: recordingHUDClampBounds(),
+                showsCamera: capturesWebcam
+            )
+            recordingOverlay.setPreviewSession(capture.webcamPreviewSession)
+            recordingOverlay.update(
+                countdownRemaining: countdownRemaining,
+                elapsed: recordedDuration,
+                isRecording: isRecording,
+                isMuted: isMicrophoneMuted,
+                collapsed: isRecordingCameraCollapsed,
+                showsCamera: capturesWebcam,
+                clampBounds: recordingHUDClampBounds()
+            )
+        } else {
+            recordingOverlay.dismiss()
+        }
+    }
+
+    private func persistRecordingHUDOverlay() {
+        guard recordingHUDMapsToOverlay, let url = recordingURL else { return }
+        do {
+            var document = try library.open(url: url).document
+            document.webcamOverlay = RecordingHUDLayout.overlaySettings(
+                cameraFrame: recordingOverlay.currentCameraFrame,
+                displayBounds: recordingHUDClampBounds(),
+                existing: document.webcamOverlay
+            )
+            document.webcamOverlay.enabled = capturesWebcam
+            try library.save(document: document, to: url)
+        } catch {
+            return
+        }
+    }
+
+    private static func screen(forDisplayID id: UInt32) -> NSScreen? {
+        NSScreen.screens.first { screen in
+            let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            return number?.uint32Value == id
         }
     }
 }

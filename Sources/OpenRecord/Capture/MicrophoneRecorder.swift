@@ -8,13 +8,23 @@ final class MicrophoneRecorder: @unchecked Sendable {
     private let writeLock = NSLock()
     private var tapInstalled = false
     private var configurationObserver: NSObjectProtocol?
+    private var isMuted = false
     private(set) var firstBufferHostTime: CFTimeInterval?
     private(set) var writeError: Error?
     var onFailure: (@Sendable (Error) -> Void)?
 
+    func setMuted(_ muted: Bool) {
+        writeLock.lock()
+        isMuted = muted
+        writeLock.unlock()
+    }
+
     func start(url: URL) throws {
         firstBufferHostTime = nil
         writeError = nil
+        writeLock.lock()
+        isMuted = false
+        writeLock.unlock()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else {
@@ -49,8 +59,9 @@ final class MicrophoneRecorder: @unchecked Sendable {
                     ? CACurrentMediaTime()
                     : AVAudioTime.seconds(forHostTime: hostTime)
             }
+            let sample = self.isMuted ? Self.silentBuffer(matching: buffer) : buffer
             do {
-                try self.file?.write(from: buffer)
+                try self.file?.write(from: sample)
             } catch {
                 if self.writeError == nil {
                     self.writeError = error
@@ -98,6 +109,20 @@ final class MicrophoneRecorder: @unchecked Sendable {
         }
         writeLock.lock()
         file = nil
+        isMuted = false
         writeLock.unlock()
+    }
+
+    /// Zero-filled copy with the same format and frame length so muting does
+    /// not shorten the microphone timeline.
+    static func silentBuffer(matching buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+        guard let silent = AVAudioPCMBuffer(
+            pcmFormat: buffer.format,
+            frameCapacity: buffer.frameLength
+        ) else {
+            return buffer
+        }
+        silent.frameLength = buffer.frameLength
+        return silent
     }
 }

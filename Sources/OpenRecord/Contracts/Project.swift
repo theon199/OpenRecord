@@ -551,7 +551,7 @@ public enum WebcamOverlayShape: String, Codable, CaseIterable, Sendable, Hashabl
 }
 
 public struct WebcamOverlaySettings: Codable, Sendable, Hashable {
-    public static let sizeRange = 0.08...0.4
+    public static let sizeRange = 0.08...0.65
     public static let borderWidthRange = 0.0...12.0
     public static let cornerRadiusRange = 0.02...0.5
     public static let shadowOpacityRange = 0.0...0.8
