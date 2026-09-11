@@ -316,7 +316,7 @@ private final class ExportFrameSession: @unchecked Sendable {
                 }
             }
         }
-        let fps = ExportLayout.outputFrameRate(sourceAverageFPS: await ExportMediaIO.sourceAverageFPS(track: track))
+        let fps = project.videoExportSettings.frameRate.resolvedFPS(sourceAverageFPS: await ExportMediaIO.sourceAverageFPS(track: track))
         let layout = ExportLayout.canvasLayout(canvas: project.canvas, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, resolution: project.videoExportSettings.resolution)
         let cursor = ExportCursorImage.load(document: project, bundleURL: bundleURL)
         let compositor = ExportCompositor(context: ci, colorSpace: colorSpace, canvas: project.canvas, keyboardOverlay: project.keyboardOverlay, webcamOverlay: project.webcamOverlay, webcamMirror: meta.webcam?.mirror ?? false, layout: layout, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, displayScale: meta.scale, cursorImage: cursor?.image, cursorSprite: cursor?.sprite, cursorEffects: project.cursorEffects, captions: project.captions, annotations: project.annotations, redactions: project.redactions, drawings: project.drawings, deviceFrame: project.deviceFrame)

@@ -14,13 +14,15 @@ public enum OpenRecordAutomationCommand: Sendable, Equatable {
         project: URL,
         output: URL,
         codec: VideoExportCodec?,
-        resolution: ExportResolutionPreset?
+        resolution: ExportResolutionPreset?,
+        quality: VideoExportQualityPreset? = nil
     )
     case batch(
         folder: URL,
         output: URL,
         codec: VideoExportCodec?,
-        resolution: ExportResolutionPreset?
+        resolution: ExportResolutionPreset?,
+        quality: VideoExportQualityPreset? = nil
     )
 }
 
@@ -132,8 +134,8 @@ public enum OpenRecordAutomationParser: Sendable {
     Usage:
       openrecord-cli inspect <project.openrecord> [--json]
       openrecord-cli validate <project.openrecord> [--json]
-      openrecord-cli export <project.openrecord> --output <file> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source]
-      openrecord-cli batch <folder> --output <folder> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source]
+      openrecord-cli export <project.openrecord> --output <file> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high]
+      openrecord-cli batch <folder> --output <folder> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high]
     """
 
     public static func parse<S: Sequence>(arguments: S) throws -> OpenRecordAutomationCommand
@@ -184,7 +186,8 @@ public enum OpenRecordAutomationParser: Sendable {
                 project: try requireProjectURL(parsed.primary),
                 output: parsed.output,
                 codec: parsed.codec,
-                resolution: parsed.resolution
+                resolution: parsed.resolution,
+                quality: parsed.quality
             )
 
         case "batch":
@@ -197,7 +200,8 @@ public enum OpenRecordAutomationParser: Sendable {
                 folder: projectURL(parsed.primary),
                 output: parsed.output,
                 codec: parsed.codec,
-                resolution: parsed.resolution
+                resolution: parsed.resolution,
+                quality: parsed.quality
             )
 
         default:
@@ -212,6 +216,7 @@ public enum OpenRecordAutomationParser: Sendable {
         var output: URL
         var codec: VideoExportCodec?
         var resolution: ExportResolutionPreset?
+        var quality: VideoExportQualityPreset?
     }
 
     private static func parseExportLike(
@@ -223,6 +228,7 @@ public enum OpenRecordAutomationParser: Sendable {
         var output: String?
         var codec: VideoExportCodec?
         var resolution: ExportResolutionPreset?
+        var quality: VideoExportQualityPreset?
         var index = 0
 
         while index < arguments.count {
@@ -260,6 +266,17 @@ public enum OpenRecordAutomationParser: Sendable {
                 }
                 resolution = value
 
+            case "--quality":
+                index += 1
+                guard index < arguments.count,
+                      let value = VideoExportQualityPreset(rawValue: arguments[index].lowercased())
+                else {
+                    throw OpenRecordAutomationError.invalidArguments(
+                        "Invalid quality. Expected compact, balanced, or high.\n\n\(usage)"
+                    )
+                }
+                quality = value
+
             case let option where option.hasPrefix("--"):
                 throw OpenRecordAutomationError.invalidArguments(
                     "Unknown option '\(option)' for \(command).\n\n\(usage)"
@@ -283,7 +300,8 @@ public enum OpenRecordAutomationParser: Sendable {
             primary: positionals[0],
             output: projectURL(output),
             codec: codec,
-            resolution: resolution
+            resolution: resolution,
+            quality: quality
         )
     }
 
@@ -389,7 +407,8 @@ public struct OpenRecordAutomation: Sendable {
         project url: URL,
         output outputURL: URL,
         codec: VideoExportCodec? = nil,
-        resolution: ExportResolutionPreset? = nil
+        resolution: ExportResolutionPreset? = nil,
+        quality: VideoExportQualityPreset? = nil
     ) async throws {
         let projectURL = try requireBundleURL(url)
         let safeOutputURL = outputURL.standardizedFileURL
@@ -399,6 +418,7 @@ public struct OpenRecordAutomation: Sendable {
         var document = opened.document
         if let codec { document.videoExportSettings.codec = codec }
         if let resolution { document.videoExportSettings.resolution = resolution }
+        if let quality { document.videoExportSettings.quality = quality }
         try await Exporter(projectBundleURL: projectURL).export(
             project: document,
             url: safeOutputURL,
@@ -426,7 +446,8 @@ public struct OpenRecordAutomation: Sendable {
         folder folderURL: URL,
         output outputDirectoryURL: URL,
         codec: VideoExportCodec? = nil,
-        resolution: ExportResolutionPreset? = nil
+        resolution: ExportResolutionPreset? = nil,
+        quality: VideoExportQualityPreset? = nil
     ) async throws -> BatchResult {
         let folderURL = folderURL.standardizedFileURL
         let outputDirectoryURL = outputDirectoryURL.standardizedFileURL
@@ -457,7 +478,8 @@ public struct OpenRecordAutomation: Sendable {
                     project: projectURL,
                     output: destination,
                     codec: codec,
-                    resolution: resolution
+                    resolution: resolution,
+                    quality: quality
                 )
                 jobs.append(BatchJobResult(projectURL: projectURL, outputURL: destination, succeeded: true))
             } catch {
@@ -613,21 +635,23 @@ public enum OpenRecordAutomationCLI: Sendable {
                 let report = await automation.validate(project: project)
                 printReport(report, json: json)
                 return report.valid ? 0 : 2
-            case .export(let project, let output, let codec, let resolution):
+            case .export(let project, let output, let codec, let resolution, let quality):
                 try await automation.export(
                     project: project,
                     output: output,
                     codec: codec,
-                    resolution: resolution
+                    resolution: resolution,
+                    quality: quality
                 )
                 print("Exported \(output.path)")
                 return 0
-            case .batch(let folder, let output, let codec, let resolution):
+            case .batch(let folder, let output, let codec, let resolution, let quality):
                 let result = try await automation.batch(
                     folder: folder,
                     output: output,
                     codec: codec,
-                    resolution: resolution
+                    resolution: resolution,
+                    quality: quality
                 )
                 printReport(result, json: false)
                 return result.succeeded ? 0 : 1

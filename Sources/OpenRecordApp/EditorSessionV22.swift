@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 enum EditorExportKind: CaseIterable, Identifiable {
     case video
+    case sourceFootage
     case gif
     case audio
     case snapshot
@@ -13,7 +14,7 @@ enum EditorExportKind: CaseIterable, Identifiable {
 
     var contentType: UTType {
         switch self {
-        case .video: .mpeg4Movie
+        case .video, .sourceFootage: .mpeg4Movie
         case .gif: .gif
         case .audio: .mpeg4Audio
         case .snapshot: .png
@@ -22,7 +23,7 @@ enum EditorExportKind: CaseIterable, Identifiable {
 
     var fileExtension: String {
         switch self {
-        case .video: "mp4"
+        case .video, .sourceFootage: "mp4"
         case .gif: "gif"
         case .audio: "m4a"
         case .snapshot: "png"
@@ -32,6 +33,7 @@ enum EditorExportKind: CaseIterable, Identifiable {
     var panelTitle: String {
         switch self {
         case .video: "Export Video"
+        case .sourceFootage: "Fast Export"
         case .gif: "Export GIF"
         case .audio: "Export Audio"
         case .snapshot: "Export Snapshot"
@@ -41,6 +43,8 @@ enum EditorExportKind: CaseIterable, Identifiable {
     var message: String {
         switch self {
         case .video: "Renders the current trim, overlays, and canvas into an MP4."
+        case .sourceFootage:
+            "Copies the captured screen and webcam files without rendering zoom, canvas, or cursor."
         case .gif: "Renders the current trim and overlays into an animated GIF."
         case .audio: "Exports the mixed project audio for the current trim."
         case .snapshot: "Exports the current playhead frame as a PNG image."
@@ -271,6 +275,32 @@ extension EditorSession {
         body(&document.videoExportSettings)
         clampWebcamOverlayToCanvas()
         documentDidChange(from: before, actionName: "Change Export Settings")
+    }
+
+    var estimatedExportFileSizeString: String {
+        guard outputDuration > 0, sourceWidth > 0, sourceHeight > 0 else { return "--" }
+        let layout = ExportLayout.canvasLayout(
+            canvas: document.canvas,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight,
+            resolution: document.videoExportSettings.resolution
+        )
+        let resolvedFPS = document.videoExportSettings.frameRate.resolvedFPS(
+            sourceAverageFPS: 60
+        )
+        let bytes = VideoExportBitrateCalculator.estimatedFileSize(
+            duration: outputDuration,
+            width: layout.width,
+            height: layout.height,
+            fps: resolvedFPS,
+            codec: document.videoExportSettings.codec,
+            quality: document.videoExportSettings.quality,
+            hasAudio: hasMicrophoneAudio || hasSystemAudio
+        )
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
     }
 
     private func normalizedCaption(_ cue: CaptionCue) -> CaptionCue {

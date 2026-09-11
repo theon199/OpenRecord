@@ -16,15 +16,16 @@ func automationParserAcceptsCommands() throws {
     let export = try OpenRecordAutomationParser.parse(
         arguments: [
             "export", "demo.openrecord", "--output", "out.mov",
-            "--codec", "prores422", "--resolution", "4k"
+            "--codec", "prores422", "--resolution", "4k", "--quality", "compact"
         ]
     )
-    guard case .export(_, let output, let codec, let resolution) = export else {
+    guard case .export(_, let output, let codec, let resolution, let quality) = export else {
         throw OpenRecordError.io("export parser returned the wrong command")
     }
     #expect(output.lastPathComponent == "out.mov")
     #expect(codec == .proRes422)
     #expect(resolution == .p2160)
+    #expect(quality == .compact)
 }
 
 @Test("automation parser reports missing and invalid options")

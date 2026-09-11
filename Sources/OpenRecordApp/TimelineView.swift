@@ -4,6 +4,7 @@ import SwiftUI
 
 struct TimelineView: View {
     @Bindable var session: EditorSession
+    @State private var pinchBaseZoom: Double?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -38,6 +39,59 @@ struct TimelineView: View {
                     .background(.primary.opacity(0.06), in: Capsule())
 
                 Spacer()
+
+                HStack(spacing: 4) {
+                    Button {
+                        session.zoomOut()
+                    } label: {
+                        Image(systemName: "minus")
+                            .frame(width: 14, height: 14)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(session.timelineZoom <= 1.0)
+                    .help("Zoom Timeline Out (⌘-)")
+
+                    Slider(
+                        value: Binding(
+                            get: { session.timelineZoom },
+                            set: { session.setTimelineZoom($0) }
+                        ),
+                        in: 1.0...8.0
+                    )
+                    .frame(width: 76)
+                    .help("Timeline Zoom (1× – 8×)")
+
+                    Button {
+                        session.zoomIn()
+                    } label: {
+                        Image(systemName: "plus")
+                            .frame(width: 14, height: 14)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(session.timelineZoom >= 8.0)
+                    .help("Zoom Timeline In (⌘+)")
+
+                    Button {
+                        session.resetTimelineZoom()
+                    } label: {
+                        HStack(spacing: 2) {
+                            Image(systemName: "arrow.left.and.right.to.lines")
+                            Text("Fit")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(session.timelineZoom <= 1.0)
+                    .help("Fit Timeline to View (⌘0)")
+
+                    Text(String(format: "%.1f×", session.timelineZoom))
+                        .font(.system(.caption2, design: .monospaced).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 26, alignment: .trailing)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                 Menu("Add") {
                     Button("Zoom") { session.addZoomAtPlayhead() }
@@ -94,22 +148,55 @@ struct TimelineView: View {
             .controlSize(.small)
 
             GeometryReader { geo in
-                ScrollView(.horizontal) {
-                    let contentSize = CGSize(
-                        width: max(geo.size.width * session.timelineZoom, geo.size.width),
-                        height: geo.size.height
-                    )
-                    ZStack(alignment: .topLeading) {
-                        TimelineLanesView(session: session, size: contentSize)
-                        TimelinePlayheadNeedle(
-                            session: session,
-                            width: contentSize.width,
-                            height: contentSize.height
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        let contentSize = CGSize(
+                            width: max(geo.size.width * session.timelineZoom, geo.size.width),
+                            height: geo.size.height
                         )
+                        ZStack(alignment: .topLeading) {
+                            TimelineLanesView(session: session, size: contentSize)
+                            TimelinePlayheadNeedle(
+                                session: session,
+                                width: contentSize.width,
+                                height: contentSize.height
+                            )
+                            Color.clear
+                                .frame(width: 2, height: 2)
+                                .position(
+                                    x: CGFloat(session.playhead / max(session.timelineDuration, 0.001)) * contentSize.width,
+                                    y: contentSize.height / 2
+                                )
+                                .id("playheadAnchor")
+                        }
+                        .frame(width: contentSize.width, height: contentSize.height)
                     }
-                    .frame(width: contentSize.width, height: contentSize.height)
+                    .scrollIndicators(session.timelineZoom > 1.0 ? .visible : .hidden)
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { scale in
+                                let base = pinchBaseZoom ?? session.timelineZoom
+                                if pinchBaseZoom == nil {
+                                    pinchBaseZoom = base
+                                }
+                                session.setTimelineZoom(base * scale)
+                            }
+                            .onEnded { _ in
+                                pinchBaseZoom = nil
+                            }
+                    )
+                    .onChange(of: session.timelineZoom) { _, newZoom in
+                        if newZoom <= 1.0 {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                proxy.scrollTo("playheadAnchor", anchor: .leading)
+                            }
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                proxy.scrollTo("playheadAnchor", anchor: .center)
+                            }
+                        }
+                    }
                 }
-                .scrollIndicators(.hidden)
             }
             .frame(height: 164)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -223,7 +310,23 @@ private struct TimelineLanesView: View {
     }
 
     private func ticks(width: CGFloat, duration: TimeInterval) -> some View {
-        let step: TimeInterval = duration > 60 ? 10 : (duration > 20 ? 5 : 1)
+        let pps = width / max(duration, 0.001)
+        let step: TimeInterval
+        if pps >= 200 {
+            step = 0.5
+        } else if pps >= 80 {
+            step = 1.0
+        } else if pps >= 35 {
+            step = 2.0
+        } else if pps >= 15 {
+            step = 5.0
+        } else if pps >= 6 {
+            step = 10.0
+        } else if pps >= 2 {
+            step = 30.0
+        } else {
+            step = 60.0
+        }
         let count = Int(duration / step)
         return ZStack(alignment: .topLeading) {
             ForEach(0...max(count, 0), id: \.self) { index in
@@ -233,7 +336,7 @@ private struct TimelineLanesView: View {
                         .fill(Color.secondary.opacity(0.35))
                         .frame(width: 1, height: 7)
                         .offset(x: xPosition(time, width: width))
-                    Text(Timecode.compact(time))
+                    Text(step < 1.0 ? Timecode.string(time) : Timecode.compact(time))
                         .font(.system(size: 8))
                         .foregroundStyle(.tertiary)
                         .offset(x: xPosition(time, width: width) + 3, y: 8)

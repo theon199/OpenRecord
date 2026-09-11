@@ -100,11 +100,14 @@ struct OpenRecordApp: App {
                     .disabled(model.editor == nil)
 
                 Divider()
-                Button("Zoom Timeline In") { model.editor?.changeTimelineZoom(by: 1.25) }
+                Button("Zoom Timeline In") { model.editor?.zoomIn() }
                     .keyboardShortcut("+", modifiers: .command)
                     .disabled(model.editor == nil)
-                Button("Zoom Timeline Out") { model.editor?.changeTimelineZoom(by: 0.8) }
+                Button("Zoom Timeline Out") { model.editor?.zoomOut() }
                     .keyboardShortcut("-", modifiers: .command)
+                    .disabled(model.editor == nil)
+                Button("Zoom Timeline to Fit") { model.editor?.resetTimelineZoom() }
+                    .keyboardShortcut("0", modifiers: .command)
                     .disabled(model.editor == nil)
             }
             CommandGroup(after: .newItem) {
@@ -113,6 +116,14 @@ struct OpenRecordApp: App {
                 }
                 .keyboardShortcut("e")
                 .disabled(model.editor == nil)
+                Button("Fast Export…") {
+                    model.editor?.presentExportPanel(kind: .sourceFootage)
+                }
+                .disabled(
+                    model.editor == nil
+                        || model.editor?.exportProgress != nil
+                        || model.editor?.canExportSourceFootage != true
+                )
                 Button("Export Snapshot…") {
                     model.editor?.presentExportPanel(kind: .snapshot)
                 }

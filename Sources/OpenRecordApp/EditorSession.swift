@@ -351,9 +351,18 @@ final class EditorSession {
             session.lastErrorCategory = .telemetry
         }
         if let health = opened.meta.captureHealth, health.state == .recovered {
-            let recovery = health.warnings.map { "Capture recovery: \($0.rawValue)." }
+            let recovery = health.warnings
+                .filter { warning in
+                    switch warning {
+                    case .webcamDriftCorrected, .microphoneDriftCorrected, .systemAudioDriftCorrected:
+                        return false
+                    default:
+                        return true
+                    }
+                }
+                .map { "Capture recovery: \($0.rawValue)." }
             session.persistentWarnings.append(contentsOf: recovery)
-            if session.lastErrorCategory == .none {
+            if session.lastErrorCategory == .none, !recovery.isEmpty {
                 session.lastErrorCategory = .capture
             }
         }
@@ -428,6 +437,10 @@ final class EditorSession {
         webcamPlayer?.pause()
         previewAudio.shutdown()
         hasPreviewAudio = false
+    }
+
+    func dismissPersistentWarnings() {
+        persistentWarnings.removeAll()
     }
 
     func applyAutoZoomsAndSave(preserveExisting: Bool = false) async throws {
@@ -874,7 +887,12 @@ final class EditorSession {
         presentExportPanel(kind: .video)
     }
 
+    var canExportSourceFootage: Bool {
+        SourceFootageExport.isAvailable(for: document)
+    }
+
     func presentExportPanel(kind: EditorExportKind) {
+        if kind == .sourceFootage, !canExportSourceFootage { return }
         let panel = NSSavePanel()
         let isProRes = kind == .video && document.videoExportSettings.codec == .proRes422
         let contentType: UTType = isProRes ? .quickTimeMovie : kind.contentType
@@ -1064,6 +1082,25 @@ final class EditorSession {
                     url: url
                 )
                 exportProgress = syntheticExportProgress(fraction: 1, phase: .completed)
+            case .sourceFootage:
+                let result = try await exporter.exportSourceFootage(
+                    project: document,
+                    url: url
+                ) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self,
+                              self.exportGeneration == generation,
+                              self.exportProgress != nil
+                        else { return }
+                        self.exportProgress = self.syntheticExportProgress(
+                            fraction: progress,
+                            phase: progress >= 0.999 ? .completed : .rendering
+                        )
+                    }
+                }
+                if copyExportToLibrary, let webcamURL = result.webcamURL {
+                    try library.copyExport(from: webcamURL, to: library.rootURL)
+                }
             }
             try Task.checkCancellation()
             if copyExportToLibrary {

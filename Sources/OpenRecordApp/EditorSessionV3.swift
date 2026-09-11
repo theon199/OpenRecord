@@ -503,7 +503,24 @@ extension EditorSession {
 
     func changeTimelineZoom(by factor: Double) {
         guard factor.isFinite, factor > 0 else { return }
-        timelineZoom = min(max(timelineZoom * factor, 0.5), 8)
+        setTimelineZoom(timelineZoom * factor)
+    }
+
+    func setTimelineZoom(_ zoom: Double) {
+        guard zoom.isFinite else { return }
+        timelineZoom = min(max((zoom * 10).rounded() / 10, 1.0), 8.0)
+    }
+
+    func resetTimelineZoom() {
+        timelineZoom = 1.0
+    }
+
+    func zoomIn() {
+        changeTimelineZoom(by: 1.25)
+    }
+
+    func zoomOut() {
+        changeTimelineZoom(by: 0.8)
     }
 
     func splitSelectedTimelineItemsAtPlayhead() {

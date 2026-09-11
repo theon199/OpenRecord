@@ -184,7 +184,7 @@ public final class CaptureSession: @unchecked Sendable {
         catch { throw OpenRecordError.io("Could not list capture targets: \(error.localizedDescription)") }
         let ownIDs = Set([OpenRecordInfo.bundleIdentifier, Bundle.main.bundleIdentifier].compactMap { $0 })
         struct RawDisplay: Sendable { var id: UInt32; var width: Int; var height: Int }
-        struct RawWindow: Sendable { var id: UInt32; var title: String; var appName: String }
+        struct RawWindow: Sendable { var id: UInt32; var title: String; var appName: String; var bundleIdentifier: String }
         let rawDisplays = content.displays.map { RawDisplay(id: $0.displayID, width: $0.width, height: $0.height) }
         var rawWindows: [RawWindow] = []
         for window in content.windows {
@@ -192,7 +192,7 @@ public final class CaptureSession: @unchecked Sendable {
             let title = window.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let appName = app.applicationName.trimmingCharacters(in: .whitespacesAndNewlines)
             if title.isEmpty, appName.isEmpty { continue }
-            rawWindows.append(RawWindow(id: UInt32(window.windowID), title: title.isEmpty ? appName : title, appName: title.isEmpty ? "" : appName))
+            rawWindows.append(RawWindow(id: UInt32(window.windowID), title: title.isEmpty ? appName : title, appName: title.isEmpty ? "" : appName, bundleIdentifier: app.bundleIdentifier))
         }
         let windows = rawWindows
         return await MainActor.run {
@@ -206,7 +206,7 @@ public final class CaptureSession: @unchecked Sendable {
                 options.append(CaptureSourceOption(target: .display(id: display.id), title: name, subtitle: "\(display.width)×\(display.height)"))
             }
             for window in windows.sorted(by: { $0.appName == $1.appName ? $0.title.localizedStandardCompare($1.title) == .orderedAscending : $0.appName.localizedStandardCompare($1.appName) == .orderedAscending }) {
-                options.append(CaptureSourceOption(target: .window(id: window.id), title: window.title, subtitle: window.appName))
+                options.append(CaptureSourceOption(target: .window(id: window.id), title: window.title, subtitle: window.appName, bundleIdentifier: window.bundleIdentifier))
             }
             return options
         }
@@ -225,7 +225,18 @@ public struct CaptureSourceOption: Identifiable, Hashable, Sendable {
     public var target: CaptureTarget
     public var title: String
     public var subtitle: String
-    public init(target: CaptureTarget, title: String, subtitle: String = "") { self.target = target; self.title = title; self.subtitle = subtitle }
+    public var bundleIdentifier: String?
+    public init(
+        target: CaptureTarget,
+        title: String,
+        subtitle: String = "",
+        bundleIdentifier: String? = nil
+    ) {
+        self.target = target
+        self.title = title
+        self.subtitle = subtitle
+        self.bundleIdentifier = bundleIdentifier
+    }
     public var id: String { switch target { case .display(let id): return "display-\(id)"; case .window(let id): return "window-\(id)" } }
     public var isDisplay: Bool { if case .display = target { return true }; return false }
 }

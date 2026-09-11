@@ -124,6 +124,7 @@ public struct LocalDiagnosticsSnapshot: Sendable, Equatable {
 
         lines.append("export.codec=\(exportSettings.codec.rawValue)")
         lines.append("export.resolution=\(exportSettings.resolution.rawValue)")
+        lines.append("export.quality=\(exportSettings.quality.rawValue)")
         lines.append("lastErrorCategory=\(lastErrorCategory.rawValue)")
         renderedText = lines.joined(separator: "\n")
     }

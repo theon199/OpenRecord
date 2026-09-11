@@ -307,19 +307,89 @@ public enum ExportResolutionPreset: String, Codable, CaseIterable, Sendable, Has
     }
 }
 
+public enum VideoExportQualityPreset: String, Codable, CaseIterable, Sendable, Hashable {
+    case compact
+    case balanced
+    case high
+
+    public var title: String {
+        switch self {
+        case .compact: "Small File (Web)"
+        case .balanced: "Balanced"
+        case .high: "High Quality"
+        }
+    }
+}
+
+public enum VideoExportFrameRate: String, Codable, CaseIterable, Sendable, Hashable {
+    case auto = "auto"
+    case fps60 = "60"
+    case fps50 = "50"
+    case fps30 = "30"
+    case fps25 = "25"
+    case fps24 = "24"
+    case fps15 = "15"
+
+    public var title: String {
+        switch self {
+        case .auto: "Auto"
+        case .fps60: "60 fps"
+        case .fps50: "50 fps"
+        case .fps30: "30 fps"
+        case .fps25: "25 fps"
+        case .fps24: "24 fps"
+        case .fps15: "15 fps"
+        }
+    }
+
+    public func resolvedFPS(sourceAverageFPS: Double) -> Int32 {
+        switch self {
+        case .auto:
+            return ExportLayout.outputFrameRate(sourceAverageFPS: sourceAverageFPS)
+        case .fps60: return 60
+        case .fps50: return 50
+        case .fps30: return 30
+        case .fps25: return 25
+        case .fps24: return 24
+        case .fps15: return 15
+        }
+    }
+}
+
 public struct VideoExportSettings: Codable, Sendable, Hashable {
     public var codec: VideoExportCodec
     public var resolution: ExportResolutionPreset
+    public var quality: VideoExportQualityPreset
+    public var frameRate: VideoExportFrameRate
 
     public init(
         codec: VideoExportCodec = .h264,
-        resolution: ExportResolutionPreset = .p1080
+        resolution: ExportResolutionPreset = .p1080,
+        quality: VideoExportQualityPreset = .balanced,
+        frameRate: VideoExportFrameRate = .auto
     ) {
         self.codec = codec
         self.resolution = resolution
+        self.quality = quality
+        self.frameRate = frameRate
     }
 
     public static let `default` = VideoExportSettings()
+
+    private enum CodingKeys: String, CodingKey {
+        case codec
+        case resolution
+        case quality
+        case frameRate
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        codec = try container.decodeIfPresent(VideoExportCodec.self, forKey: .codec) ?? .h264
+        resolution = try container.decodeIfPresent(ExportResolutionPreset.self, forKey: .resolution) ?? .p1080
+        quality = try container.decodeIfPresent(VideoExportQualityPreset.self, forKey: .quality) ?? .balanced
+        frameRate = try container.decodeIfPresent(VideoExportFrameRate.self, forKey: .frameRate) ?? .auto
+    }
 }
 
 public extension RGBAColor {

@@ -10,6 +10,27 @@ struct EditorView: View {
     var body: some View {
         HSplitView {
             VStack(spacing: 0) {
+                if !session.persistentWarnings.isEmpty {
+                    HStack(alignment: .center, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text(session.persistentWarnings.joined(separator: " "))
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button {
+                            session.dismissPersistentWarnings()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Dismiss warning")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.yellow.opacity(0.12))
+                }
+
                 PreviewCanvas(session: session)
                     .padding(12)
                 Divider()
@@ -23,20 +44,6 @@ struct EditorView: View {
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 340)
         }
         .navigationTitle(session.title)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if !session.persistentWarnings.isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.yellow)
-                    Text(session.persistentWarnings.joined(separator: " "))
-                        .font(.callout)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.yellow.opacity(0.12))
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button("Library") {

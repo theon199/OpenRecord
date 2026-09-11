@@ -628,7 +628,8 @@ enum ExportWriterFactory {
         width: Int,
         height: Int,
         fps: Int32,
-        codec: VideoExportCodec = .h264
+        codec: VideoExportCodec = .h264,
+        quality: VideoExportQualityPreset = .balanced
     ) throws -> (AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor) {
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
@@ -645,20 +646,22 @@ enum ExportWriterFactory {
         }
         writer.shouldOptimizeForNetworkUse = codec != .proRes422
 
-        let bitRate = min(50_000_000, max(6_000_000, width * height * (fps >= 60 ? 12 : 8)))
+        let bitRate = VideoExportBitrateCalculator.averageBitRate(
+            width: width,
+            height: height,
+            fps: fps,
+            codec: codec,
+            quality: quality
+        )
         var compression: [String: Any] = [
             AVVideoExpectedSourceFrameRateKey: fps,
-            AVVideoMaxKeyFrameIntervalDurationKey: 2,
-            AVVideoAllowFrameReorderingKey: false,
+            AVVideoMaxKeyFrameIntervalDurationKey: 4,
+            AVVideoAllowFrameReorderingKey: true,
         ]
         if codec != .proRes422 {
-            compression[AVVideoAverageBitRateKey] = codec == .hevc
-                ? max(4_000_000, bitRate * 2 / 3)
-                : bitRate
+            compression[AVVideoAverageBitRateKey] = bitRate
             if codec == .h264 {
                 compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel
-            }
-            if codec == .h264 {
                 compression[AVVideoH264EntropyModeKey] = AVVideoH264EntropyModeCABAC
             }
         }

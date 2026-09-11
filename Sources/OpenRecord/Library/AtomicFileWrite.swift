@@ -313,6 +313,20 @@ private enum ProjectDocumentPersistence {
                 at: "videoExportSettings.resolution",
                 allowed: ["720p", "1080p", "4k", "source"]
             )
+            if let quality = exportSettings["quality"] {
+                check(
+                    quality,
+                    at: "videoExportSettings.quality",
+                    allowed: ["compact", "balanced", "high"]
+                )
+            }
+            if let frameRate = exportSettings["frameRate"] {
+                check(
+                    frameRate,
+                    at: "videoExportSettings.frameRate",
+                    allowed: ["auto", "60", "50", "30", "25", "24", "15"]
+                )
+            }
         }
         if let defaultCaptionStyle = root["defaultCaptionStyle"] as? [String: Any] {
             check(

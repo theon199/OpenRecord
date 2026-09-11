@@ -10,6 +10,7 @@ enum StabilizationContractSuite {
         try cursorSpritePlacementUsesBitmapPixels()
         try cursorAssetResolverRejectsEscapes()
         try targetVisibilityDoesNotBridgeActivity()
+        try overlappingForeignWindowDoesNotShowCursorOrZoom()
         try exportAudioOffsetsArePlacedAgainstVideo()
         try zoomInsertionRespectsTimelineGaps()
         try captureSessionStartsIdle()
@@ -167,6 +168,44 @@ enum StabilizationContractSuite {
         }
     }
 
+    static func overlappingForeignWindowDoesNotShowCursorOrZoom() throws {
+        let bounds = Rect2D(x: 0, y: 0, width: 400, height: 300)
+        let geometry = [TargetGeometrySample(t: 0, bounds: bounds)]
+        let samples = [
+            CursorSample(t: 0.2, x: 40, y: 40, visible: true),
+            CursorSample(t: 1.0, x: 160, y: 120, visible: false),
+            CursorSample(t: 1.4, x: 180, y: 130, visible: false),
+            CursorSample(t: 2.2, x: 60, y: 70, visible: true),
+        ]
+        let clicks = [
+            ClickSample(t: 1.1, button: .left, down: true),
+            ClickSample(t: 1.2, button: .left, down: false),
+        ]
+        let smoother = CursorSmoother(
+            samples: samples,
+            clicks: clicks,
+            displayBounds: bounds,
+            targetGeometry: geometry
+        )
+        guard smoother.interpolateIfVisible(at: 0.2) != nil,
+              smoother.interpolateIfVisible(at: 1.15) == nil,
+              !smoother.isClicking(at: 1.15)
+        else {
+            throw OpenRecordError.io("cursor remained visible or clicking while another window was in front")
+        }
+        let ranges = ZoomEngine.generateAutoZooms(
+            samples: samples,
+            clicks: clicks,
+            duration: 3,
+            displayBounds: bounds,
+            config: AutoZoomConfig(minActiveDuration: 0.01, minZoomHold: 0),
+            targetGeometry: geometry
+        )
+        guard ranges.allSatisfy({ $0.end <= 1.0 || $0.start >= 2.0 }) else {
+            throw OpenRecordError.io("clicks on another window were turned into an auto-zoom")
+        }
+    }
+
     static func exportAudioOffsetsArePlacedAgainstVideo() throws {
         guard ExportLayout.audioPlacement(
             trackOffset: 1,
@@ -301,6 +340,11 @@ func stabilizationCursorAssetsStayInsideBundle() throws {
 @Test
 func stabilizationTargetVisibilityAndAutoZoom() throws {
     try StabilizationContractSuite.targetVisibilityDoesNotBridgeActivity()
+}
+
+@Test
+func stabilizationOverlappingForeignWindowHidesCursor() throws {
+    try StabilizationContractSuite.overlappingForeignWindowDoesNotShowCursorOrZoom()
 }
 
 @Test

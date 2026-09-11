@@ -26,6 +26,7 @@ final class CursorMonitor: @unchecked Sendable {
     private var targetAvailable = true
     private var targetKind: CaptureTarget?
     private var targetVisible = false
+    private var occlusionWindows: [CaptureWindowSnapshot] = []
     private var pendingGeometry: TargetGeometrySample?
     private var pressedKeys: [UInt16: PressedKey] = [:]
     private(set) var closeWarnings = Set<CaptureWarningCode>()
@@ -56,6 +57,7 @@ final class CursorMonitor: @unchecked Sendable {
         targetBounds = initialBounds?.cgRect
         targetAvailable = initialBounds != nil || target == nil
         targetVisible = false
+        occlusionWindows = []
         pendingGeometry = initialBounds.map { TargetGeometrySample(t: 0, bounds: $0, available: true) }
         stateLock.unlock()
 
@@ -72,8 +74,9 @@ final class CursorMonitor: @unchecked Sendable {
         self.port = port
         self.runLoopSource = source
         if case .window = target {
+            pollWindowGeometry()
             let timer = DispatchSource.makeTimerSource(queue: geometryQueue)
-            timer.schedule(deadline: .now(), repeating: .milliseconds(33), leeway: .milliseconds(5))
+            timer.schedule(deadline: .now() + .milliseconds(33), repeating: .milliseconds(33), leeway: .milliseconds(5))
             timer.setEventHandler { [weak self] in self?.pollWindowGeometry() }
             geometryTimer = timer
             timer.resume()
@@ -311,25 +314,34 @@ final class CursorMonitor: @unchecked Sendable {
     }
 
     private func isInsideTargetLocked(_ location: CGPoint) -> Bool {
-        guard targetKind != nil else { return true }
-        return targetAvailable && (targetBounds?.contains(location) ?? false)
+        CapturePointerPolicy.isVisible(
+            location: location,
+            target: targetKind,
+            bounds: targetBounds,
+            available: targetAvailable,
+            windowsFrontToBack: occlusionWindows
+        )
     }
 
     private func pollWindowGeometry() {
         guard case .window(let windowID) = targetKind else { return }
-        let options: CGWindowListOption = [.optionIncludingWindow, .excludeDesktopElements]
-        let info = CGWindowListCopyWindowInfo(options, CGWindowID(windowID)) as? [[CFString: Any]]
-        var bounds: CGRect?
-        if let entry = info?.first(where: { ($0[kCGWindowNumber] as? NSNumber)?.uint32Value == windowID }),
-           (entry[kCGWindowIsOnscreen] as? NSNumber)?.boolValue == true,
-           let rawBounds = entry[kCGWindowBounds]
-        {
-            var rect = CGRect.zero
-            if CGRectMakeWithDictionaryRepresentation(rawBounds as! CFDictionary, &rect), rect.width > 1, rect.height > 1 { bounds = rect }
+        let info = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[CFString: Any]]
+        let snapshots = CaptureWindowList.snapshots(from: info)
+        var bounds = snapshots.first { $0.id == windowID && $0.onScreen }.flatMap { snapshot -> CGRect? in
+            guard snapshot.bounds.width > 1, snapshot.bounds.height > 1 else { return nil }
+            return snapshot.bounds.cgRect
+        }
+        if bounds == nil {
+            bounds = Self.windowBounds(for: windowID)
         }
         stateLock.lock()
         let changed = bounds != targetBounds || (bounds != nil) != targetAvailable
-        targetBounds = bounds; targetAvailable = bounds != nil
+        targetBounds = bounds
+        targetAvailable = bounds != nil
+        occlusionWindows = snapshots
         let start = recordingStart
         let t = max(0, start.map { CACurrentMediaTime() - $0 } ?? 0)
         let location = lastLocation
@@ -347,6 +359,20 @@ final class CursorMonitor: @unchecked Sendable {
         } else { targetWriter?.write(sample) }
         if bounds == nil { onTargetUnavailable?() }
         if oldVisible != newVisible, let location, start != nil { mouseWriter?.write(CursorSample(t: t, x: Double(location.x), y: Double(location.y), cursorId: CaptureMediaFormat.defaultCursorSpriteID, visible: newVisible)) }
+    }
+
+    private static func windowBounds(for windowID: UInt32) -> CGRect? {
+        let options: CGWindowListOption = [.optionIncludingWindow, .excludeDesktopElements]
+        let info = CGWindowListCopyWindowInfo(options, CGWindowID(windowID)) as? [[CFString: Any]]
+        guard let entry = info?.first(where: { ($0[kCGWindowNumber] as? NSNumber)?.uint32Value == windowID }),
+              (entry[kCGWindowIsOnscreen] as? NSNumber)?.boolValue == true,
+              let rawBounds = entry[kCGWindowBounds]
+        else { return nil }
+        var rect = CGRect.zero
+        if CGRectMakeWithDictionaryRepresentation(rawBounds as! CFDictionary, &rect), rect.width > 1, rect.height > 1 {
+            return rect
+        }
+        return nil
     }
 
     private static func button(type: CGEventType, event: CGEvent) -> MouseButton {

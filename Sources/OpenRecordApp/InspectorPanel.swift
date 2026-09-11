@@ -661,15 +661,48 @@ struct InspectorPanel: View {
             Section("Export") {
                 Toggle("Copy into library folder", isOn: $session.copyExportToLibrary)
                 Picker("Codec", selection: exportCodec) {
-                    Text("H.264").tag(VideoExportCodec.h264)
-                    Text("HEVC").tag(VideoExportCodec.hevc)
-                    Text("ProRes 422").tag(VideoExportCodec.proRes422)
+                    Text("H.264 (Universal)").tag(VideoExportCodec.h264)
+                    Text("HEVC (Smaller file)").tag(VideoExportCodec.hevc)
+                    Text("ProRes 422 (Editing)").tag(VideoExportCodec.proRes422)
                 }
                 Picker("Resolution", selection: exportResolution) {
                     Text("Source").tag(ExportResolutionPreset.source)
                     Text("720p").tag(ExportResolutionPreset.p720)
                     Text("1080p").tag(ExportResolutionPreset.p1080)
                     Text("4K").tag(ExportResolutionPreset.p2160)
+                }
+                Picker("Frame Rate", selection: exportFrameRate) {
+                    ForEach(VideoExportFrameRate.allCases, id: \.self) { rate in
+                        Text(rate.title).tag(rate)
+                    }
+                }
+                if exportCodec.wrappedValue != .proRes422 {
+                    Picker("Quality", selection: exportQuality) {
+                        Text(VideoExportQualityPreset.compact.title).tag(VideoExportQualityPreset.compact)
+                        Text(VideoExportQualityPreset.balanced.title).tag(VideoExportQualityPreset.balanced)
+                        Text(VideoExportQualityPreset.high.title).tag(VideoExportQualityPreset.high)
+                    }
+                }
+                HStack {
+                    Text("Estimated Size")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(session.estimatedExportFileSizeString)
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                if session.canExportSourceFootage {
+                    Button("Fast Export…") {
+                        session.presentExportPanel(kind: .sourceFootage)
+                    }
+                    .disabled(session.exportProgress != nil)
+                    Text(
+                        session.hasWebcamVideo
+                            ? "Copies the captured screen and writes a -webcam.mp4 sidecar. Skips canvas, cursor, and zoom."
+                            : "Copies the captured screen file without re-rendering canvas, cursor, or zoom."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 Button("Export Video…") {
                     session.presentExportPanel(kind: .video)
@@ -967,6 +1000,20 @@ struct InspectorPanel: View {
         Binding(
             get: { session.document.videoExportSettings.resolution },
             set: { value in session.updateVideoExportSettings { $0.resolution = value } }
+        )
+    }
+
+    private var exportFrameRate: Binding<VideoExportFrameRate> {
+        Binding(
+            get: { session.document.videoExportSettings.frameRate },
+            set: { value in session.updateVideoExportSettings { $0.frameRate = value } }
+        )
+    }
+
+    private var exportQuality: Binding<VideoExportQualityPreset> {
+        Binding(
+            get: { session.document.videoExportSettings.quality },
+            set: { value in session.updateVideoExportSettings { $0.quality = value } }
         )
     }
 

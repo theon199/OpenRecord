@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import OpenRecord
+@preconcurrency import ScreenCaptureKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -55,6 +56,8 @@ final class AppModel {
     var isSettingsPresented = false
     var captureSources: [CaptureSourceOption] = []
     var selectedSourceID: String?
+    var captureSourceThumbnails: [String: NSImage] = [:]
+    var captureSourceIcons: [String: NSImage] = [:]
     var countdownRemaining: Int?
     var isRecording = false
     var recordedDuration: TimeInterval = 0
@@ -125,6 +128,7 @@ final class AppModel {
     private var pendingDegradedOpen: PendingDegradedOpen?
     private var pendingEditorTransition: PendingEditorTransition?
     private var thumbnailTask: Task<Void, Never>?
+    private var sourcePreviewTask: Task<Void, Never>?
     private static let capturesKeyboardShortcutsDefaultsKey =
         "OpenRecord.capturesKeyboardShortcuts"
     private static let capturesWebcamDefaultsKey = "OpenRecord.capturesWebcam"
@@ -713,15 +717,50 @@ final class AppModel {
     func reloadCaptureSources() async {
         isLoadingSources = true
         defer { isLoadingSources = false }
+        sourcePreviewTask?.cancel()
         do {
             let sources = try await CaptureSession.availableTargets()
             captureSources = sources
+            captureSourceThumbnails = [:]
+            captureSourceIcons = Self.icons(for: sources)
             if selectedSourceID == nil || !sources.contains(where: { $0.id == selectedSourceID }) {
                 selectedSourceID = sources.first?.id
+            }
+            sourcePreviewTask = Task { [weak self] in
+                await self?.loadCaptureSourceThumbnails(sources)
             }
         } catch {
             reportError(error.localizedDescription, category: .capture)
         }
+    }
+
+    private func loadCaptureSourceThumbnails(_ sources: [CaptureSourceOption]) async {
+        guard !sources.isEmpty else { return }
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        } catch {
+            return
+        }
+        for source in sources {
+            if Task.isCancelled { return }
+            if let image = await CaptureSourceThumbnail.image(for: source.target, content: content) {
+                captureSourceThumbnails[source.id] = image
+            }
+        }
+    }
+
+    private static func icons(for sources: [CaptureSourceOption]) -> [String: NSImage] {
+        var icons: [String: NSImage] = [:]
+        for source in sources {
+            guard let bundleID = source.bundleIdentifier, !bundleID.isEmpty else { continue }
+            if let icon = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.icon {
+                icons[source.id] = icon
+            } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                icons[source.id] = NSWorkspace.shared.icon(forFile: url.path)
+            }
+        }
+        return icons
     }
 
     func startCountdownAndRecord() async {
@@ -731,6 +770,7 @@ final class AppModel {
             reportError("Pick a display or window to record.", category: .capture)
             return
         }
+        sourcePreviewTask?.cancel()
 
         countdownTask = Task { @MainActor in
             isMicrophoneMuted = false

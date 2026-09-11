@@ -204,7 +204,7 @@ private enum ExportSession {
             )
         }
 
-        let fps = ExportLayout.outputFrameRate(
+        let fps = project.videoExportSettings.frameRate.resolvedFPS(
             sourceAverageFPS: await ExportMediaIO.sourceAverageFPS(track: videoTrack)
         )
         let frameCount = max(1, Int((timeMapper.outputDuration * Double(fps)).rounded(.down)))
@@ -372,7 +372,8 @@ private enum ExportSession {
                 width: layout.width,
                 height: layout.height,
                 fps: fps,
-                codec: project.videoExportSettings.codec
+                codec: project.videoExportSettings.codec,
+                quality: project.videoExportSettings.quality
             )
         } catch {
             throw ExportFailure(stage: .videoEncoding, detail: error.localizedDescription)

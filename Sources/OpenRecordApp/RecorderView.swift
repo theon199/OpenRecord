@@ -5,6 +5,10 @@ struct RecorderView: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
+    private var isPickingSource: Bool {
+        model.countdownRemaining == nil && !model.isRecording
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
@@ -18,7 +22,7 @@ struct RecorderView: View {
             controls
         }
         .padding(22)
-        .frame(width: 400)
+        .frame(width: isPickingSource ? 720 : 400)
         .interactiveDismissDisabled(model.isRecording || model.countdownRemaining != nil)
         .task {
             await model.reloadCaptureSources()
@@ -99,27 +103,9 @@ struct RecorderView: View {
                         ProgressView()
                         Spacer()
                     }
-                    .frame(minHeight: 160)
+                    .frame(minHeight: 240)
                 } else {
-                    List(selection: $model.selectedSourceID) {
-                        if !model.displaySources.isEmpty {
-                            Section("Displays") {
-                                ForEach(model.displaySources) { source in
-                                    sourceRow(source)
-                                }
-                            }
-                        }
-                        if !model.windowSources.isEmpty {
-                            Section("Windows") {
-                                ForEach(model.windowSources) { source in
-                                    sourceRow(source)
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.inset)
-                    .frame(minHeight: 200, maxHeight: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    sourceOverview
                 }
             }
 
@@ -154,18 +140,104 @@ struct RecorderView: View {
         }
     }
 
-    private func sourceRow(_ source: CaptureSourceOption) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(source.title)
-                .lineLimit(1)
-            if !source.subtitle.isEmpty {
-                Text(source.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+    private var sourceOverview: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if !model.displaySources.isEmpty {
+                    sourceSection(title: "Displays", sources: model.displaySources)
+                }
+                if !model.windowSources.isEmpty {
+                    sourceSection(title: "Windows", sources: model.windowSources)
+                }
+            }
+            .padding(10)
+        }
+        .frame(minHeight: 280, maxHeight: 420)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func sourceSection(title: String, sources: [CaptureSourceOption]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 168), spacing: 10)],
+                spacing: 10
+            ) {
+                ForEach(sources) { source in
+                    sourceCard(source)
+                }
             }
         }
-        .tag(source.id)
+    }
+
+    private func sourceCard(_ source: CaptureSourceOption) -> some View {
+        let selected = model.selectedSourceID == source.id
+        return Button {
+            model.selectedSourceID = source.id
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                sourcePreview(source, selected: selected)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(source.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if !source.subtitle.isEmpty {
+                        Text(source.subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityLabel(source.subtitle.isEmpty ? source.title : "\(source.title), \(source.subtitle)")
+    }
+
+    private func sourcePreview(_ source: CaptureSourceOption, selected: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.black.opacity(0.18))
+            if let thumbnail = model.captureSourceThumbnails[source.id] {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let icon = model.captureSourceIcons[source.id] {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 42, height: 42)
+            } else {
+                Image(systemName: source.isDisplay ? "display" : "macwindow")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(height: 108)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(alignment: .bottomLeading) {
+            if let icon = model.captureSourceIcons[source.id],
+               model.captureSourceThumbnails[source.id] != nil {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 18, height: 18)
+                    .padding(6)
+                    .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.12), lineWidth: selected ? 3 : 1)
+        }
     }
 
     private var controls: some View {
