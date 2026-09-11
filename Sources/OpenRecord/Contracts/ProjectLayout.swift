@@ -26,6 +26,9 @@ public enum ProjectLayout: Sendable {
     public static let keysFileName = "keys.jsonl"
     public static let typingFileName = "typing.jsonl"
     public static let targetGeometryFileName = "target.jsonl"
+    /// Optional privacy-filtered AX/UI semantics. Kept separate from the
+    /// legacy target-geometry stream so v1-v7 readers remain compatible.
+    public static let semanticTargetsFileName = "semantic-targets.jsonl"
     public static let cursorsDirectoryName = "cursors"
 
     public static func metaURL(in projectURL: URL) -> URL {
@@ -136,6 +139,11 @@ public enum ProjectLayout: Sendable {
     public static func targetGeometryURL(in projectURL: URL) -> URL {
         recordingDirectory(in: projectURL)
             .appendingPathComponent(targetGeometryFileName, isDirectory: false)
+    }
+
+    public static func semanticTargetsURL(in projectURL: URL) -> URL {
+        recordingDirectory(in: projectURL)
+            .appendingPathComponent(semanticTargetsFileName, isDirectory: false)
     }
 
     public static func cursorsDirectory(in projectURL: URL) -> URL {

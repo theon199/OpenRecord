@@ -144,6 +144,13 @@ struct RecorderView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            Toggle("Record semantic UI interactions", isOn: $model.capturesSemanticTargets)
+                .toggleStyle(.switch)
+            Text("Optional privacy-filtered UI semantics make the ActionMap searchable. Control labels are filtered; ordinary typing and secure values are omitted. The story-beat marker is ⌃⌥⌘M while recording.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Toggle("Record microphone", isOn: $model.capturesMicrophone)
                 .toggleStyle(.switch)
             Text("Adds a local microphone track. Microphone permission is requested only when this is enabled and you start recording.")

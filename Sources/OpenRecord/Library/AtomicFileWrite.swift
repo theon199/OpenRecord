@@ -214,14 +214,14 @@ private enum ProjectDocumentPersistence {
             var existingByID: [String: [String: Any]] = [:]
             for case let item as [String: Any] in oldArray {
                 if let id = item["id"] as? String {
-                    existingByID[id] = item
+                    existingByID[stableIDKey(id)] = item
                 }
             }
             guard !existingByID.isEmpty else { return newArray }
             return newArray.map { newItem in
                 guard let object = newItem as? [String: Any],
                       let id = object["id"] as? String,
-                      let oldObject = existingByID[id]
+                      let oldObject = existingByID[stableIDKey(id)]
                 else {
                     return newItem
                 }
@@ -234,6 +234,13 @@ private enum ProjectDocumentPersistence {
         }
 
         return replacement
+    }
+
+    /// Foundation encodes UUID strings using uppercase hex even when the
+    /// existing JSON used lowercase. Treat equivalent UUID spellings as the
+    /// same stable identity so nested future fields survive the replacement.
+    private static func stableIDKey(_ raw: String) -> String {
+        UUID(uuidString: raw)?.uuidString.lowercased() ?? raw
     }
 
     private static func unsupportedEnumValues(in root: [String: Any]) -> [String] {
@@ -382,6 +389,40 @@ private enum ProjectDocumentPersistence {
                     at: "drawings[\(index)].tool",
                     allowed: ["pen", "highlighter"]
                 )
+            }
+        }
+        if let rawStoryBeats = root["storyBeats"] {
+            guard let storyBeats = rawStoryBeats as? [Any] else {
+                issues.append("storyBeats=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawStoryBeat) in storyBeats.enumerated() {
+                guard let storyBeat = rawStoryBeat as? [String: Any] else {
+                    issues.append("storyBeats[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "storyBeats[\(index)]"
+                if let id = storyBeat["id"] as? String, UUID(uuidString: id) != nil {
+                    // Stable identity is required for nested-field preservation.
+                } else {
+                    issues.append("\(prefix).id=<missing-or-invalid>")
+                }
+                for field in ["start", "end"] {
+                    guard finiteNumber(storyBeat[field]) else {
+                        issues.append("\(prefix).\(field)=<missing-or-non-number>")
+                        continue
+                    }
+                }
+                if let kind = storyBeat["kind"] as? String {
+                    check(kind, at: "\(prefix).kind", allowed: ["action", "chapter", "step", "marker"])
+                } else {
+                    issues.append("\(prefix).kind=<missing-or-non-string>")
+                }
+                if !(storyBeat["title"] is String) {
+                    issues.append("\(prefix).title=<missing-or-non-string>")
+                }
+                checkRequiredBool(storyBeat, "isLocked", at: "\(prefix).isLocked")
+                checkRequiredBool(storyBeat, "isSuppressed", at: "\(prefix).isSuppressed")
             }
         }
         if let rawDecisions = root["editDecisions"] {

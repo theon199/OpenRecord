@@ -315,6 +315,12 @@ public extension ProjectDocument {
         value.drawings = drawings.sorted(by: timelineRangeOrder).compactMap {
             normalizedDrawing($0, sourceDuration: duration)
         }
+        value.storyBeats = storyBeats.sorted(by: timelineRangeOrder).map {
+            var storyBeat = $0.normalized
+            storyBeat.start = min(max(storyBeat.start, 0), duration)
+            storyBeat.end = min(max(storyBeat.end, storyBeat.start), duration)
+            return storyBeat
+        }
         value.editDecisions = ProjectTimeMapper.normalizedDecisions(
             editDecisions,
             sourceDuration: duration
@@ -461,6 +467,10 @@ public extension ProjectDocument {
     }
 
     private func timelineRangeOrder(_ lhs: Annotation, _ rhs: Annotation) -> Bool {
+        timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
+    }
+
+    private func timelineRangeOrder(_ lhs: StoryBeat, _ rhs: StoryBeat) -> Bool {
         timelineRangeOrder(lhs.start, lhs.id, rhs.start, rhs.id)
     }
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.1.0 — 2026-09-11
+
+### Added
+
+- Optional privacy-filtered Accessibility capture in a separate semantic event stream, with precise recording-time story-beat markers and explicit degradation reasons.
+- A deterministic, fully local ActionMap analyzer correlating semantic targets, clicks, cursor behavior, shortcuts, privacy-safe typing activity, window geometry, optional Vision evidence, and transcript timing.
+- An ActionMap editor rail with search, cut/speed-aware source seeking, confidence and evidence details, durable action corrections, and chapter/step/zoom/annotation conversions.
+- Project format v8 `storyBeats`, v1–v8 migration coverage, and atomic preservation of nested future fields while keeping inferred analysis removable and rebuildable.
+
+### Privacy
+
+- Semantic capture never queries or persists control values, selected text, secure-field contents, ordinary typed characters, or window titles. Approved labels pass a bounded static-control allowlist and private-pattern filter.
+
 ## 3.2.1 — 2026-08-26
 
 ### Fixed

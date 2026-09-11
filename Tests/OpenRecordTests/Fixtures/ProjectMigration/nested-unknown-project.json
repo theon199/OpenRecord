@@ -55,5 +55,20 @@
       "kind" : "exclude",
       "start" : 5
     }
+  ],
+  "storyBeats" : [
+    {
+      "id" : "abababab-7777-7777-7777-777777777777",
+      "start" : 8,
+      "end" : 9,
+      "kind" : "action",
+      "title" : "Original action",
+      "evidenceIDs" : [ "action-legacy-1" ],
+      "isLocked" : false,
+      "isSuppressed" : false,
+      "futurePresentation" : {
+        "color" : "indigo"
+      }
+    }
   ]
 }

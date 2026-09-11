@@ -6,6 +6,7 @@ struct EditorView: View {
     @Bindable var model: AppModel
     @Bindable var session: EditorSession
     @State private var showingTranscript = false
+    @State private var showingActionMap = false
 
     var body: some View {
         HSplitView {
@@ -78,6 +79,32 @@ struct EditorView: View {
                 .popover(isPresented: $showingTranscript, arrowEdge: .bottom) {
                     TranscriptPanel(session: session)
                         .frame(width: 340, height: 420)
+                }
+                Button {
+                    showingActionMap.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        if session.actionMapStatus == .loading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "point.3.connected.trianglepath.dotted")
+                        }
+                        Text("ActionMap")
+                        if !session.actionMapRows.isEmpty {
+                            Text("\(session.actionMapRows.count)")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
+                }
+                .help("Search and edit local ActionMap actions")
+                .accessibilityLabel("ActionMap")
+                .popover(isPresented: $showingActionMap, arrowEdge: .bottom) {
+                    ActionMapPanel(session: session)
+                        .frame(width: 420, height: 620)
                 }
                 Button("Export…") {
                     session.presentExportPanel()

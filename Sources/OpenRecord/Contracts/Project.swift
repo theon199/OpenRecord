@@ -810,12 +810,14 @@ public struct AudioCleanupSettings: Codable, Sendable, Hashable {
 }
 
 public struct ProjectDocument: Codable, Sendable, Hashable {
-    /// v7 adds v3.2 project-template provenance and portable default styles.
+    /// v8 adds compact authored ActionMap story beats. Rebuildable action and
+    /// OCR evidence remains in the optional `analysis/` sidecars.
+    /// v7 added v3.2 project-template provenance and portable default styles.
     /// v6 added the v3.1 visual stack: redaction, freehand drawing, richer
     /// annotations, device framing, and expanded webcam/audio styling.
     /// Older documents remain
     /// readable and are upgraded when they are first saved.
-    public static let currentFormatVersion = 7
+    public static let currentFormatVersion = 8
 
     public var formatVersion: Int
     public var trimIn: TimeInterval
@@ -850,6 +852,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     /// Portable defaults used for items created after a template is applied.
     public var defaultCaptionStyle: CaptionStyle
     public var defaultAnnotationStyle: AnnotationStylePreset?
+    public var storyBeats: [StoryBeat]
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -878,7 +881,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         appliedPresetIDs: [String] = [],
         projectTemplateID: String? = nil,
         defaultCaptionStyle: CaptionStyle = .default,
-        defaultAnnotationStyle: AnnotationStylePreset? = nil
+        defaultAnnotationStyle: AnnotationStylePreset? = nil,
+        storyBeats: [StoryBeat] = []
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -907,6 +911,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.projectTemplateID = projectTemplateID
         self.defaultCaptionStyle = defaultCaptionStyle
         self.defaultAnnotationStyle = defaultAnnotationStyle
+        self.storyBeats = storyBeats
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -937,6 +942,7 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case projectTemplateID
         case defaultCaptionStyle
         case defaultAnnotationStyle
+        case storyBeats
     }
 
     private struct AnyCodingKey: CodingKey {
@@ -1059,6 +1065,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             AnnotationStylePreset.self,
             forKey: .defaultAnnotationStyle
         )
+        storyBeats = (try? container.decode(
+            [LossyDecodable<StoryBeat>].self,
+            forKey: .storyBeats
+        ))?.compactMap(\.value) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1092,6 +1102,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encodeIfPresent(projectTemplateID, forKey: .projectTemplateID)
         try container.encode(defaultCaptionStyle, forKey: .defaultCaptionStyle)
         try container.encodeIfPresent(defaultAnnotationStyle, forKey: .defaultAnnotationStyle)
+        if !storyBeats.isEmpty {
+            try container.encode(storyBeats, forKey: .storyBeats)
+        }
     }
 
     /// Opening a legacy project is read-only. Supported write paths call this
@@ -1120,6 +1133,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             value.projectTemplateID = nil
         }
         value.defaultCaptionStyle = value.defaultCaptionStyle.normalized
+        value.storyBeats = value.storyBeats.map(\.normalized).sorted {
+            if $0.start != $1.start { return $0.start < $1.start }
+            return $0.id.uuidString < $1.id.uuidString
+        }
         value.speedSegments = SpeedTimeline.normalizedSegments(value.speedSegments)
         value.audioCleanup = value.audioCleanup.normalized
         value.captions = value.captions.map(\.normalized).sorted {

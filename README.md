@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional keyboard shortcuts, and an optional webcam track. It can also import MP4/MOV/M4V recordings from an iPhone or other device without changing the original. After capture or import, it can transcribe recorded audio on device, suggest pause cuts and smart auto-zooms, edit through multiple non-destructive cuts, apply portable project templates, and export polished video, GIF, audio, or still-image deliverables.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional privacy-filtered semantic controls and keyboard shortcuts, and an optional webcam track. It can also import MP4/MOV/M4V recordings from an iPhone or other device without changing the original. After capture or import, it can build a private local ActionMap, transcribe recorded audio on device, suggest pause cuts and smart auto-zooms, edit through multiple non-destructive cuts, apply portable project templates, and export polished video, GIF, audio, or still-image deliverables.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -52,6 +52,7 @@ The first-run screen has **Open Settings** / **Request Remaining**. After flippi
 - **Import Movie** adds an MP4, MOV, or M4V—including a recording copied from an iPhone or external capture device—as an ordinary portable project. Desktop capture remains on its independent, hardened ScreenCaptureKit path.
 - Pick **None**, **Tutorial**, **Portrait Demo**, or a local project template before recording. Template files contain presentation defaults only, never recorded media.
 - **Record keyboard shortcuts** adds shortcut chords and navigation keys to a separate overlay track. Ordinary unmodified typing and all input while macOS Secure Input is active are omitted.
+- **Capture semantic controls** optionally records sanitized Accessibility roles, approved static-control labels, bounds, and explicit degradation reasons. Element values, secure-field content, ordinary typing, and window titles are never recorded. Use **⌃⌥⌘M** while recording to add a precise story-beat marker.
 - Stop with **⌃⌥⌘R** or the Stop button. OpenRecord then writes the project and generates auto-zooms from cursor activity.
 
 ## Library folder
@@ -68,7 +69,7 @@ Open a project from the sidebar.
 
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
 - **Timeline**: playhead, trim/cut decisions, zoom and speed blocks, captions, annotations, cursor treatments, privacy regions, and vector drawings. Compatible items support multi-select, copy/paste, duplicate, snapping, split, nudge, and grouped undo.
-- **Transcript**: on-device mic/system transcription, search, phrase navigation/range selection, caption generation, non-destructive text cuts, and locally analyzed pause suggestions.
+- **Transcript and ActionMap**: on-device mic/system transcription plus a local, searchable map of clicks, shortcuts, privacy-safe typing activity, semantic controls, and story markers. Action rows seek in source time across cuts and speed changes, expose confidence/evidence, support durable rename/merge/split/suppress/lock corrections, and convert to chapters, steps, zooms, or annotations.
 - **Inspector**: smart zoom/cursor styling, captions and richer annotations, blur/pixelate privacy regions, pen/highlighter drawing, generic laptop/phone/browser frames, expanded webcam styling, keyboard overlays, and local audio normalization/compression/limiting/fades.
 
 **Export Video…** (⌘E) renders the **in-memory** document — not a stale re-read from disk. Choose H.264 or HEVC in MP4, or ProRes 422 in MOV, at 720p, 1080p, 4K, or source-sized resolution. Output is Rec.709 and 60 fps if the source averages ≥ 45 fps, otherwise 30 fps. Speed regions remap every visual and telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
@@ -92,7 +93,7 @@ swift run openrecord-cli batch ./Projects --output ./Exports --codec hevc
 
 Batch discovery is deterministic and top-level only. It continues after a failed project and exits nonzero when any job fails.
 
-The versioned schema overview is documented in [`docs/PROJECT_FORMAT_V7.md`](docs/PROJECT_FORMAT_V7.md), with migration policy in [`docs/V3_MIGRATION.md`](docs/V3_MIGRATION.md).
+The current schema overview is documented in [`docs/PROJECT_FORMAT_V8.md`](docs/PROJECT_FORMAT_V8.md), with migration policy in [`docs/V4_MIGRATION.md`](docs/V4_MIGRATION.md).
 
 ### Direct manipulation, parity, and recovery
 
@@ -126,7 +127,11 @@ Each recording is a folder package:
 ```
 <name>.openrecord/
   meta.json                 # capture target/timing/health and optional webcam device metadata
-  project.json              # format v7: edits, transcript, visual stack, templates/defaults, and export settings
+  project.json              # format v8: edits plus compact authored ActionMap story beats
+  analysis/                 # optional, rebuildable local analysis cache
+    manifest.json
+    actions.jsonl           # inferred actions with stable evidence references
+    ocr.jsonl               # optional privacy-filtered Vision evidence
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     webcam.mp4              # optional H.264 face-camera track
@@ -136,6 +141,7 @@ Each recording is a folder package:
     clicks.jsonl            # { t, button, down }
     keys.jsonl              # optional { t, key, modifiers, down } shortcut events
     target.jsonl            # optional timestamped target bounds for moving/resizing windows
+    semantic-targets.jsonl  # optional sanitized control events and story-beat markers
     thumb.jpg               # representative library thumbnail
     cursors/                # sprite PNGs + hotspot in project.json
 ```
@@ -143,7 +149,7 @@ Each recording is a folder package:
 Coordinates are **points** (Quartz, origin top-left of the main display). Cursor samples may include `visible: false` while the pointer is outside the captured target. New window recordings use `target.jsonl` to map global cursor points through the window bounds at each timestamp; older projects fall back to `meta.json` bounds. Video pixels = points × backing `scale`. Export and preview use **timestamps**, not frame indexes (capture is often VFR).
 
 Opening an older supported project is read-only until the first save, which migrates a
-copy of every supported field to the current format-v7 schema. Projects with a newer
+copy of every supported field to the current format-v8 schema. Projects with a newer
 format version, or unknown top-level fields in the current format, are rejected
 with an update-required error instead of risking silent data loss. Legacy pre-v7
 files with unknown top-level fields may open read-only, but cannot be migrated
@@ -157,4 +163,4 @@ atomic replacement.
 
 ## Out of scope
 
-No cloud-required speech service, automatic sensitive-content detection, arbitrary animation curves, webcam background removal, live iPhone capture, hosted share links, collaboration accounts, advanced DAW/NLE tooling, or in-app OAuth yet. v3.2 supports the safer import-oriented iPhone/device workflow instead of coupling live device capture to desktop recording.
+No cloud-required speech service, automatic sensitive-content detection, arbitrary animation curves, webcam background removal, live iPhone capture, hosted share links, collaboration accounts, advanced DAW/NLE tooling, or in-app OAuth yet. OpenRecord supports the safer import-oriented iPhone/device workflow instead of coupling live device capture to desktop recording.

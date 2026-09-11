@@ -1,6 +1,6 @@
 # Migration schema fixtures
 
-The v1 through v7 `.openrecord` directories are deterministic document-schema
+The v1 through v8 `.openrecord` directories are deterministic document-schema
 fixtures. They retain the transparent bundle shape while intentionally omitting
 large captured media; media discovery and complete bundle layout are covered by
 `ProjectLibraryTests`, while these fixtures isolate JSON migration and save
@@ -13,3 +13,4 @@ and preset provenance. The v6 fixture adds redaction, vector drawing, richer
 annotation animation, device-frame, webcam styling, and audio-polish fields.
 The v7 fixture adds project-template provenance and portable caption/annotation
 defaults used for newly created timed items.
+The v8 fixture adds compact authored story beats referencing rebuildable ActionMap evidence.

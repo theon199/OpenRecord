@@ -116,6 +116,29 @@ struct OpenRecordApp: App {
                     .keyboardShortcut("0", modifiers: .command)
                     .disabled(model.editor == nil)
             }
+            CommandMenu("ActionMap") {
+                Button("Build / Rebuild ActionMap") {
+                    model.editor?.rebuildActionMap()
+                }
+                .disabled(model.editor == nil || model.editor?.isAnalysisCancellable == true)
+
+                Button("Merge Selected Actions") {
+                    model.editor?.mergeSelectedActions()
+                }
+                .disabled(model.editor?.selectedActionMapRows.count ?? 0 < 2)
+                Button("Split Selected Action") {
+                    model.editor?.splitSelectedAction()
+                }
+                .disabled(model.editor?.selectedActionMapRows.count != 1)
+                Button("Lock Selected Actions") {
+                    model.editor?.setSelectedActionsLocked(true)
+                }
+                .disabled(model.editor?.selectedActionMapRows.isEmpty != false)
+                Button("Suppress Selected Actions") {
+                    model.editor?.setSelectedActionsSuppressed(true)
+                }
+                .disabled(model.editor?.selectedActionMapRows.isEmpty != false)
+            }
             CommandGroup(after: .newItem) {
                 Button("Export…") {
                     model.editor?.presentExportPanel()

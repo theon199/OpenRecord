@@ -157,6 +157,21 @@ enum ProjectMigrationFixtureTests {
             else {
                 throw OpenRecordError.io("The v7 fixture lost v3.2 project-template defaults")
             }
+        case 8:
+            guard document.storyBeats.count == 1,
+                  document.storyBeats[0].id
+                    == UUID(uuidString: "12121212-3434-5656-7878-909090909090"),
+                  document.storyBeats[0].start == 12.42,
+                  document.storyBeats[0].end == 13.2,
+                  document.storyBeats[0].kind == .chapter,
+                  document.storyBeats[0].title == "Save settings",
+                  document.storyBeats[0].isLocked,
+                  !document.storyBeats[0].isSuppressed,
+                  document.storyBeats[0].evidenceIDs.map(\.rawValue)
+                    == ["semantic-save-button", "click-42"]
+            else {
+                throw OpenRecordError.io("The v8 fixture lost authored ActionMap story beats")
+            }
         default:
             throw OpenRecordError.io("Unexpected migration fixture version \(version)")
         }
@@ -340,6 +355,7 @@ enum ProjectMigrationFixtureTests {
         document.webcamOverlay.size = 0.3
         document.captions[0].text = "Edited known caption field"
         document.editDecisions[0].end = 7.5
+        document.storyBeats[0].title = "Edited known story beat"
         try library.save(document: document, to: projectURL)
 
         let savedData = try Data(contentsOf: documentURL)
@@ -357,7 +373,12 @@ enum ProjectMigrationFixtureTests {
               let firstDecision = decisions.first,
               let futureReason = firstDecision["futureReason"] as? [String: Any],
               futureReason["source"] as? String == "pause-analysis",
-              firstDecision["end"] as? Double == 7.5
+              firstDecision["end"] as? Double == 7.5,
+              let storyBeats = rootObject["storyBeats"] as? [[String: Any]],
+              let firstStoryBeat = storyBeats.first,
+              let futurePresentation = firstStoryBeat["futurePresentation"] as? [String: Any],
+              futurePresentation["color"] as? String == "indigo",
+              firstStoryBeat["title"] as? String == "Edited known story beat"
         else {
             throw OpenRecordError.io("Saving discarded nested unknown fields or current edits")
         }
@@ -366,7 +387,8 @@ enum ProjectMigrationFixtureTests {
         guard reopened.trimIn == 2.5,
               reopened.webcamOverlay.size == 0.3,
               reopened.captions.first?.text == "Edited known caption field",
-              reopened.editDecisions.first?.end == 7.5
+              reopened.editDecisions.first?.end == 7.5,
+              reopened.storyBeats.first?.title == "Edited known story beat"
         else {
             throw OpenRecordError.io("A nested-field-preserving save did not reopen correctly")
         }

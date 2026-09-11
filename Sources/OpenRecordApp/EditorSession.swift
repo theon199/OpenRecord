@@ -31,6 +31,7 @@ enum EditorAnalysisPhase: String, Sendable, Equatable {
     case autoZoom
     case transcription
     case silence
+    case actionMap
 }
 
 struct EditorAnalysisState: Sendable, Equatable {
@@ -88,6 +89,16 @@ final class EditorSession {
     var timelineZoom: Double = 1
     var transcriptSearchText = ""
     var selectedTranscriptSegmentIDs = Set<UUID>()
+    // Rebuildable ActionMap output is deliberately kept outside
+    // `ProjectDocument`.  Only the compact authored `storyBeats` lane is
+    // persisted with the project; rebuilding this cache never edits it.
+    var actionCandidates: [ActionCandidate] = []
+    var actionMapSearchText = ""
+    var selectedActionCandidateIDs = Set<AnalysisEvidenceID>()
+    var selectedStoryBeatIDs = Set<UUID>()
+    var revealSuppressedActionMapRows = false
+    var actionMapStatus: EditorActionMapStatus = .idle
+    var actionMapStatusMessage: String?
     /// Source-timed range selected from the transcript or a future range tool.
     /// Deleting it creates an edit decision; it never rewrites source media.
     var selectedSourceRange: TimelineEditRange?
@@ -427,6 +438,9 @@ final class EditorSession {
         session.reloadLocalStylePresets()
         session.reloadLocalProjectTemplates()
         session.refreshAudioPresence()
+        // Analysis is optional and rebuildable.  A missing, stale, or
+        // malformed sidecar must never prevent the project from opening.
+        session.loadFreshActionMap()
         session.playhead = editorDocument.trimIn
         if hasVideo {
             session.attachPlayer()
@@ -502,6 +516,8 @@ final class EditorSession {
         previewAudioTask?.cancel()
         analysisTask?.cancel()
         analysisTask = nil
+        actionMapStatus = .idle
+        actionMapStatusMessage = nil
         analysisPhase = .idle
         analysisMessage = nil
         analysisFraction = nil

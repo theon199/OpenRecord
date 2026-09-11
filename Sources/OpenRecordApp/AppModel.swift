@@ -103,6 +103,17 @@ final class AppModel {
             )
         }
     }
+    /// Privacy-filtered Accessibility semantics are opt-in and independent
+    /// from cursor telemetry. Secure values and ordinary typed text are
+    /// excluded by the capture layer.
+    var capturesSemanticTargets = false {
+        didSet {
+            UserDefaults.standard.set(
+                capturesSemanticTargets,
+                forKey: Self.capturesSemanticTargetsDefaultsKey
+            )
+        }
+    }
     var capturesWebcam = false {
         didSet {
             UserDefaults.standard.set(
@@ -162,6 +173,8 @@ final class AppModel {
         "OpenRecord.capturesSystemAudio"
     private static let capturesCursorTelemetryDefaultsKey =
         "OpenRecord.capturesCursorTelemetry"
+    private static let capturesSemanticTargetsDefaultsKey =
+        "OpenRecord.capturesSemanticTargets"
     private static let capturesWebcamDefaultsKey = "OpenRecord.capturesWebcam"
 
     var captureRequest: CaptureRequest {
@@ -170,7 +183,8 @@ final class AppModel {
             capturesSystemAudio: capturesSystemAudio,
             capturesCursorTelemetry: capturesCursorTelemetry,
             capturesKeyboardShortcuts: capturesKeyboardShortcuts,
-            capturesWebcam: capturesWebcam
+            capturesWebcam: capturesWebcam,
+            capturesSemanticTargets: capturesSemanticTargets
         )
     }
 
@@ -201,6 +215,11 @@ final class AppModel {
         if UserDefaults.standard.object(forKey: Self.capturesCursorTelemetryDefaultsKey) != nil {
             capturesCursorTelemetry = UserDefaults.standard.bool(
                 forKey: Self.capturesCursorTelemetryDefaultsKey
+            )
+        }
+        if UserDefaults.standard.object(forKey: Self.capturesSemanticTargetsDefaultsKey) != nil {
+            capturesSemanticTargets = UserDefaults.standard.bool(
+                forKey: Self.capturesSemanticTargetsDefaultsKey
             )
         }
         refreshPermissions()
@@ -586,6 +605,10 @@ final class AppModel {
                     // Cancellation intentionally leaves the captured bundle
                     // and the editor's current edits available in memory.
                 }
+                // ActionMap is independent from auto-zoom and may be
+                // rebuilt later by the user. New captures get a first local
+                // map after the automatic zoom pass has settled.
+                session.rebuildActionMap()
             }
         } catch let issue as EditorTelemetryLoadIssue {
             if generation == openGeneration {

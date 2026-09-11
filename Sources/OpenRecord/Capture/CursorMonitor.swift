@@ -16,6 +16,7 @@ final class CursorMonitor: @unchecked Sendable {
     private var keyWriter: JSONLWriter<KeySample>?
     private var typingWriter: JSONLWriter<TypingSample>?
     private var targetWriter: JSONLWriter<TargetGeometrySample>?
+    private var semanticWriter: JSONLWriter<SemanticEventSample>?
     private let stateLock = NSLock()
     private var cachedTextBoxTime: TimeInterval = -1
     private var cachedTextBox: (point: CGPoint, size: CGSize)?
@@ -43,13 +44,20 @@ final class CursorMonitor: @unchecked Sendable {
         initialBounds: Rect2D?,
         targetURL: URL?,
         keysURL: URL? = nil,
-        typingURL: URL? = nil
+        typingURL: URL? = nil,
+        semanticURL: URL? = nil
     ) throws {
         mouseWriter = try JSONLWriter(url: mouseURL)
         clickWriter = try JSONLWriter(url: clicksURL)
         if let keysURL { keyWriter = try JSONLWriter(url: keysURL) }
         if let typingURL { typingWriter = try JSONLWriter(url: typingURL) }
         if let targetURL { targetWriter = try JSONLWriter(url: targetURL) }
+        // Semantic evidence is advisory. A failure to create this optional
+        // stream must not prevent the display, cursor, or keyboard streams
+        // from continuing to capture.
+        if let semanticURL {
+            semanticWriter = try? JSONLWriter(url: semanticURL)
+        }
         pressedKeys.removeAll()
         closeWarnings.removeAll()
         stateLock.lock()
@@ -117,13 +125,16 @@ final class CursorMonitor: @unchecked Sendable {
     }
 
     func closeFiles() throws {
-        mouseWriter?.close(); clickWriter?.close(); keyWriter?.close(); typingWriter?.close(); targetWriter?.close()
+        mouseWriter?.close(); clickWriter?.close(); keyWriter?.close(); typingWriter?.close(); targetWriter?.close(); semanticWriter?.close()
         let mouseError = mouseWriter?.writeError
         let clickError = clickWriter?.writeError
         let keyError = keyWriter?.writeError
         let typingError = typingWriter?.writeError
         let targetError = targetWriter?.writeError
-        mouseWriter = nil; clickWriter = nil; keyWriter = nil; typingWriter = nil; targetWriter = nil
+        // Semantic write errors intentionally remain advisory and are not
+        // returned from this method. Display finalization must not be coupled
+        // to a best-effort analysis stream.
+        mouseWriter = nil; clickWriter = nil; keyWriter = nil; typingWriter = nil; targetWriter = nil; semanticWriter = nil
         if mouseError != nil { closeWarnings.insert(.truncatedMouseTelemetry) }
         if clickError != nil { closeWarnings.insert(.truncatedClickTelemetry) }
         if keyError != nil { closeWarnings.insert(.truncatedKeyboardTelemetry) }
@@ -161,6 +172,7 @@ final class CursorMonitor: @unchecked Sendable {
                 x: Double(location.x),
                 y: Double(location.y)
             ))
+            if down { writeSemanticActivation(t: t, location: location) }
             writeMove(t: t, location: location, force: true)
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             guard updateVisibility(t: t, location: location) else { return }
@@ -170,15 +182,7 @@ final class CursorMonitor: @unchecked Sendable {
     }
 
     private func handleKeyboard(type: CGEventType, event: CGEvent) {
-        guard keyWriter != nil || typingWriter != nil else { return }
-        if IsSecureEventInputEnabled() {
-            stateLock.lock()
-            pressedKeys.removeAll()
-            let start = recordingStart
-            stateLock.unlock()
-            if start != nil, keyWriter != nil { closeWarnings.insert(.keyboardSecureInputGap) }
-            return
-        }
+        guard keyWriter != nil || typingWriter != nil || semanticWriter != nil else { return }
         stateLock.lock(); let start = recordingStart; stateLock.unlock()
         guard let start else { return }
         let t = CACurrentMediaTime() - start
@@ -189,14 +193,62 @@ final class CursorMonitor: @unchecked Sendable {
         let isDown = type == .keyDown
         let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 
+        // This marker is intentionally handled before secure-input handling:
+        // it contains no text or application metadata and remains available
+        // as a user-authored story beat even while another app owns the secure
+        // input session.
+        let isMarker = isDown && !isAutorepeat && Self.isStoryBeatMarker(
+            keyCode: keyCode,
+            modifiers: modifiers
+        )
+        if isMarker {
+            semanticWriter?.write(SemanticEventSample(
+                t: t,
+                kind: .storyBeat,
+                confidence: 1,
+                source: .userMarker
+            ))
+        }
+
+        if IsSecureEventInputEnabled() {
+            stateLock.lock()
+            pressedKeys.removeAll()
+            stateLock.unlock()
+            if keyWriter != nil { closeWarnings.insert(.keyboardSecureInputGap) }
+            return
+        }
+
+        if isDown, !isAutorepeat, semanticWriter != nil, !isMarker,
+           Self.isSafeShortcut(keyCode: keyCode, modifiers: modifiers) {
+            // Only fixed, known action names are persisted. Unknown shortcut
+            // keys still produce a useful kind/source event without copying a
+            // layout-dependent or user-authored character into the semantic
+            // stream.
+            semanticWriter?.write(SemanticEventSample(
+                t: t,
+                kind: .shortcut,
+                label: Self.semanticShortcutLabel(keyCode: keyCode, modifiers: modifiers),
+                confidence: 0.8,
+                source: .telemetry
+            ))
+        }
+
         if isDown, let typingWriter {
             recordTypingIfApplicable(t: t, keyCode: keyCode, modifiers: modifiers, writer: typingWriter)
         }
 
         guard keyWriter != nil else { return }
-        let rawLabel = KeyboardCapturePolicy.specialKeyLabel(keyCode: keyCode)
-            ?? NSEvent(cgEvent: event)?.charactersIgnoringModifiers
-            ?? ""
+        let rawLabel: String
+        if let special = KeyboardCapturePolicy.specialKeyLabel(keyCode: keyCode) {
+            rawLabel = special
+        } else if keyWriter != nil {
+            // The ordinary character representation is needed only for the
+            // existing keyboard stream's allowlist. Semantic-only capture
+            // never asks AppKit for typed characters.
+            rawLabel = NSEvent(cgEvent: event)?.charactersIgnoringModifiers ?? ""
+        } else {
+            rawLabel = ""
+        }
         let label = rawLabel.count == 1 ? rawLabel.uppercased() : rawLabel
 
         if isDown {
@@ -214,6 +266,235 @@ final class CursorMonitor: @unchecked Sendable {
             stateLock.unlock()
             guard let pressed else { return }
             keyWriter?.write(KeySample(t: t, key: pressed.label, modifiers: pressed.modifiers, down: false))
+        }
+    }
+
+    private func writeSemanticActivation(t: TimeInterval, location: CGPoint) {
+        guard semanticWriter != nil else { return }
+        stateLock.lock()
+        let bounds = targetBounds
+        stateLock.unlock()
+        semanticWriter?.write(Self.semanticActivationSample(
+            t: t,
+            location: location,
+            targetBounds: bounds.map { Rect2D($0) }
+        ))
+    }
+
+    /// Resolve only the small, allowlisted static-control surface. This
+    /// function deliberately never reads a control's value, selected text, or
+    /// document content. Position and size are geometry, not UI values.
+    private static func semanticActivationSample(
+        t: TimeInterval,
+        location: CGPoint,
+        targetBounds: Rect2D?
+    ) -> SemanticEventSample {
+        let fallback = { (reason: SemanticDegradationReason) in
+            Self.genericSemanticClickSample(
+                t: t,
+                location: location,
+                targetBounds: targetBounds,
+                reason: reason
+            )
+        }
+
+        guard AXIsProcessTrusted() else { return fallback(.accessibilityUnavailable) }
+        let systemWide = AXUIElementCreateSystemWide()
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(
+            systemWide,
+            Float(location.x),
+            Float(location.y),
+            &element
+        ) == .success,
+        let element
+        else { return fallback(.elementUnavailable) }
+
+        let role = stringAttribute(kAXRoleAttribute, from: element).flatMap(SemanticPrivacyFilter.sanitizeRole)
+        guard let role else { return fallback(.elementUnavailable) }
+        let bundleID = bundleIdentifier(for: element)
+        let bounds = elementBounds(for: element, targetBounds: targetBounds)
+
+        // Secure controls receive no title or description query at all. That
+        // makes the no-private-content guarantee hold even if an accessibility
+        // provider exposes a surprising label on a password control.
+        if SemanticPrivacyFilter.isSecureRole(role) {
+            return SemanticEventSample(
+                t: t,
+                kind: .genericClick,
+                applicationBundleID: bundleID,
+                role: role,
+                bounds: bounds,
+                confidence: 0,
+                source: .accessibility,
+                degradationReason: .secureField
+            ).normalized
+        }
+
+        // The policy permits labels only for static controls. Do not even ask
+        // AX for title/description on text fields or unknown roles.
+        guard staticControlRoles.contains(role) else {
+            return SemanticEventSample(
+                t: t,
+                kind: .genericClick,
+                applicationBundleID: bundleID,
+                role: role,
+                bounds: bounds,
+                confidence: 0,
+                source: .accessibility,
+                degradationReason: .elementUnavailable
+            ).normalized
+        }
+
+        let title = stringAttribute(kAXTitleAttribute, from: element)
+        let description = stringAttribute(kAXDescriptionAttribute, from: element)
+        let label = SemanticPrivacyFilter.sanitizeCapturedLabel(title, role: role)
+            ?? SemanticPrivacyFilter.sanitizeCapturedLabel(description, role: role)
+        guard label != nil else {
+            return SemanticEventSample(
+                t: t,
+                kind: .genericClick,
+                applicationBundleID: bundleID,
+                role: role,
+                bounds: bounds,
+                confidence: 0,
+                source: .accessibility,
+                degradationReason: .labelFiltered
+            ).normalized
+        }
+        return SemanticEventSample(
+            t: t,
+            kind: .activate,
+            applicationBundleID: bundleID,
+            role: role,
+            label: label,
+            bounds: bounds,
+            confidence: 0.94,
+            source: .accessibility
+        ).normalized
+    }
+
+    /// Pure fallback construction is kept separate from AX so it can be
+    /// exercised without TCC. A click coordinate is not repeated as semantic
+    /// bounds: unavailable controls must not imply a guessed target rectangle.
+    static func genericSemanticClickSample(
+        t: TimeInterval,
+        location: CGPoint,
+        targetBounds: Rect2D?,
+        reason: SemanticDegradationReason
+    ) -> SemanticEventSample {
+        _ = location
+        _ = targetBounds
+        return SemanticEventSample(
+            t: t,
+            kind: .genericClick,
+            bounds: nil,
+            confidence: 0,
+            source: .telemetry,
+            degradationReason: reason
+        ).normalized
+    }
+
+    /// Convert an accessibility element's global Quartz frame into target
+    /// relative top-left coordinates, clamping to the documented 0...1 range.
+    static func normalizedTargetRelativeBounds(
+        elementFrame: CGRect,
+        targetBounds: Rect2D
+    ) -> Rect2D? {
+        let target = targetBounds.cgRect
+        guard target.width.isFinite, target.height.isFinite,
+              target.width > 0, target.height > 0,
+              elementFrame.minX.isFinite, elementFrame.minY.isFinite,
+              elementFrame.width.isFinite, elementFrame.height.isFinite,
+              elementFrame.width >= 0, elementFrame.height >= 0
+        else { return nil }
+        return SemanticPrivacyFilter.normalizedBounds(Rect2D(
+            x: (elementFrame.minX - target.minX) / target.width,
+            y: (elementFrame.minY - target.minY) / target.height,
+            width: elementFrame.width / target.width,
+            height: elementFrame.height / target.height
+        ))
+    }
+
+    private static func stringAttribute(_ attribute: String, from element: AXUIElement) -> String? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    private static func bundleIdentifier(for element: AXUIElement) -> String? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+        return SemanticPrivacyFilter.sanitizeBundleID(
+            NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        )
+    }
+
+    private static func elementBounds(for element: AXUIElement, targetBounds: Rect2D?) -> Rect2D? {
+        guard let targetBounds else { return nil }
+        var position: AnyObject?
+        var size: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+              let position,
+              let size,
+              CFGetTypeID(position) == AXValueGetTypeID(),
+              CFGetTypeID(size) == AXValueGetTypeID()
+        else { return nil }
+
+        // AXPosition/AXSize are documented AXValue geometry attributes. They
+        // are intentionally separate from the control's content value.
+        let positionAX = position as! AXValue
+        let sizeAX = size as! AXValue
+
+        var point = CGPoint.zero
+        var dimensions = CGSize.zero
+        guard AXValueGetValue(positionAX, .cgPoint, &point),
+              AXValueGetValue(sizeAX, .cgSize, &dimensions)
+        else { return nil }
+        return normalizedTargetRelativeBounds(
+            elementFrame: CGRect(origin: point, size: dimensions),
+            targetBounds: targetBounds
+        )
+    }
+
+    private static let staticControlRoles: Set<String> = [
+        "AXButton", "AXCheckBox", "AXDisclosureTriangle", "AXLink", "AXMenuItem",
+        "AXPopUpButton", "AXRadioButton", "AXSegmentedControl", "AXTabGroup",
+        "AXToolbar", "button", "checkbox", "link", "menu-item", "radio-button",
+        "tab", "toolbar-item",
+    ]
+
+    private static func isSafeShortcut(keyCode: UInt16, modifiers: [KeyModifier]) -> Bool {
+        guard !KeyboardCapturePolicy.isModifierKey(keyCode: keyCode) else { return false }
+        return KeyboardCapturePolicy.isSafeSpecialKey(keyCode: keyCode)
+            || modifiers.contains(.command)
+            || modifiers.contains(.control)
+            || modifiers.contains(.option)
+    }
+
+    static func isStoryBeatMarker(keyCode: UInt16, modifiers: [KeyModifier]) -> Bool {
+        keyCode == UInt16(kVK_ANSI_M)
+            && modifiers.contains(.control)
+            && modifiers.contains(.option)
+            && modifiers.contains(.command)
+            && !modifiers.contains(.shift)
+    }
+
+    /// These labels are fixed product vocabulary, never derived from the
+    /// keyboard layout or the user's typed character stream.
+    static func semanticShortcutLabel(keyCode: UInt16, modifiers: [KeyModifier]) -> String? {
+        switch keyCode {
+        case UInt16(kVK_ANSI_A): return "Select All"
+        case UInt16(kVK_ANSI_S): return "Save"
+        case UInt16(kVK_ANSI_Z): return modifiers.contains(.shift) ? "Redo" : "Undo"
+        case UInt16(kVK_ANSI_X): return "Cut"
+        case UInt16(kVK_ANSI_C): return "Copy"
+        case UInt16(kVK_ANSI_V): return "Paste"
+        case UInt16(kVK_ANSI_P): return "Print"
+        case UInt16(kVK_ANSI_Q): return "Quit"
+        case UInt16(kVK_ANSI_W): return "Close Window"
+        default: return nil
         }
     }
 

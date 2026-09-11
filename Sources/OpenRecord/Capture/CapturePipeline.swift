@@ -110,6 +110,9 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         let targetURL = request.capturesCursorTelemetry
             ? ProjectLayout.targetGeometryURL(in: projectURL)
             : nil
+        let semanticURL = request.capturesSemanticTargets
+            ? ProjectLayout.semanticTargetsURL(in: projectURL)
+            : nil
         let keysURL = request.capturesKeyboardShortcuts
             ? ProjectLayout.keysURL(in: projectURL)
             : nil
@@ -144,7 +147,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         } else {
             webcamStartTask = nil
         }
-        if request.capturesCursorTelemetry || request.capturesKeyboardShortcuts {
+        if request.capturesCursorTelemetry || request.capturesKeyboardShortcuts || request.capturesSemanticTargets {
             let mouseURL: URL
             let clicksURL: URL
             if request.capturesCursorTelemetry {
@@ -165,11 +168,16 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
                     try cursor.start(
                         mouseURL: mouseURL,
                         clicksURL: clicksURL,
-                        target: request.capturesCursorTelemetry ? target : nil,
-                        initialBounds: request.capturesCursorTelemetry ? targetInitialBounds : nil,
+                        // Semantic-only capture still needs the selected
+                        // target for event filtering. Geometry remains in the
+                        // legacy target stream only when cursor telemetry is
+                        // requested.
+                        target: request.capturesCursorTelemetry || request.capturesSemanticTargets ? target : nil,
+                        initialBounds: request.capturesCursorTelemetry || request.capturesSemanticTargets ? targetInitialBounds : nil,
                         targetURL: targetURL,
                         keysURL: keysURL,
-                        typingURL: typingURL
+                        typingURL: typingURL,
+                        semanticURL: semanticURL
                     )
                 }
                 cursorActive = true

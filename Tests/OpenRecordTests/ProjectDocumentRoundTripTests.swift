@@ -17,7 +17,8 @@ enum ProjectDocumentJSONRoundTrip {
               ProjectDocument().appliedPresetIDs.isEmpty,
               ProjectDocument().projectTemplateID == nil,
               ProjectDocument().defaultCaptionStyle == .default,
-              ProjectDocument().defaultAnnotationStyle == nil
+              ProjectDocument().defaultAnnotationStyle == nil,
+              ProjectDocument().storyBeats.isEmpty
         else {
             throw OpenRecordError.io("Canvas cursor defaults are incorrect")
         }
@@ -153,7 +154,24 @@ enum ProjectDocumentJSONRoundTrip {
             appliedPresetIDs: ["dark", "custom-demo"],
             projectTemplateID: "product-launch",
             defaultCaptionStyle: CaptionStyle(fontSize: 48, position: .top),
-            defaultAnnotationStyle: AnnotationStylePreset(fontSize: 54)
+            defaultAnnotationStyle: AnnotationStylePreset(fontSize: 54),
+            storyBeats: [
+                StoryBeat(
+                    id: UUID(uuidString: "12121212-3434-5656-7878-909090909090")!,
+                    start: 8.25,
+                    end: 9.5,
+                    kind: .step,
+                    title: "Save settings",
+                    applicationBundleID: "com.example.Product",
+                    evidenceIDs: [try AnalysisEvidenceID("semantic-save")],
+                    isLocked: true,
+                    provenance: StoryBeatProvenance(
+                        analyzerVersion: "action-map-1",
+                        confidence: 0.93,
+                        source: "action-map"
+                    )
+                )
+            ]
         )
 
         let data = try ProjectJSON.encoder.encode(original)
@@ -190,7 +208,8 @@ enum ProjectDocumentJSONRoundTrip {
               legacy.transcript.isEmpty,
               legacy.cursorEffects.isEmpty,
               legacy.appliedPresetIDs.isEmpty,
-              legacy.zoomRanges.isEmpty
+              legacy.zoomRanges.isEmpty,
+              legacy.storyBeats.isEmpty
         else {
             throw OpenRecordError.io("A v1 project did not decode with legacy version and safe defaults")
         }
@@ -218,13 +237,14 @@ enum ProjectDocumentJSONRoundTrip {
               upgraded.appliedPresetIDs.isEmpty,
               upgraded.projectTemplateID == nil,
               upgraded.defaultCaptionStyle == .default,
-              upgraded.defaultAnnotationStyle == nil
+              upgraded.defaultAnnotationStyle == nil,
+              upgraded.storyBeats.isEmpty
         else {
-            throw OpenRecordError.io("The first-save migration did not produce the v7 defaults")
+            throw OpenRecordError.io("The first-save migration did not produce the v8 defaults")
         }
 
         let futureJSON = Data(
-            #"{"formatVersion":8,"futureOverlay":{"preserveMe":true}}"#.utf8
+            #"{"formatVersion":9,"futureOverlay":{"preserveMe":true}}"#.utf8
         )
         do {
             _ = try ProjectJSON.decoder.decode(ProjectDocument.self, from: futureJSON)

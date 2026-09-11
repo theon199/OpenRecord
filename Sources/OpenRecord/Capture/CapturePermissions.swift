@@ -24,12 +24,16 @@ public enum CapturePermissionKind: String, Sendable, CaseIterable, Hashable {
 ///
 /// Defaults intentionally preserve OpenRecord's pre-v4 behavior: microphone,
 /// system audio, cursor/focus telemetry, and keyboard shortcuts are enabled;
-/// webcam capture remains opt-in.
+/// semantic target capture and webcam capture remain opt-in.
 public struct CaptureRequest: Codable, Sendable, Equatable, Hashable {
     public var capturesMicrophone: Bool
     public var capturesSystemAudio: Bool
     public var capturesCursorTelemetry: Bool
     public var capturesKeyboardShortcuts: Bool
+    /// Capture privacy-filtered Accessibility interaction metadata in its own
+    /// stream. This is deliberately independent from cursor telemetry because
+    /// semantic evidence is useful even when pointer paths are disabled.
+    public var capturesSemanticTargets: Bool
     public var capturesWebcam: Bool
 
     public init(
@@ -37,19 +41,54 @@ public struct CaptureRequest: Codable, Sendable, Equatable, Hashable {
         capturesSystemAudio: Bool = true,
         capturesCursorTelemetry: Bool = true,
         capturesKeyboardShortcuts: Bool = true,
-        capturesWebcam: Bool = false
+        capturesWebcam: Bool = false,
+        capturesSemanticTargets: Bool = false
     ) {
         self.capturesMicrophone = capturesMicrophone
         self.capturesSystemAudio = capturesSystemAudio
         self.capturesCursorTelemetry = capturesCursorTelemetry
         self.capturesKeyboardShortcuts = capturesKeyboardShortcuts
+        self.capturesSemanticTargets = capturesSemanticTargets
         self.capturesWebcam = capturesWebcam
     }
 
     public static let `default` = CaptureRequest()
 
+    private enum CodingKeys: String, CodingKey {
+        case capturesMicrophone
+        case capturesSystemAudio
+        case capturesCursorTelemetry
+        case capturesKeyboardShortcuts
+        case capturesSemanticTargets
+        case capturesWebcam
+    }
+
+    /// Keep decoding v1-v7 request payloads lossless. In particular, a
+    /// missing semantic key must never opt a legacy recording into AX capture.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            capturesMicrophone: try container.decodeIfPresent(Bool.self, forKey: .capturesMicrophone) ?? true,
+            capturesSystemAudio: try container.decodeIfPresent(Bool.self, forKey: .capturesSystemAudio) ?? true,
+            capturesCursorTelemetry: try container.decodeIfPresent(Bool.self, forKey: .capturesCursorTelemetry) ?? true,
+            capturesKeyboardShortcuts: try container.decodeIfPresent(Bool.self, forKey: .capturesKeyboardShortcuts) ?? true,
+            capturesWebcam: try container.decodeIfPresent(Bool.self, forKey: .capturesWebcam) ?? false,
+            capturesSemanticTargets: try container.decodeIfPresent(Bool.self, forKey: .capturesSemanticTargets) ?? false
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(capturesMicrophone, forKey: .capturesMicrophone)
+        try container.encode(capturesSystemAudio, forKey: .capturesSystemAudio)
+        try container.encode(capturesCursorTelemetry, forKey: .capturesCursorTelemetry)
+        try container.encode(capturesKeyboardShortcuts, forKey: .capturesKeyboardShortcuts)
+        try container.encode(capturesSemanticTargets, forKey: .capturesSemanticTargets)
+        try container.encode(capturesWebcam, forKey: .capturesWebcam)
+    }
+
     public var requiresAccessibility: Bool {
-        capturesCursorTelemetry || capturesKeyboardShortcuts
+        capturesCursorTelemetry || capturesKeyboardShortcuts || capturesSemanticTargets
     }
 }
 
@@ -184,7 +223,7 @@ public enum CapturePermissions: Sendable {
         case .microphone:
             return "Microphone permission is required. Enable OpenRecord in System Settings → Privacy & Security → Microphone, then try again."
         case .accessibility:
-            return "Accessibility permission is required for the selected cursor, keyboard, or focus telemetry. Enable OpenRecord in System Settings → Privacy & Security → Accessibility, then try again."
+            return "Accessibility permission is required for the selected cursor, keyboard, or semantic target telemetry. Enable OpenRecord in System Settings → Privacy & Security → Accessibility, then try again."
         case .camera:
             return "Camera permission is required when webcam recording is enabled. Enable OpenRecord in System Settings → Privacy & Security → Camera, then try again."
         }

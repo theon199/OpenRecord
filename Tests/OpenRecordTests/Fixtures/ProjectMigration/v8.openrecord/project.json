@@ -1,0 +1,42 @@
+{
+  "formatVersion" : 8,
+  "trimIn" : 0,
+  "trimOut" : 30,
+  "zoomRanges" : [],
+  "canvas" : {},
+  "cursorSprites" : [],
+  "keyboardOverlay" : {},
+  "webcamOverlay" : {},
+  "autoZoomSensitivity" : "normal",
+  "zoomEasing" : "smooth",
+  "speedSegments" : [],
+  "muteAudioWhenSpedUp" : false,
+  "audioCleanup" : {},
+  "captions" : [],
+  "annotations" : [],
+  "redactions" : [],
+  "drawings" : [],
+  "deviceFrame" : {},
+  "videoExportSettings" : {},
+  "editDecisions" : [],
+  "transcript" : [],
+  "cursorEffects" : [],
+  "storyBeats" : [
+    {
+      "id" : "12121212-3434-5656-7878-909090909090",
+      "start" : 12.42,
+      "end" : 13.2,
+      "kind" : "chapter",
+      "title" : "Save settings",
+      "applicationBundleID" : "com.example.Product",
+      "evidenceIDs" : [ "semantic-save-button", "click-42" ],
+      "isLocked" : true,
+      "isSuppressed" : false,
+      "provenance" : {
+        "analyzerVersion" : "action-map-1",
+        "confidence" : 0.94,
+        "source" : "action-map"
+      }
+    }
+  ]
+}
