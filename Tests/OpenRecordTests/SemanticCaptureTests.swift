@@ -57,7 +57,10 @@ func semanticCapturePrivacyPolicyRejectsPrivateLabelsAndValues() {
     ).normalized
     #expect(normalized.t == 0)
     #expect(normalized.label == "Save")
-    #expect(normalized.bounds == Rect2D(x: 0, y: 0.8, width: 1, height: 0.2))
+    #expect(normalized.bounds?.x == 0)
+    #expect(normalized.bounds?.y == 0.8)
+    #expect(normalized.bounds?.width == 1)
+    #expect(abs((normalized.bounds?.height ?? 0) - 0.2) < 0.0001)
     #expect(normalized.confidence == 1)
 }
 

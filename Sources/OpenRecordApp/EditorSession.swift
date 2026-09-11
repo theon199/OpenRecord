@@ -32,13 +32,16 @@ enum EditorAnalysisPhase: String, Sendable, Equatable {
     case transcription
     case silence
     case actionMap
+    case firstCut
+    case privacy
 }
 
-struct EditorAnalysisState: Sendable, Equatable {
-    var phase: EditorAnalysisPhase
-    var message: String?
-    var fraction: Double?
-    var cancellable: Bool
+enum EditorReviewSheet: String, Identifiable, Sendable {
+    case firstCut
+    case privacyReview
+    case privacyExport
+
+    var id: String { rawValue }
 }
 
 /// A project can still be opened when one telemetry stream is damaged. The
@@ -99,6 +102,18 @@ final class EditorSession {
     var revealSuppressedActionMapRows = false
     var actionMapStatus: EditorActionMapStatus = .idle
     var actionMapStatusMessage: String?
+    var firstCutPreset: FirstCutPreset = .naturalDemo
+    var firstCutPlan: FirstCutPlan?
+    var selectedFirstCutProposalIDs = Set<FirstCutProposalID>()
+    var firstCutStatusMessage: String?
+    var firstCutTranscribesWhenAvailable = false
+    var privacyFindings: [PrivacyFinding] = []
+    var privacyReport: PrivacyReport?
+    var privacyStatusMessage: String?
+    var privacySensitiveTerms = ""
+    var privacyDetectFaces = false
+    var privacyDetectNames = false
+    var presentedReviewSheet: EditorReviewSheet?
     /// Source-timed range selected from the transcript or a future range tool.
     /// Deleting it creates an edit decision; it never rewrites source media.
     var selectedSourceRange: TimelineEditRange?
@@ -117,7 +132,7 @@ final class EditorSession {
     var projectTemplateStatus: String?
     var copyExportToLibrary = false
     var exportProgress: ExportProgress?
-    private(set) var isCancellingExport = false
+    var isCancellingExport = false
     var lastError: String?
     var lastErrorCategory: LocalDiagnosticsErrorCategory = .none
     private(set) var saveState: EditorSaveState = .saved
@@ -126,15 +141,6 @@ final class EditorSession {
     var analysisFraction: Double?
     var isAnalysisCancellable: Bool {
         analysisTask != nil && !(analysisTask?.isCancelled ?? true)
-    }
-    var analysisCancellable: Bool { isAnalysisCancellable }
-    var analysisState: EditorAnalysisState {
-        EditorAnalysisState(
-            phase: analysisPhase,
-            message: analysisMessage,
-            fraction: analysisFraction,
-            cancellable: isAnalysisCancellable
-        )
     }
     private(set) var diagnosticsCopied = false
     /// Warnings retained for the lifetime of the editor and shown by the
@@ -281,7 +287,7 @@ final class EditorSession {
     var analysisError: Error?
     var analysisCancellationRequested = false
     private let previewAudio = PreviewAudioController()
-    private var exportTask: Task<Void, Never>?
+    var exportTask: Task<Void, Never>?
     private var cachedProjectTimeMapper: ProjectTimeMapper?
     private var cachedProjectTimeMapperInputs: ProjectTimeMapperInputs?
     /// Monotonically increasing identity for the active export. Exporter
@@ -441,6 +447,8 @@ final class EditorSession {
         // Analysis is optional and rebuildable.  A missing, stale, or
         // malformed sidecar must never prevent the project from opening.
         session.loadFreshActionMap()
+        session.loadFirstCutPlan()
+        session.loadPrivacyFindings()
         session.playhead = editorDocument.trimIn
         if hasVideo {
             session.attachPlayer()
@@ -750,18 +758,6 @@ final class EditorSession {
         }
     }
 
-    func deleteSelectedZoom() {
-        guard let selectedZoomID else { return }
-        let before = document
-        document.zoomRanges.removeAll { $0.id == selectedZoomID }
-        self.selectedZoomID = nil
-        documentDidChange(
-            from: before,
-            actionName: "Delete Zoom",
-            rebuildZoomEngine: true
-        )
-    }
-
     func addSpeedAtPlayhead() {
         if let existing = document.speedSegments.first(where: {
             playhead >= $0.start && playhead < $0.end
@@ -786,15 +782,6 @@ final class EditorSession {
         )
         selectSpeed(segment.id)
         documentDidChange(from: before, actionName: "Add Speed Region")
-    }
-
-    func deleteSelectedSpeedSegment() {
-        guard let selectedSpeedID else { return }
-        let before = document
-        document.speedSegments.removeAll { $0.id == selectedSpeedID }
-        self.selectedSpeedID = nil
-        documentDidChange(from: before, actionName: "Delete Speed Region")
-        applyPlaybackRate(force: true)
     }
 
     func updateSelectedSpeedRate(_ rate: Double) {
@@ -1066,6 +1053,19 @@ final class EditorSession {
 
     func presentExportPanel(kind: EditorExportKind) {
         if kind == .sourceFootage, !canExportSourceFootage { return }
+        if kind == .video {
+            presentedReviewSheet = .privacyExport
+            return
+        }
+        presentReviewedExportPanel(kind: kind)
+    }
+
+    func continueAfterPrivacyReview() {
+        presentedReviewSheet = nil
+        presentReviewedExportPanel(kind: .video)
+    }
+
+    private func presentReviewedExportPanel(kind: EditorExportKind) {
         let panel = NSSavePanel()
         let isProRes = kind == .video && document.videoExportSettings.codec == .proRes422
         let contentType: UTType = isProRes ? .quickTimeMovie : kind.contentType
@@ -1217,7 +1217,11 @@ final class EditorSession {
         selectedSpeedID = nil
         selectedCaptionID = nil
         selectedAnnotationID = nil
+        selectedRedactionID = nil
+        selectedDrawingID = nil
         isWebcamSelected = false
+        selectedSourceRange = nil
+        timelineSelection.clear()
         documentHistory.removeAll()
         rebuildEngine()
         // Serialize behind any save already in flight, then restore the last
@@ -1263,6 +1267,7 @@ final class EditorSession {
                         self.exportProgress = status
                     }
                 })
+                _ = await verifyRenderedPrivacy(videoURL: url)
             case .gif:
                 try await exporter.exportGIF(project: document, url: url) { [weak self] progress in
                     Task { @MainActor in
@@ -1498,7 +1503,7 @@ final class EditorSession {
             ?? 0
     }
 
-    private func applyPlaybackRate(force: Bool = false) {
+    func applyPlaybackRate(force: Bool = false) {
         guard isPlaying else { return }
         let next = Float(currentPlaybackRate)
         guard force || abs(next - activePlaybackRate) > 0.001 else { return }
@@ -1588,8 +1593,6 @@ final class EditorSession {
 
     func schedulePreviewAudioRebuild() {
         previewAudioTask?.cancel()
-        let outputTime = outputPlayhead
-        let playing = isPlaying
         previewAudioTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(80))
             guard !Task.isCancelled else { return }
@@ -1601,8 +1604,8 @@ final class EditorSession {
             )
             guard !Task.isCancelled else { return }
             hasPreviewAudio = previewAudio.isAvailable
-            previewAudio.seek(to: outputTime)
-            previewAudio.setPlaying(playing)
+            previewAudio.seek(to: outputPlayhead)
+            previewAudio.setPlaying(isPlaying)
         }
     }
 

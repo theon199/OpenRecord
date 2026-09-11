@@ -106,6 +106,40 @@ struct EditorView: View {
                     ActionMapPanel(session: session)
                         .frame(width: 420, height: 620)
                 }
+                Button {
+                    session.presentedReviewSheet = .firstCut
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "wand.and.stars")
+                        Text("First Cut")
+                        if let count = session.firstCutPlan?.proposals.count, count > 0 {
+                            Text("\(count)")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
+                }
+                .help("Generate and review a local first draft before applying edits")
+                .accessibilityLabel("First Cut")
+                Button {
+                    session.presentedReviewSheet = .privacyReview
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "checkmark.shield")
+                        Text("Privacy")
+                        if !session.privacyFindings.isEmpty {
+                            Text("\(session.privacyFindings.count)")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
+                }
+                .help("Review possible private content before export")
+                .accessibilityLabel("Privacy Firewall")
                 Button("Export…") {
                     session.presentExportPanel()
                 }
@@ -116,6 +150,16 @@ struct EditorView: View {
                     }
                     .keyboardShortcut(.cancelAction)
                 }
+            }
+        }
+        .sheet(item: $session.presentedReviewSheet) { sheet in
+            switch sheet {
+            case .firstCut:
+                FirstCutReviewSheet(session: session)
+            case .privacyReview:
+                PrivacyReviewSheet(session: session, continuesToExport: false)
+            case .privacyExport:
+                PrivacyReviewSheet(session: session, continuesToExport: true)
             }
         }
         .overlay {

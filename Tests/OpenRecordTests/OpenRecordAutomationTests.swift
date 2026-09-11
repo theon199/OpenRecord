@@ -16,16 +16,40 @@ func automationParserAcceptsCommands() throws {
     let export = try OpenRecordAutomationParser.parse(
         arguments: [
             "export", "demo.openrecord", "--output", "out.mov",
-            "--codec", "prores422", "--resolution", "4k", "--quality", "compact"
+            "--codec", "prores422", "--resolution", "4k", "--quality", "compact",
+            "--framerate", "60"
         ]
     )
-    guard case .export(_, let output, let codec, let resolution, let quality) = export else {
+    guard case .export(_, let output, let codec, let resolution, let quality, let frameRate) = export else {
         throw OpenRecordError.io("export parser returned the wrong command")
     }
     #expect(output.lastPathComponent == "out.mov")
     #expect(codec == .proRes422)
     #expect(resolution == .p2160)
     #expect(quality == .compact)
+    #expect(frameRate == .fps60)
+
+    let exportWithFps = try OpenRecordAutomationParser.parse(
+        arguments: [
+            "export", "demo.openrecord", "--output", "out.mp4",
+            "--fps", "30"
+        ]
+    )
+    guard case .export(_, _, _, _, _, let fpsFrameRate) = exportWithFps else {
+        throw OpenRecordError.io("export parser with fps returned the wrong command")
+    }
+    #expect(fpsFrameRate == .fps30)
+
+    let batch = try OpenRecordAutomationParser.parse(
+        arguments: [
+            "batch", "folder", "--output", "out", "--json", "--framerate", "24"
+        ]
+    )
+    guard case .batch(_, _, _, _, _, let batchRate, let batchJSON) = batch else {
+        throw OpenRecordError.io("batch parser returned the wrong command")
+    }
+    #expect(batchJSON)
+    #expect(batchRate == .fps24)
 }
 
 @Test("automation parser reports missing and invalid options")
@@ -71,6 +95,8 @@ func automationInspectsAndValidatesWithoutWriting() async throws {
     #expect(inspection.formatVersion == ProjectDocument.currentFormatVersion)
     #expect(inspection.trackPresence[.displayVideo] == true)
     #expect(inspection.trackPresence[.microphone] == false)
+    #expect(inspection.storyBeatCount == 0)
+    #expect(inspection.editDecisionCount == 0)
     #expect(inspection.validationIssues.isEmpty)
 
     let validation = await automation.validate(project: project)

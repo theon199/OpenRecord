@@ -10,7 +10,7 @@ has been verified, what remains manual, and the next safe execution checkpoint.
 
 | Area | Status |
 |---|---|
-| Current implemented product line | v4.1 ActionMap |
+| Current implemented product line | v4.2 First Cut + Privacy Firewall |
 | Current project document format | v8 |
 | v3 implementation checkpoints | Complete |
 | v3 deterministic automated release gates | Recorded complete |
@@ -19,11 +19,12 @@ has been verified, what remains manual, and the next safe execution checkpoint.
 | v4 product and architecture plan | Complete |
 | v4.0 / Phase 0 implementation | Complete (verified) |
 | v4.1 / Phase 1 implementation | Complete (verified) |
-| Next v4 checkpoint | Phase 2 (v4.2) — First Cut + Privacy Firewall |
+| v4.2 / Phase 2 implementation | Complete (automated gates verified) |
+| Next v4 checkpoint | Phase 3 (v4.3) — Release Factory + Open Tutorial Package |
 
 ## Current baseline
 
-The repository currently describes OpenRecord v4.1.0 and Phase 1 (ActionMap) as implemented and verified. Its main capabilities include:
+The repository currently describes OpenRecord v4.2.0 and Phase 2 (First Cut + Privacy Firewall) as implemented with automated gates verified. Its main capabilities include:
 
 - Native ScreenCaptureKit display/window capture with separate cursor telemetry.
 - Optional microphone, system audio, webcam, and privacy-filtered shortcut tracks.
@@ -37,6 +38,12 @@ The repository currently describes OpenRecord v4.1.0 and Phase 1 (ActionMap) as 
   cancellation-safe smart automatic zooms.
 - Deterministic local ActionMap analysis with searchable, correctable actions
   and source-time synchronization across cuts and speed regions.
+- Cancellable, suggestion-only First Cut planning with three intent presets,
+  evidence/confidence previews, durable local review state, and coherent undo.
+- Local Privacy Firewall detection with plaintext-free persisted evidence,
+  accepted redaction tracking, pre-export review, and rendered-output scanning.
+- Atomic Sanitized Share Copy packages with rendered-safe media, a strict
+  metadata allowlist, and machine-verifiable privacy/portability reports.
 - Non-destructive captions, annotations, drawings, redactions, cursor effects,
   webcam treatments, device frames, and audio cleanup.
 - Project templates, selected-project batch export, imported movie projects,
@@ -80,9 +87,9 @@ checklist. They were not rerun when this status document was created.
 
 ## Active working tree
 
-The working tree contains the implemented Phase 4.0 foundation and Phase 4.1
-ActionMap changes across capture, analysis, contracts, editor, and tests. All
-automated gates pass cleanly.
+The working tree contains the implemented v4.0 foundation, v4.1 ActionMap, and
+v4.2 First Cut/Privacy Firewall changes across capture, analysis, contracts,
+editor, export workflow, and tests. All automated gates pass cleanly.
 
 Treat all pre-existing modifications as user work:
 
@@ -104,9 +111,9 @@ v4.3  Release Factory + documentation outputs + Open Tutorial Package
 v4.4  Patch Takes + explicit multi-source timeline
 ```
 
-Phase 0 (v4.0 Interaction Foundation) and Phase 1 (v4.1 ActionMap)
-implementation and deterministic verification are complete. Project document
-format is v8.
+Phases 0–2 (v4.0 Interaction Foundation, v4.1 ActionMap, and v4.2 First Cut /
+Privacy Firewall) implementation and deterministic verification are complete.
+Project document format remains v8.
 
 ## Phase 0 (v4.0) execution checkpoint: Interaction foundation
 
@@ -196,15 +203,51 @@ Verified on 2026-09-11. All automated Phase 1 acceptance gates are satisfied.
 - Visual review of the ActionMap popover and conversion workflows with long recordings.
 - Hardware capture verification of semantic opt-in, secure-input transitions, and the story-beat hotkey.
 
+## Phase 2 (v4.2) execution checkpoint: First Cut + Privacy Firewall
+
+Verified on 2026-09-11. All automated Phase 2 acceptance gates are satisfied.
+
+### Completed work packets
+
+1. **First Cut planning and lifecycle**:
+   - Pure deterministic planning for Natural Demo, Tight Tutorial, and Changelog intents across capture health, optional transient on-device transcription, ActionMap, pauses, inactivity, repeated attempts, and likely abandoned navigation.
+   - Stable proposals for existing authoritative cut, speed, zoom, caption, annotation, cursor-effect, and story-beat lanes with evidence, confidence, and before/after review metadata.
+   - Pending/accepted/rejected/stale state in `analysis/suggestions.jsonl`; regeneration preserves decisions and manual/locked authored work.
+   - New captures open into review instead of receiving immediate authored auto-zooms. Cancel/Skip never mutates `ProjectDocument`; applying a subset or all proposals is one history entry.
+
+2. **Privacy Firewall and verified output**:
+   - Deterministic local detectors for token/API-key shapes, email, internal URLs, notifications, accounts, custom terms, and opt-in face/name signals.
+   - Privacy findings persist only category, normalized tracked geometry, confidence, detector coverage, and non-reversible SHA-256 fingerprints; recognized plaintext remains ephemeral.
+   - Review UI distinguishes possible, accepted, rejected, stale, and verified findings. Accepted findings materialize as normal `RedactionRegion` values and remain editable in the existing inspector/timeline.
+   - Every rendered video export is preceded by privacy review and followed by a second local Vision scan plus an adjacent privacy report with sampled/finding timestamps. Accepted content that remains detectable is flagged as unresolved rather than counted as a verified mask. Copy explicitly warns that detection is best effort and the source bundle is not sanitized.
+
+3. **Sanitized Share Copy**:
+   - Fresh H.264 render followed by atomic same-parent installation of a derivative `.openrecord` bundle.
+   - Exact allowlist: privacy-minimized `meta.json`, reset `project.json`, rendered `recording/display.mp4`, and `privacy-report.json` with included/excluded paths and SHA-256 fingerprints.
+   - Original display media, separate audio, thumbnails, analysis, cursors, semantic events, and all raw telemetry are excluded; symlink/path validation and failure cleanup preserve an existing destination.
+
+### Automated verification results
+
+- **Full Test Suite**: `swift test` passed with 0 failures, including 7 new First Cut tests, 6 Privacy Firewall tests, and 4 Sanitized Share Copy tests plus all migration, time-mapping, compositor-golden, and historical release coverage.
+- **Debug Build**: `swift build` passed cleanly for the app, CLI, and export benchmark products.
+- **Release Build**: `swift build -c release --arch arm64` passed cleanly in 47.53s.
+- **Format Integrity**: Project format remains v8; all new derived review data is optional/removable analysis, and accepted values render through existing authored lanes.
+
+### Outstanding manual gates
+
+- Visual review of both review sheets with long real-world recordings and dense findings.
+- Hardware capture validation of transient First Cut transcription and privacy scanning against native, Electron, and browser content.
+- Manual inspection of rendered privacy reports and Sanitized Share Copy playback across representative codecs/content.
+
 ## Next execution checkpoint
 
-### Phase 2 — v4.2: First Cut + Privacy Firewall
+### Phase 3 — v4.3: Release Factory and Open Tutorial Package
 
-With ActionMap complete and verified, the next checkpoint begins Phase 2 from `docs/V4_PLAN.md`:
+With Phase 2 complete, the next checkpoint begins Phase 3 from `docs/V4_PLAN.md`:
 
-1. Deterministic First Cut planning and suggestion-only review.
-2. Privacy Firewall detection, evidence, and deterministic review workflow.
-3. Sanitized Share Copy with a verifiable portability/privacy report.
+1. Render recipes and responsive `RenderPlan` variants.
+2. Release Factory batch orchestration and release-manifest outputs.
+3. Documentation outputs and the portable Open Tutorial Package.
 
 ## Resume checklist for an agent session
 

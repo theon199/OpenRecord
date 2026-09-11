@@ -25,7 +25,7 @@ struct ContentView: View {
             "Recording Telemetry Is Damaged",
             isPresented: Binding(
                 get: { model.degradedOpenMessage != nil },
-                set: { _ in }
+                set: { if !$0 { model.cancelDegradedOpen() } }
             )
         ) {
             Button("Open Anyway") {
@@ -41,7 +41,7 @@ struct ContentView: View {
             "OpenRecord Couldn’t Save Your Changes",
             isPresented: Binding(
                 get: { model.saveFailureMessage != nil },
-                set: { _ in }
+                set: { if !$0 { model.cancelPendingEditorTransition() } }
             )
         ) {
             Button("Retry") {

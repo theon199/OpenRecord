@@ -142,6 +142,8 @@ struct TimelineView: View {
                         && session.selectedSpeedID == nil
                         && session.selectedCaptionID == nil
                         && session.selectedAnnotationID == nil
+                        && session.selectedRedactionID == nil
+                        && session.selectedDrawingID == nil
                 )
                 .help("Delete  ⌫")
             }

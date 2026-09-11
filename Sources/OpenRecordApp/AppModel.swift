@@ -586,10 +586,6 @@ final class AppModel {
                 session.shutdown()
                 return
             }
-            guard generation == openGeneration else {
-                session.shutdown()
-                return
-            }
             editor?.shutdown()
             editor = session
             if session.lastErrorCategory != .none {
@@ -599,16 +595,10 @@ final class AppModel {
             pendingDegradedOpen = nil
             degradedOpenMessage = nil
             if generateAutoZooms {
-                do {
-                    try await session.applyAutoZoomsAndSave()
-                } catch is CancellationError {
-                    // Cancellation intentionally leaves the captured bundle
-                    // and the editor's current edits available in memory.
-                }
-                // ActionMap is independent from auto-zoom and may be
-                // rebuilt later by the user. New captures get a first local
-                // map after the automatic zoom pass has settled.
-                session.rebuildActionMap()
+                // v4.2 replaces the post-capture mutating auto-zoom pass with
+                // a staged, suggestion-only First Cut. The captured project
+                // remains unchanged until the user reviews and applies items.
+                session.generateFirstCut()
             }
         } catch let issue as EditorTelemetryLoadIssue {
             if generation == openGeneration {

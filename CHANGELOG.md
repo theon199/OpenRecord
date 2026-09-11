@@ -1,5 +1,33 @@
 # Changelog
 
+## 4.2.0 — 2026-09-11
+
+### Added
+
+- A cancellable, suggestion-only First Cut pipeline with Natural Demo, Tight Tutorial, and Changelog intents; deterministic cut, speed, zoom, caption, annotation, cursor-effect, and chapter proposals; evidence/confidence previews; durable accept/reject/stale review state; and one-step undo when proposals are applied.
+- A local Privacy Firewall for API keys, token shapes, email addresses, internal URLs, notifications, account identifiers, user-defined terms, and opt-in face/name signals. Persisted findings retain category, geometry, confidence, detector coverage, and SHA-256 fingerprints—not recognized plaintext.
+- Pre-export privacy review with accept/reject/edit controls, accepted-mask conversion to ordinary redaction lanes, and a second Vision scan over rendered video with a local privacy report that records sampled/finding timestamps and flags accepted content that remains detectable.
+- Sanitized Share Copy, which atomically installs a derivative `.openrecord` bundle containing rendered-safe display media plus an exact allowlist of privacy-minimized metadata. Original media, audio, analysis, cursor assets, and raw telemetry are excluded.
+
+### Changed
+
+- New captures now open into First Cut review instead of immediately mutating the project with post-capture auto-zooms.
+- Video export now passes through privacy review. Product copy explicitly treats detection as best effort and never describes the editable source bundle as sanitized.
+
+### Compatibility
+
+- Project document format remains v8. First Cut and Privacy Firewall review evidence stays in removable `analysis/*.jsonl` sidecars; accepted edits use existing authoritative project lanes.
+
+### Fixed & Hardened
+
+- Hardened array decoding with `LossyDecodable` for cursorSprites, speedSegments, captions, and annotations to isolate corrupted items.
+- Added strict atomic file schema and enum validation for speed segments and cursor sprites, integrated into CLI validation.
+- Consolidated timeline deletion architecture, eliminating dead single-item deletion methods and ensuring playback rate updates on speed region removal.
+- Optimized export GPU pipeline to composite directly into `CGImage` without intermediate pixel buffer overhead, and wrapped GIF rendering loops in autorelease pools.
+- Pruned duplicate detector coverage from individual privacy findings to keep `privacy.jsonl` compact.
+- Modernized CLI automation with `--framerate`/`--fps`, batch `--json`, and story beats in project inspection.
+- Fixed audio sample buffer leaks during capture teardown, and corrected preview audio playhead synchronization.
+
 ## 4.1.0 — 2026-09-11
 
 ### Added

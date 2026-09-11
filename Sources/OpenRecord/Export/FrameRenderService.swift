@@ -109,10 +109,18 @@ final class FrameRenderService: @unchecked Sendable {
     }
 
     func image(atOutputTime outputTime: TimeInterval) throws -> CGImage? {
-        let buffer = try ExportMediaIO.makePixelBuffer(width: width, height: height)
-        _ = try render(atOutputTime: outputTime, into: buffer)
+        try Task.checkCancellation()
+        let scene = scene(atOutputTime: outputTime)
+        let source = try reader.image(at: scene.sourceTime)
+        let webcam = try webcamImage(for: scene)
+        let composite = compositor.composite(
+            source: source,
+            webcam: webcam,
+            scene: scene
+        )
+        try Task.checkCancellation()
         return context.createCGImage(
-            CIImage(cvPixelBuffer: buffer),
+            composite,
             from: CGRect(x: 0, y: 0, width: width, height: height)
         )
     }

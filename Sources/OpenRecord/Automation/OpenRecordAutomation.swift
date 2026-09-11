@@ -15,14 +15,17 @@ public enum OpenRecordAutomationCommand: Sendable, Equatable {
         output: URL,
         codec: VideoExportCodec?,
         resolution: ExportResolutionPreset?,
-        quality: VideoExportQualityPreset? = nil
+        quality: VideoExportQualityPreset? = nil,
+        frameRate: VideoExportFrameRate? = nil
     )
     case batch(
         folder: URL,
         output: URL,
         codec: VideoExportCodec?,
         resolution: ExportResolutionPreset?,
-        quality: VideoExportQualityPreset? = nil
+        quality: VideoExportQualityPreset? = nil,
+        frameRate: VideoExportFrameRate? = nil,
+        json: Bool = false
     )
 }
 
@@ -51,6 +54,8 @@ public struct ProjectInspection: Codable, Sendable, Equatable {
     public let duration: TimeInterval?
     public let editDuration: TimeInterval?
     public let trackPresence: [CaptureTrackKind: Bool]
+    public let storyBeatCount: Int?
+    public let editDecisionCount: Int?
     /// Read-only metadata about the optional analysis cache.  This summary
     /// contains counts and status only; it never contains sidecar payload.
     public let analysis: AnalysisInspectionSummary
@@ -63,13 +68,17 @@ public struct ProjectInspection: Codable, Sendable, Equatable {
         editDuration: TimeInterval?,
         trackPresence: [CaptureTrackKind: Bool],
         validationIssues: [String],
-        analysis: AnalysisInspectionSummary = AnalysisInspectionSummary(status: .missing)
+        analysis: AnalysisInspectionSummary = AnalysisInspectionSummary(status: .missing),
+        storyBeatCount: Int? = nil,
+        editDecisionCount: Int? = nil
     ) {
         self.projectURL = projectURL
         self.formatVersion = formatVersion
         self.duration = duration
         self.editDuration = editDuration
         self.trackPresence = trackPresence
+        self.storyBeatCount = storyBeatCount
+        self.editDecisionCount = editDecisionCount
         self.analysis = analysis
         self.validationIssues = validationIssues
     }
@@ -144,8 +153,8 @@ public enum OpenRecordAutomationParser: Sendable {
     Usage:
       openrecord-cli inspect <project.openrecord> [--json]
       openrecord-cli validate <project.openrecord> [--json]
-      openrecord-cli export <project.openrecord> --output <file> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high]
-      openrecord-cli batch <folder> --output <folder> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high]
+      openrecord-cli export <project.openrecord> --output <file> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high] [--framerate auto|60|50|30|25|24|15]
+      openrecord-cli batch <folder> --output <folder> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high] [--framerate auto|60|50|30|25|24|15] [--json]
     """
 
     public static func parse<S: Sequence>(arguments: S) throws -> OpenRecordAutomationCommand
@@ -197,7 +206,8 @@ public enum OpenRecordAutomationParser: Sendable {
                 output: parsed.output,
                 codec: parsed.codec,
                 resolution: parsed.resolution,
-                quality: parsed.quality
+                quality: parsed.quality,
+                frameRate: parsed.frameRate
             )
 
         case "batch":
@@ -211,7 +221,9 @@ public enum OpenRecordAutomationParser: Sendable {
                 output: parsed.output,
                 codec: parsed.codec,
                 resolution: parsed.resolution,
-                quality: parsed.quality
+                quality: parsed.quality,
+                frameRate: parsed.frameRate,
+                json: parsed.json
             )
 
         default:
@@ -227,6 +239,8 @@ public enum OpenRecordAutomationParser: Sendable {
         var codec: VideoExportCodec?
         var resolution: ExportResolutionPreset?
         var quality: VideoExportQualityPreset?
+        var frameRate: VideoExportFrameRate?
+        var json: Bool
     }
 
     private static func parseExportLike(
@@ -239,6 +253,8 @@ public enum OpenRecordAutomationParser: Sendable {
         var codec: VideoExportCodec?
         var resolution: ExportResolutionPreset?
         var quality: VideoExportQualityPreset?
+        var frameRate: VideoExportFrameRate?
+        var json = false
         var index = 0
 
         while index < arguments.count {
@@ -287,6 +303,20 @@ public enum OpenRecordAutomationParser: Sendable {
                 }
                 quality = value
 
+            case "--framerate", "--fps":
+                index += 1
+                guard index < arguments.count,
+                      let value = VideoExportFrameRate.parseCLI(arguments[index])
+                else {
+                    throw OpenRecordAutomationError.invalidArguments(
+                        "Invalid frame rate. Expected auto, 60, 50, 30, 25, 24, or 15.\n\n\(usage)"
+                    )
+                }
+                frameRate = value
+
+            case "--json":
+                json = true
+
             case let option where option.hasPrefix("--"):
                 throw OpenRecordAutomationError.invalidArguments(
                     "Unknown option '\(option)' for \(command).\n\n\(usage)"
@@ -311,7 +341,9 @@ public enum OpenRecordAutomationParser: Sendable {
             output: projectURL(output),
             codec: codec,
             resolution: resolution,
-            quality: quality
+            quality: quality,
+            frameRate: frameRate,
+            json: json
         )
     }
 
@@ -360,6 +392,14 @@ private extension VideoExportCodec {
         case "prores422", "prores-422", "prores": .proRes422
         default: nil
         }
+    }
+}
+
+private extension VideoExportFrameRate {
+    static func parseCLI(_ value: String) -> VideoExportFrameRate? {
+        let cleaned = value.lowercased().replacingOccurrences(of: "fps", with: "").trimmingCharacters(in: .whitespaces)
+        if cleaned == "auto" { return .auto }
+        return VideoExportFrameRate(rawValue: cleaned)
     }
 }
 
@@ -418,7 +458,8 @@ public struct OpenRecordAutomation: Sendable {
         output outputURL: URL,
         codec: VideoExportCodec? = nil,
         resolution: ExportResolutionPreset? = nil,
-        quality: VideoExportQualityPreset? = nil
+        quality: VideoExportQualityPreset? = nil,
+        frameRate: VideoExportFrameRate? = nil
     ) async throws {
         let projectURL = try requireBundleURL(url)
         let safeOutputURL = outputURL.standardizedFileURL
@@ -429,6 +470,7 @@ public struct OpenRecordAutomation: Sendable {
         if let codec { document.videoExportSettings.codec = codec }
         if let resolution { document.videoExportSettings.resolution = resolution }
         if let quality { document.videoExportSettings.quality = quality }
+        if let frameRate { document.videoExportSettings.frameRate = frameRate }
         try await Exporter(projectBundleURL: projectURL).export(
             project: document,
             url: safeOutputURL,
@@ -457,7 +499,8 @@ public struct OpenRecordAutomation: Sendable {
         output outputDirectoryURL: URL,
         codec: VideoExportCodec? = nil,
         resolution: ExportResolutionPreset? = nil,
-        quality: VideoExportQualityPreset? = nil
+        quality: VideoExportQualityPreset? = nil,
+        frameRate: VideoExportFrameRate? = nil
     ) async throws -> BatchResult {
         let folderURL = folderURL.standardizedFileURL
         let outputDirectoryURL = outputDirectoryURL.standardizedFileURL
@@ -489,7 +532,8 @@ public struct OpenRecordAutomation: Sendable {
                     output: destination,
                     codec: codec,
                     resolution: resolution,
-                    quality: quality
+                    quality: quality,
+                    frameRate: frameRate
                 )
                 jobs.append(BatchJobResult(projectURL: projectURL, outputURL: destination, succeeded: true))
             } catch {
@@ -562,6 +606,13 @@ public struct OpenRecordAutomation: Sendable {
             do {
                 let library = ProjectLibrary(rootURL: projectURL.deletingLastPathComponent())
                 opened = try library.open(url: projectURL)
+                if let data = try? Data(contentsOf: documentURL),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    let enumIssues = AtomicFileWrite.unsupportedEnumValues(in: json)
+                    if !enumIssues.isEmpty {
+                        issues.append("Project document contains invalid enum or schema values: \(enumIssues.joined(separator: ", "))")
+                    }
+                }
             } catch {
                 issues.append("Could not open project: \(error.localizedDescription)")
             }
@@ -582,6 +633,8 @@ public struct OpenRecordAutomation: Sendable {
         // stale states are deliberately kept out of project validation issues
         // so they cannot block opening or exporting the underlying project.
         let analysis = AnalysisStore(projectURL: projectURL).inspect()
+        let storyBeatCount = opened?.document.storyBeats.count
+        let editDecisionCount = opened?.document.editDecisions.count
         return ProjectInspection(
             projectURL: projectURL,
             formatVersion: formatVersion,
@@ -589,7 +642,9 @@ public struct OpenRecordAutomation: Sendable {
             editDuration: editDuration,
             trackPresence: tracks,
             validationIssues: stableUnique(issues),
-            analysis: analysis
+            analysis: analysis,
+            storyBeatCount: storyBeatCount,
+            editDecisionCount: editDecisionCount
         )
     }
 
@@ -650,25 +705,27 @@ public enum OpenRecordAutomationCLI: Sendable {
                 let report = await automation.validate(project: project)
                 printReport(report, json: json)
                 return report.valid ? 0 : 2
-            case .export(let project, let output, let codec, let resolution, let quality):
+            case .export(let project, let output, let codec, let resolution, let quality, let frameRate):
                 try await automation.export(
                     project: project,
                     output: output,
                     codec: codec,
                     resolution: resolution,
-                    quality: quality
+                    quality: quality,
+                    frameRate: frameRate
                 )
                 print("Exported \(output.path)")
                 return 0
-            case .batch(let folder, let output, let codec, let resolution, let quality):
+            case .batch(let folder, let output, let codec, let resolution, let quality, let frameRate, let json):
                 let result = try await automation.batch(
                     folder: folder,
                     output: output,
                     codec: codec,
                     resolution: resolution,
-                    quality: quality
+                    quality: quality,
+                    frameRate: frameRate
                 )
-                printReport(result, json: false)
+                printReport(result, json: json)
                 return result.succeeded ? 0 : 1
             }
         } catch let error as OpenRecordAutomationError {
@@ -693,6 +750,12 @@ public enum OpenRecordAutomationCLI: Sendable {
             print("Format version: \(report.formatVersion.map(String.init) ?? "unknown")")
             print("Duration: \(formatted(report.duration))")
             print("Edit duration: \(formatted(report.editDuration))")
+            if let count = report.storyBeatCount {
+                print("Story beats: \(count)")
+            }
+            if let count = report.editDecisionCount {
+                print("Edit decisions: \(count)")
+            }
             print("Tracks:")
             for track in CaptureTrackKind.allCases {
                 print("  \(track.rawValue): \(report.trackPresence[track] == true ? "present" : "missing")")

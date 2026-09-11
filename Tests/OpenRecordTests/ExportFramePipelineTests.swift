@@ -111,15 +111,19 @@ enum ExportFramePipelineTests {
         let buffer = try ExportMediaIO.makePixelBuffer(width: width, height: height)
         let red = CIImage(color: CIColor(red: 1, green: 0, blue: 0))
             .cropped(to: CGRect(x: 0, y: 0, width: width, height: height))
+        let scene = FrameScene(
+            outputTime: 0,
+            sourceTime: 0,
+            cropUV: CGRect(x: 0, y: 0, width: 1, height: 1),
+            sourceWidth: width,
+            sourceHeight: height,
+            layout: layout,
+            canvas: canvas
+        )
         compositor.render(
             source: red,
             webcam: nil,
-            cropUV: CGRect(x: 0, y: 0, width: 1, height: 1),
-            cursorUV: nil,
-            cursorVelocity: nil,
-            clicking: false,
-            clickAge: nil,
-            keyboardState: KeyboardOverlayState(),
+            scene: scene,
             into: buffer
         )
 

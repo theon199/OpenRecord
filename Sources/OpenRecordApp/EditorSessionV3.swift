@@ -57,6 +57,7 @@ extension EditorSession {
         guard !timelineSelection.isEmpty else { return }
         let before = document
         let rebuild = timelineSelection.kind == .zoom
+        let hadSpeed = timelineSelection.kind == .speed
         document = ProjectTimelineOperations.deleting(
             from: document,
             selection: timelineSelection
@@ -68,6 +69,9 @@ extension EditorSession {
             actionName: "Delete Timeline Items",
             rebuildZoomEngine: rebuild
         )
+        if hadSpeed {
+            applyPlaybackRate(force: true)
+        }
     }
 
     func copyTimelineSelection() {
@@ -266,32 +270,10 @@ extension EditorSession {
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await Self.authorizeSpeechRecognition()
-                try Task.checkCancellation()
-                let requests = try self.transcriptionRequests(for: source)
-                let provider = OnDeviceSpeechTranscriptionProvider()
-                var transcript: [TranscriptSegment] = []
-                for (index, request) in requests.enumerated() {
-                    try Task.checkCancellation()
-                    self.analysisFraction = Double(index) / Double(max(requests.count, 1))
-                    self.analysisMessage = "Transcribing \(request.label)…"
+                var transcript = try await self.generateLocalTranscript(source: source) { fraction, label in
+                    self.analysisFraction = fraction
+                    self.analysisMessage = "Transcribing \(label)…"
                     self.transcriptionStatus = self.analysisMessage
-                    let raw = try await provider.transcribe(request: TranscriptionRequest(
-                        audioURL: request.url,
-                        source: request.source,
-                        trackOffset: 0
-                    ))
-                    transcript.append(contentsOf: raw.map { segment in
-                        var value = segment
-                        value.start = request.offset + value.start / request.sourceRate
-                        value.end = request.offset + value.end / request.sourceRate
-                        return value.normalized
-                    })
-                }
-                try Task.checkCancellation()
-                transcript.sort {
-                    if $0.start != $1.start { return $0.start < $1.start }
-                    return $0.id.uuidString < $1.id.uuidString
                 }
                 let before = self.document
                 let corrections = Dictionary(
@@ -338,6 +320,41 @@ extension EditorSession {
                 self.lastError = "Could not transcribe locally: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Runs the on-device provider without mutating the project. First Cut
+    /// uses this to derive caption/pause proposals while retaining its promise
+    /// that cancellation or Skip leaves authored project state unchanged.
+    func generateLocalTranscript(
+        source: TranscriptSource,
+        progress: ((Double, String) -> Void)? = nil
+    ) async throws -> [TranscriptSegment] {
+        try await Self.authorizeSpeechRecognition()
+        try Task.checkCancellation()
+        let requests = try transcriptionRequests(for: source)
+        let provider = OnDeviceSpeechTranscriptionProvider()
+        var transcript: [TranscriptSegment] = []
+        for (index, request) in requests.enumerated() {
+            try Task.checkCancellation()
+            progress?(Double(index) / Double(max(requests.count, 1)), request.label)
+            let raw = try await provider.transcribe(request: TranscriptionRequest(
+                audioURL: request.url,
+                source: request.source,
+                trackOffset: 0
+            ))
+            transcript.append(contentsOf: raw.map { segment in
+                var value = segment
+                value.start = request.offset + value.start / request.sourceRate
+                value.end = request.offset + value.end / request.sourceRate
+                return value.normalized
+            })
+        }
+        try Task.checkCancellation()
+        transcript.sort {
+            if $0.start != $1.start { return $0.start < $1.start }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        return transcript
     }
 
     func analyzeSilence(source: TranscriptSource, preset: SilencePreset? = nil) {

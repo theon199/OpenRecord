@@ -128,11 +128,23 @@ extension EditorSession {
             return
         }
         switch documentSelection {
-        case .zoom: deleteSelectedZoom()
-        case .speed: deleteSelectedSpeedSegment()
-        case .caption: deleteSelectedCaption()
-        case .annotation: deleteSelectedAnnotation()
-        case .redaction, .drawing:
+        case .zoom(let id):
+            timelineSelection = TimelineSelection(items: [.zoom(id)], primary: .zoom(id))
+            deleteTimelineSelection()
+        case .speed(let id):
+            timelineSelection = TimelineSelection(items: [.speed(id)], primary: .speed(id))
+            deleteTimelineSelection()
+        case .caption(let id):
+            timelineSelection = TimelineSelection(items: [.caption(id)], primary: .caption(id))
+            deleteTimelineSelection()
+        case .annotation(let id):
+            timelineSelection = TimelineSelection(items: [.annotation(id)], primary: .annotation(id))
+            deleteTimelineSelection()
+        case .redaction(let id):
+            timelineSelection = TimelineSelection(items: [.redaction(id)], primary: .redaction(id))
+            deleteTimelineSelection()
+        case .drawing(let id):
+            timelineSelection = TimelineSelection(items: [.drawing(id)], primary: .drawing(id))
             deleteTimelineSelection()
         case .webcam, .none: break
         }
@@ -174,14 +186,6 @@ extension EditorSession {
         document.captions[index] = normalizedCaption(cue)
         document.captions.sort { $0.start < $1.start }
         documentDidChange(from: before, actionName: "Adjust Caption")
-    }
-
-    func deleteSelectedCaption() {
-        guard let selectedCaptionID else { return }
-        let before = document
-        document.captions.removeAll { $0.id == selectedCaptionID }
-        self.selectedCaptionID = nil
-        documentDidChange(from: before, actionName: "Delete Caption")
     }
 
     func importCaptionsPanel() {
@@ -260,14 +264,6 @@ extension EditorSession {
         document.annotations[index] = annotation.normalized
         document.annotations.sort { $0.start < $1.start }
         documentDidChange(from: before, actionName: "Adjust Annotation")
-    }
-
-    func deleteSelectedAnnotation() {
-        guard let selectedAnnotationID else { return }
-        let before = document
-        document.annotations.removeAll { $0.id == selectedAnnotationID }
-        self.selectedAnnotationID = nil
-        documentDidChange(from: before, actionName: "Delete Annotation")
     }
 
     func updateVideoExportSettings(_ body: (inout VideoExportSettings) -> Void) {

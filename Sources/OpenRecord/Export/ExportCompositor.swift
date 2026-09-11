@@ -93,15 +93,11 @@ final class ExportCompositor {
         self.background = Self.makeBackground(canvas: canvas, extent: canvasExtent)
     }
 
-    /// Composites media using an already-resolved scene. No source/output
-    /// mapping, crop selection, active-item lookup, or geometry calculation is
-    /// performed here; those decisions belong to `FrameSceneResolver`.
-    func render(
+    func composite(
         source: CIImage,
         webcam: CIImage?,
-        scene: FrameScene,
-        into pixelBuffer: CVPixelBuffer
-    ) {
+        scene: FrameScene
+    ) -> CIImage {
         let layout = scene.layout
         let canvasExtent = CGRect(
             x: 0,
@@ -216,8 +212,28 @@ final class ExportCompositor {
             output = apply(redaction, to: output, canvasSize: layout.size, canvasHeight: canvasExtent.height)
         }
 
+        return output.cropped(to: canvasExtent)
+    }
+
+    /// Composites media using an already-resolved scene. No source/output
+    /// mapping, crop selection, active-item lookup, or geometry calculation is
+    /// performed here; those decisions belong to `FrameSceneResolver`.
+    func render(
+        source: CIImage,
+        webcam: CIImage?,
+        scene: FrameScene,
+        into pixelBuffer: CVPixelBuffer
+    ) {
+        let layout = scene.layout
+        let canvasExtent = CGRect(
+            x: 0,
+            y: 0,
+            width: layout.width,
+            height: layout.height
+        )
+        let output = composite(source: source, webcam: webcam, scene: scene)
         context.render(
-            output.cropped(to: canvasExtent),
+            output,
             to: pixelBuffer,
             bounds: canvasExtent,
             colorSpace: colorSpace
@@ -225,7 +241,7 @@ final class ExportCompositor {
     }
 
     /// Compatibility adapter for callers that still provide frame state
-    /// directly. New video/GIF/snapshot/preview paths use the scene overload.
+    /// directly (such as golden tests). Video/GIF/snapshot/preview paths use the scene overload.
     func render(
         source: CIImage,
         webcam: CIImage?,

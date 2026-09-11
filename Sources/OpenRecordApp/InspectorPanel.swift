@@ -775,7 +775,7 @@ struct InspectorPanel: View {
                 confirmRegenerateZooms = true
             }
         }
-        .disabled(session.exportProgress != nil)
+        .disabled(session.exportProgress != nil || session.isAnalysisCancellable || session.analysisPhase != .idle)
     }
 
     private var zoomAmount: Binding<Double> {

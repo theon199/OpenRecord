@@ -102,6 +102,10 @@ enum AtomicFileWrite {
             )
         }
     }
+
+    package static func unsupportedEnumValues(in root: [String: Any]) -> [String] {
+        ProjectDocumentPersistence.unsupportedEnumValues(in: root)
+    }
 }
 
 private enum ProjectDocumentPersistence {
@@ -243,7 +247,7 @@ private enum ProjectDocumentPersistence {
         UUID(uuidString: raw)?.uuidString.lowercased() ?? raw
     }
 
-    private static func unsupportedEnumValues(in root: [String: Any]) -> [String] {
+    static func unsupportedEnumValues(in root: [String: Any]) -> [String] {
         var issues: [String] = []
 
         func check(
@@ -267,6 +271,13 @@ private enum ProjectDocumentPersistence {
         func finiteNumber(_ value: Any?) -> Bool {
             guard let number = value as? NSNumber, !isJSONBool(number) else { return false }
             return number.doubleValue.isFinite
+        }
+
+        func checkRequiredBool(_ object: [String: Any], _ key: String, at path: String) {
+            guard isJSONBool(object[key]) else {
+                issues.append("\(path)=<missing-or-non-bool>")
+                return
+            }
         }
 
         check(
@@ -456,11 +467,47 @@ private enum ProjectDocumentPersistence {
                 }
             }
         }
-
-        func checkRequiredBool(_ object: [String: Any], _ key: String, at path: String) {
-            guard isJSONBool(object[key]) else {
-                issues.append("\(path)=<missing-or-non-bool>")
-                return
+        if let rawSpeeds = root["speedSegments"] {
+            guard let speeds = rawSpeeds as? [Any] else {
+                issues.append("speedSegments=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawSpeed) in speeds.enumerated() {
+                guard let speed = rawSpeed as? [String: Any] else {
+                    issues.append("speedSegments[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "speedSegments[\(index)]"
+                if let id = speed["id"] as? String, UUID(uuidString: id) != nil {
+                    // Valid stable identity
+                } else {
+                    issues.append("\(prefix).id=<missing-or-invalid>")
+                }
+                for field in ["start", "end", "rate"] {
+                    guard finiteNumber(speed[field]) else {
+                        issues.append("\(prefix).\(field)=<missing-or-non-number>")
+                        continue
+                    }
+                }
+            }
+        }
+        if let rawSprites = root["cursorSprites"] {
+            guard let sprites = rawSprites as? [Any] else {
+                issues.append("cursorSprites=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawSprite) in sprites.enumerated() {
+                guard let sprite = rawSprite as? [String: Any] else {
+                    issues.append("cursorSprites[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "cursorSprites[\(index)]"
+                if !(sprite["id"] is String) {
+                    issues.append("\(prefix).id=<missing-or-non-string>")
+                }
+                if !(sprite["pngRelativePath"] is String) {
+                    issues.append("\(prefix).pngRelativePath=<missing-or-non-string>")
+                }
             }
         }
 

@@ -139,6 +139,20 @@ struct OpenRecordApp: App {
                 }
                 .disabled(model.editor?.selectedActionMapRows.isEmpty != false)
             }
+            CommandMenu("Review") {
+                Button("First Cut…") {
+                    model.editor?.presentedReviewSheet = .firstCut
+                }
+                .disabled(model.editor == nil)
+                Button("Privacy Firewall…") {
+                    model.editor?.presentedReviewSheet = .privacyReview
+                }
+                .disabled(model.editor == nil)
+                Button("Create Sanitized Share Copy…") {
+                    model.editor?.presentSanitizedShareCopyPanel()
+                }
+                .disabled(model.editor == nil || model.editor?.exportProgress != nil)
+            }
             CommandGroup(after: .newItem) {
                 Button("Export…") {
                     model.editor?.presentExportPanel()

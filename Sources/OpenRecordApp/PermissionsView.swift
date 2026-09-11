@@ -2,6 +2,7 @@ import OpenRecord
 import SwiftUI
 
 struct PermissionsView: View {
+    @Environment(\.dismiss) private var dismiss
     @Bindable var model: AppModel
 
     var body: some View {
@@ -27,6 +28,13 @@ struct PermissionsView: View {
             .frame(maxWidth: 520)
 
             HStack(spacing: 12) {
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+
+                Spacer()
+
                 Button("Recheck") {
                     model.refreshPermissions()
                 }

@@ -60,26 +60,6 @@ struct LibraryItem: Identifiable, Hashable {
     }
 }
 
-enum TelemetryLoader {
-    static func load(
-        from projectURL: URL
-    ) throws -> (mouse: [CursorSample], clicks: [ClickSample], keys: [KeySample]) {
-        let mouse = try ProjectJSON.decodeJSONL(
-            CursorSample.self,
-            from: ProjectLayout.mouseURL(in: projectURL)
-        )
-        let clicks = try ProjectJSON.decodeJSONL(
-            ClickSample.self,
-            from: ProjectLayout.clicksURL(in: projectURL)
-        )
-        let keys = try ProjectJSON.decodeJSONL(
-            KeySample.self,
-            from: ProjectLayout.keysURL(in: projectURL)
-        )
-        return (mouse, clicks, keys)
-    }
-}
-
 func aspectFitRect(aspectWidth: CGFloat, aspectHeight: CGFloat, in size: CGSize) -> CGRect {
     let aspect = max(aspectWidth, 0.01) / max(aspectHeight, 0.01)
     let viewAspect = size.width / max(size.height, 0.01)

@@ -238,7 +238,10 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     }
 
     func stop(reason: CaptureStopReason = .manual) async throws -> CaptureStopResult {
-        stateLock.withLock { stopping = true }
+        stateLock.withLock {
+            stopping = true
+            pendingAudio.removeAll()
+        }
         let minimumAvailableDiskBytes = healthMonitor.stop()
         if cursorActive {
             await MainActor.run { cursor.stop() }
@@ -412,6 +415,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         if webcamActive {
             try? await webcam.stop()
         }
+        stateLock.withLock { pendingAudio.removeAll() }
         try? await videoWriter?.finish()
         try? await systemAudioWriter?.finish()
     }

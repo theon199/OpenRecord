@@ -1000,7 +1000,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         zoomRanges = (try? container.decode([LossyDecodable<ZoomRange>].self, forKey: .zoomRanges))?
             .compactMap(\.value) ?? []
         canvas = try container.decodeIfPresent(CanvasSettings.self, forKey: .canvas) ?? .legacyDefault
-        cursorSprites = try container.decodeIfPresent([CursorSprite].self, forKey: .cursorSprites) ?? []
+        cursorSprites = (try? container.decode([LossyDecodable<CursorSprite>].self, forKey: .cursorSprites))?
+            .compactMap(\.value) ?? []
         keyboardOverlay = try container.decodeIfPresent(
             KeyboardOverlaySettings.self,
             forKey: .keyboardOverlay
@@ -1016,7 +1017,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         )) ?? .normal
         zoomEasing = (try? container.decode(ZoomEasingPreset.self, forKey: .zoomEasing))
             ?? .smooth
-        speedSegments = (try? container.decode([SpeedSegment].self, forKey: .speedSegments)) ?? []
+        speedSegments = (try? container.decode([LossyDecodable<SpeedSegment>].self, forKey: .speedSegments))?
+            .compactMap(\.value) ?? []
         muteAudioWhenSpedUp = (try? container.decode(
             Bool.self,
             forKey: .muteAudioWhenSpedUp
@@ -1025,8 +1027,10 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             AudioCleanupSettings.self,
             forKey: .audioCleanup
         )) ?? .default
-        captions = (try? container.decode([CaptionCue].self, forKey: .captions)) ?? []
-        annotations = (try? container.decode([Annotation].self, forKey: .annotations)) ?? []
+        captions = (try? container.decode([LossyDecodable<CaptionCue>].self, forKey: .captions))?
+            .compactMap(\.value) ?? []
+        annotations = (try? container.decode([LossyDecodable<Annotation>].self, forKey: .annotations))?
+            .compactMap(\.value) ?? []
         redactions = (try? container.decode(
             [LossyDecodable<RedactionRegion>].self,
             forKey: .redactions

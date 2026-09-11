@@ -93,13 +93,15 @@ private enum ExportAlternateSession {
         for index in 0..<count {
             try Task.checkCancellation()
             let outputTime = min(duration, Double(index) / Double(frameRate))
-            guard let image = try frames.image(atOutputTime: outputTime) else {
-                throw OpenRecordError.io("Could not render a GIF frame.")
+            try autoreleasepool {
+                guard let image = try frames.image(atOutputTime: outputTime) else {
+                    throw OpenRecordError.io("Could not render a GIF frame.")
+                }
+                let frameProperties: [CFString: Any] = [
+                    kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(frameRate)] as [CFString: Any]
+                ]
+                CGImageDestinationAddImage(destination, image, frameProperties as CFDictionary)
             }
-            let frameProperties: [CFString: Any] = [
-                kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(frameRate)] as [CFString: Any]
-            ]
-            CGImageDestinationAddImage(destination, image, frameProperties as CFDictionary)
             if index == count - 1 || index % 2 == 0 { report(progress, Double(index + 1) / Double(count)) }
         }
         guard CGImageDestinationFinalize(destination) else { throw OpenRecordError.io("Could not finalize the GIF export file.") }

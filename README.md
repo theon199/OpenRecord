@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional privacy-filtered semantic controls and keyboard shortcuts, and an optional webcam track. It can also import MP4/MOV/M4V recordings from an iPhone or other device without changing the original. After capture or import, it can build a private local ActionMap, transcribe recorded audio on device, suggest pause cuts and smart auto-zooms, edit through multiple non-destructive cuts, apply portable project templates, and export polished video, GIF, audio, or still-image deliverables.
+OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional privacy-filtered semantic controls and keyboard shortcuts, and an optional webcam track. It can also import MP4/MOV/M4V recordings from an iPhone or other device without changing the original. After capture or import, it can build a private local ActionMap, prepare a reviewable First Cut, scan locally for possible private content, edit through multiple non-destructive cuts, apply portable project templates, and export polished video, GIF, audio, still images, or a sanitized derivative share copy.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -53,7 +53,7 @@ The first-run screen has **Open Settings** / **Request Remaining**. After flippi
 - Pick **None**, **Tutorial**, **Portrait Demo**, or a local project template before recording. Template files contain presentation defaults only, never recorded media.
 - **Record keyboard shortcuts** adds shortcut chords and navigation keys to a separate overlay track. Ordinary unmodified typing and all input while macOS Secure Input is active are omitted.
 - **Capture semantic controls** optionally records sanitized Accessibility roles, approved static-control labels, bounds, and explicit degradation reasons. Element values, secure-field content, ordinary typing, and window titles are never recorded. Use **⌃⌥⌘M** while recording to add a precise story-beat marker.
-- Stop with **⌃⌥⌘R** or the Stop button. OpenRecord then writes the project and generates auto-zooms from cursor activity.
+- Stop with **⌃⌥⌘R** or the Stop button. OpenRecord writes the project, builds local analysis, and opens a suggestion-only First Cut review. Cancelling or skipping First Cut leaves the project unchanged.
 
 ## Library folder
 
@@ -70,9 +70,13 @@ Open a project from the sidebar.
 - **Preview** follows the playhead zoom/crop using the same `ExportLayout` padding and crop mapping as export (not a full compositor).
 - **Timeline**: playhead, trim/cut decisions, zoom and speed blocks, captions, annotations, cursor treatments, privacy regions, and vector drawings. Compatible items support multi-select, copy/paste, duplicate, snapping, split, nudge, and grouped undo.
 - **Transcript and ActionMap**: on-device mic/system transcription plus a local, searchable map of clicks, shortcuts, privacy-safe typing activity, semantic controls, and story markers. Action rows seek in source time across cuts and speed changes, expose confidence/evidence, support durable rename/merge/split/suppress/lock corrections, and convert to chapters, steps, zooms, or annotations.
+- **First Cut**: choose Natural Demo, Tight Tutorial, or Changelog pacing, then review evidence-backed cuts, speed regions, zooms, captions, annotations, cursor effects, and chapters before anything is authored. Apply all, some, or none; applying suggestions is one undo step and regeneration preserves manual or locked work.
+- **Privacy Firewall**: scan locally for possible secrets and identifiers, accept/reject/edit proposed masks, and review detector coverage. Findings persist fingerprints and geometry rather than recognized plaintext. Detection is best effort and can miss content; the editable source bundle always retains original media.
 - **Inspector**: smart zoom/cursor styling, captions and richer annotations, blur/pixelate privacy regions, pen/highlighter drawing, generic laptop/phone/browser frames, expanded webcam styling, keyboard overlays, and local audio normalization/compression/limiting/fades.
 
-**Export Video…** (⌘E) renders the **in-memory** document — not a stale re-read from disk. Choose H.264 or HEVC in MP4, or ProRes 422 in MOV, at 720p, 1080p, 4K, or source-sized resolution. Output is Rec.709 and 60 fps if the source averages ≥ 45 fps, otherwise 30 fps. Speed regions remap every visual and telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
+**Export Video…** (⌘E) first opens privacy review, then renders the **in-memory** document—not a stale re-read from disk. A second local scan runs over the rendered movie and writes a privacy report beside it. Choose H.264 or HEVC in MP4, or ProRes 422 in MOV, at 720p, 1080p, 4K, or source-sized resolution. Output is Rec.709 and 60 fps if the source averages ≥ 45 fps, otherwise 30 fps. Speed regions remap every visual and telemetry track from output time to source time. Mic + system AAC are synchronized, retimed with pitch preservation, cleaned according to the non-destructive audio settings, and mixed to stereo 48 kHz when present.
+
+**Sanitized Share Copy…** renders a fresh H.264 derivative and atomically creates a new `.openrecord` package containing only `meta.json`, `project.json`, the rendered `recording/display.mp4`, and `privacy-report.json`. It excludes original display media, separate audio, thumbnails, analysis, cursor assets, and raw telemetry. This does not alter or sanitize the editable source bundle, and the rendered derivative should still be reviewed manually before sharing.
 
 The Export inspector also creates animated GIFs (up to 30 seconds), mixed-audio M4A files, and a PNG of the current playhead frame (⌘⇧E). In the library, check the projects you want, then use **Batch Export Selected**. Each queued job keeps its own codec/resolution preset, exposes progress and failure state, continues past failures, and can be retried without rerunning successful jobs.
 
@@ -132,6 +136,8 @@ Each recording is a folder package:
     manifest.json
     actions.jsonl           # inferred actions with stable evidence references
     ocr.jsonl               # optional privacy-filtered Vision evidence
+    suggestions.jsonl       # First Cut proposals and local review lifecycle
+    privacy.jsonl           # categories/fingerprints/geometry; no recognized plaintext
   recording/
     display.mp4             # H.264, cursor hidden in the pixels
     webcam.mp4              # optional H.264 face-camera track
@@ -163,4 +169,4 @@ atomic replacement.
 
 ## Out of scope
 
-No cloud-required speech service, automatic sensitive-content detection, arbitrary animation curves, webcam background removal, live iPhone capture, hosted share links, collaboration accounts, advanced DAW/NLE tooling, or in-app OAuth yet. OpenRecord supports the safer import-oriented iPhone/device workflow instead of coupling live device capture to desktop recording.
+No cloud-required speech service, perfect sensitive-content detection, arbitrary animation curves, webcam background removal, live iPhone capture, hosted share links, collaboration accounts, advanced DAW/NLE tooling, or in-app OAuth. OpenRecord supports deterministic local privacy suggestions and the safer import-oriented iPhone/device workflow rather than claiming complete detection or coupling live device capture to desktop recording.
