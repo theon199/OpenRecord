@@ -360,6 +360,32 @@ private enum ExportSession {
             drawings: project.drawings,
             deviceFrame: project.deviceFrame
         )
+        let renderService = FrameRenderService(
+            project: project,
+            reader: reader,
+            webcamReader: webcamReader,
+            webcamDuration: webcamDuration,
+            webcamOffset: webcamOffset,
+            captureDiagnostics: captureDiagnostics,
+            webcamMirror: meta.webcam?.mirror ?? false,
+            webcamSourceAspect: webcamReader.map {
+                Double(max($0.sourceWidth, 1)) / Double(max($0.sourceHeight, 1))
+            },
+            timeMapper: timeMapper,
+            engine: engine,
+            keyboardTimeline: keyboardTimeline,
+            cursor: FrameSceneCursorMetadata(
+                sprite: cursor?.sprite,
+                imagePixelSize: cursor.map {
+                    Size2D(width: $0.image.extent.width, height: $0.image.extent.height)
+                }
+            ),
+            compositor: compositor,
+            context: ciContext,
+            width: layout.width,
+            height: layout.height,
+            displayScale: meta.scale
+        )
 
         let writerParts: (
             AVAssetWriter,
@@ -441,17 +467,8 @@ private enum ExportSession {
         // backpressure without allowing a long or 4K export to fan out memory.
         let frameQueue = ExportBoundedQueue<PreparedExportFrame>(capacity: 3)
         let framePreparer = ExportFramePreparer(
-            reader: reader,
-            webcamReader: webcamReader,
-            webcamDuration: webcamDuration,
-            webcamOffset: webcamOffset,
-            captureDiagnostics: captureDiagnostics,
-            timeMapper: timeMapper,
+            renderService: renderService,
             fps: fps,
-            engine: engine,
-            keyboardTimeline: keyboardTimeline,
-            keyboardSettings: project.keyboardOverlay,
-            compositor: compositor,
             pixelBufferPool: adaptor.pixelBufferPool,
             canvasWidth: layout.width,
             canvasHeight: layout.height
@@ -662,52 +679,26 @@ private struct PreparedExportFrame: @unchecked Sendable {
     var presentationTime: CMTime
 }
 
-/// Owns every sequential, non-thread-safe decoder/compositor dependency. Only
-/// one producer task calls `prepare`, while the writer consumes already-rendered
+/// Prepares buffers in presentation order. The shared render service owns all
+/// sequential, non-thread-safe decoder/compositor dependencies; only one
+/// producer task calls `prepare`, while the writer consumes already-rendered
 /// buffers in order from `ExportBoundedQueue`.
 private final class ExportFramePreparer: @unchecked Sendable {
-    let reader: ExportVideoReader
-    let webcamReader: ExportVideoReader?
-    let webcamDuration: TimeInterval
-    let webcamOffset: TimeInterval
-    let captureDiagnostics: CaptureDiagnostics?
-    let timeMapper: ProjectTimeMapper
+    let renderService: FrameRenderService
     let fps: Int32
-    let engine: ZoomEngine
-    let keyboardTimeline: KeyboardOverlayTimeline
-    let keyboardSettings: KeyboardOverlaySettings
-    let compositor: ExportCompositor
     let pixelBufferPool: CVPixelBufferPool?
     let canvasWidth: Int
     let canvasHeight: Int
 
     init(
-        reader: ExportVideoReader,
-        webcamReader: ExportVideoReader?,
-        webcamDuration: TimeInterval,
-        webcamOffset: TimeInterval,
-        captureDiagnostics: CaptureDiagnostics?,
-        timeMapper: ProjectTimeMapper,
+        renderService: FrameRenderService,
         fps: Int32,
-        engine: ZoomEngine,
-        keyboardTimeline: KeyboardOverlayTimeline,
-        keyboardSettings: KeyboardOverlaySettings,
-        compositor: ExportCompositor,
         pixelBufferPool: CVPixelBufferPool?,
         canvasWidth: Int,
         canvasHeight: Int
     ) {
-        self.reader = reader
-        self.webcamReader = webcamReader
-        self.webcamDuration = webcamDuration
-        self.webcamOffset = webcamOffset
-        self.captureDiagnostics = captureDiagnostics
-        self.timeMapper = timeMapper
+        self.renderService = renderService
         self.fps = fps
-        self.engine = engine
-        self.keyboardTimeline = keyboardTimeline
-        self.keyboardSettings = keyboardSettings
-        self.compositor = compositor
         self.pixelBufferPool = pixelBufferPool
         self.canvasWidth = canvasWidth
         self.canvasHeight = canvasHeight
@@ -716,41 +707,6 @@ private final class ExportFramePreparer: @unchecked Sendable {
     func prepare(index: Int) throws -> PreparedExportFrame {
         try Task.checkCancellation()
         let outputTime = Double(index) / Double(fps)
-        let sourceTime = timeMapper.sourceTime(atOutputTime: outputTime)
-
-        let source: CIImage
-        do {
-            source = try reader.image(at: sourceTime)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw ExportFailure(stage: .sourceReading, detail: error.localizedDescription)
-        }
-
-        let webcamTime = WebcamTimeline.sourceTime(
-            atTimelineTime: sourceTime,
-            sourceDuration: webcamDuration,
-            legacyOffset: webcamOffset,
-            diagnostics: captureDiagnostics
-        )
-        let webcamFrame: CIImage?
-        if let webcamReader,
-           let webcamTime,
-           webcamTime >= 0,
-           webcamTime <= webcamDuration
-        {
-            do {
-                webcamFrame = try webcamReader.image(at: webcamTime)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // Webcam is an optional overlay. Preserve the existing
-                // degraded-export behavior when only that track is damaged.
-                webcamFrame = nil
-            }
-        } else {
-            webcamFrame = nil
-        }
 
         let pixelBuffer: CVPixelBuffer
         do {
@@ -777,27 +733,13 @@ private final class ExportFramePreparer: @unchecked Sendable {
             throw ExportFailure(stage: .frameRendering, detail: error.localizedDescription)
         }
 
-        let clicking = engine.isClicking(at: sourceTime)
-        compositor.render(
-            source: source,
-            webcam: webcamFrame,
-            cropUV: engine.crop(at: sourceTime),
-            cursorUV: engine.interpolateCursor(at: sourceTime),
-            cursorVelocity: engine.cursorVelocity(at: sourceTime),
-            clicking: clicking,
-            clickAge: clicking
-                ? (ExportLayout.primaryClickAge(
-                    at: sourceTime,
-                    clicks: engine.smoother.clicks
-                ) ?? 0)
-                : nil,
-            keyboardState: keyboardTimeline.state(
-                at: sourceTime,
-                settings: keyboardSettings
-            ),
-            sourceTime: sourceTime,
-            into: pixelBuffer
-        )
+        do {
+            _ = try renderService.render(atOutputTime: outputTime, into: pixelBuffer)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw ExportFailure(stage: .frameRendering, detail: error.localizedDescription)
+        }
         try Task.checkCancellation()
         return PreparedExportFrame(
             pixelBuffer: pixelBuffer,

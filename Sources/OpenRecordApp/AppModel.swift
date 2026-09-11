@@ -54,6 +54,7 @@ final class AppModel {
     var editor: EditorSession?
     var isRecorderPresented = false
     var isSettingsPresented = false
+    var isPermissionsPresented = false
     var captureSources: [CaptureSourceOption] = []
     var selectedSourceID: String?
     var captureSourceThumbnails: [String: NSImage] = [:]
@@ -75,6 +76,30 @@ final class AppModel {
             UserDefaults.standard.set(
                 capturesKeyboardShortcuts,
                 forKey: Self.capturesKeyboardShortcutsDefaultsKey
+            )
+        }
+    }
+    var capturesMicrophone = true {
+        didSet {
+            UserDefaults.standard.set(
+                capturesMicrophone,
+                forKey: Self.capturesMicrophoneDefaultsKey
+            )
+        }
+    }
+    var capturesSystemAudio = true {
+        didSet {
+            UserDefaults.standard.set(
+                capturesSystemAudio,
+                forKey: Self.capturesSystemAudioDefaultsKey
+            )
+        }
+    }
+    var capturesCursorTelemetry = true {
+        didSet {
+            UserDefaults.standard.set(
+                capturesCursorTelemetry,
+                forKey: Self.capturesCursorTelemetryDefaultsKey
             )
         }
     }
@@ -131,7 +156,23 @@ final class AppModel {
     private var sourcePreviewTask: Task<Void, Never>?
     private static let capturesKeyboardShortcutsDefaultsKey =
         "OpenRecord.capturesKeyboardShortcuts"
+    private static let capturesMicrophoneDefaultsKey =
+        "OpenRecord.capturesMicrophone"
+    private static let capturesSystemAudioDefaultsKey =
+        "OpenRecord.capturesSystemAudio"
+    private static let capturesCursorTelemetryDefaultsKey =
+        "OpenRecord.capturesCursorTelemetry"
     private static let capturesWebcamDefaultsKey = "OpenRecord.capturesWebcam"
+
+    var captureRequest: CaptureRequest {
+        CaptureRequest(
+            capturesMicrophone: capturesMicrophone,
+            capturesSystemAudio: capturesSystemAudio,
+            capturesCursorTelemetry: capturesCursorTelemetry,
+            capturesKeyboardShortcuts: capturesKeyboardShortcuts,
+            capturesWebcam: capturesWebcam
+        )
+    }
 
     init() {
         library = .resolved()
@@ -147,6 +188,21 @@ final class AppModel {
                 forKey: Self.capturesWebcamDefaultsKey
             )
         }
+        if UserDefaults.standard.object(forKey: Self.capturesMicrophoneDefaultsKey) != nil {
+            capturesMicrophone = UserDefaults.standard.bool(
+                forKey: Self.capturesMicrophoneDefaultsKey
+            )
+        }
+        if UserDefaults.standard.object(forKey: Self.capturesSystemAudioDefaultsKey) != nil {
+            capturesSystemAudio = UserDefaults.standard.bool(
+                forKey: Self.capturesSystemAudioDefaultsKey
+            )
+        }
+        if UserDefaults.standard.object(forKey: Self.capturesCursorTelemetryDefaultsKey) != nil {
+            capturesCursorTelemetry = UserDefaults.standard.bool(
+                forKey: Self.capturesCursorTelemetryDefaultsKey
+            )
+        }
         refreshPermissions()
         reloadProjectTemplates()
     }
@@ -159,6 +215,11 @@ final class AppModel {
         installRecordShortcut()
         observeCaptureEvents()
         configureRecordingOverlay()
+        AppDelegate.installOpenURLHandler { [weak self] urls in
+            Task { @MainActor [weak self] in
+                await self?.openExternalProjects(urls)
+            }
+        }
         AppDelegate.terminationHandler = { [weak self] in
             await self?.prepareForTermination() ?? true
         }
@@ -464,6 +525,30 @@ final class AppModel {
         await requestEditorTransition(.open(url, generateAutoZooms: generateAutoZooms))
     }
 
+    func presentOpenProjectPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        if let type = UTType(filenameExtension: ProjectLayout.bundleExtension) {
+            panel.allowedContentTypes = [type]
+        }
+        panel.prompt = "Open"
+        panel.message = "Open an existing .\(ProjectLayout.bundleExtension) project. Projects outside the library open read-only."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await openProject(url) }
+    }
+
+    private func openExternalProjects(_ urls: [URL]) async {
+        for url in urls {
+            guard url.pathExtension.lowercased() == ProjectLayout.bundleExtension else {
+                continue
+            }
+            await openProject(url)
+        }
+    }
+
     private func performOpenProject(
         _ url: URL,
         generateAutoZooms: Bool,
@@ -482,9 +567,6 @@ final class AppModel {
                 session.shutdown()
                 return
             }
-            if generateAutoZooms {
-                try await session.applyAutoZoomsAndSave()
-            }
             guard generation == openGeneration else {
                 session.shutdown()
                 return
@@ -497,6 +579,14 @@ final class AppModel {
             selectedProjectURL = url
             pendingDegradedOpen = nil
             degradedOpenMessage = nil
+            if generateAutoZooms {
+                do {
+                    try await session.applyAutoZoomsAndSave()
+                } catch is CancellationError {
+                    // Cancellation intentionally leaves the captured bundle
+                    // and the editor's current edits available in memory.
+                }
+            }
         } catch let issue as EditorTelemetryLoadIssue {
             if generation == openGeneration {
                 pendingDegradedOpen = PendingDegradedOpen(
@@ -537,6 +627,10 @@ final class AppModel {
                 allowDegradedTelemetry: true
             )
         }
+    }
+
+    func cancelAnalysis() {
+        editor?.cancelAnalysis()
     }
 
     func cancelDegradedOpen() {
@@ -588,6 +682,46 @@ final class AppModel {
             } catch {
                 recordErrorCategory(.projectSave)
                 saveFailureMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func saveEditorCopy() {
+        saveEditorCopy(toLibrary: false)
+    }
+
+    func addEditorCopyToLibrary() {
+        saveEditorCopy(toLibrary: true)
+    }
+
+    private func saveEditorCopy(toLibrary: Bool) {
+        guard let editor else { return }
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.directoryURL = toLibrary ? library.rootURL : nil
+        panel.nameFieldStringValue = "\(editor.title) Copy.\(ProjectLayout.bundleExtension)"
+        panel.title = toLibrary ? "Add a Copy to Library" : "Save a Copy"
+        panel.prompt = toLibrary ? "Add to Library" : "Save Copy"
+        panel.message = toLibrary
+            ? "Adds a writable copy to the configured library folder."
+            : "Saves the complete recording bundle with your current edits."
+        guard panel.runModal() == .OK, var destination = panel.url else { return }
+        if destination.pathExtension.lowercased() != ProjectLayout.bundleExtension {
+            destination.deletePathExtension()
+            destination.appendPathExtension(ProjectLayout.bundleExtension)
+        }
+        Task {
+            do {
+                let saved = try await editor.saveCopy(to: destination)
+                if toLibrary {
+                    refreshProjects()
+                    await openProject(saved)
+                } else {
+                    editor.noteAnalysisMessage("Saved a copy to \(saved.lastPathComponent).")
+                }
+            } catch {
+                reportError(error.localizedDescription, category: .projectSave)
             }
         }
     }
@@ -701,10 +835,6 @@ final class AppModel {
     func presentRecorder(autoStart: Bool) async {
         showMainWindow()
         refreshPermissions()
-        guard allPermissionsGranted else {
-            recordErrorCategory(.permissions)
-            return
-        }
         guard !isRecording, !isProcessingCapture else { return }
         reloadProjectTemplates()
         isRecorderPresented = true
@@ -873,12 +1003,6 @@ final class AppModel {
             cancelCountdown()
             return
         }
-        refreshPermissions()
-        if !allPermissionsGranted {
-            recordErrorCategory(.permissions)
-            showMainWindow()
-            return
-        }
         await presentRecorder(autoStart: true)
     }
 
@@ -1031,15 +1155,16 @@ final class AppModel {
             try await capture.start(
                 target: source.target,
                 projectURL: url,
-                capturesKeyboardShortcuts: capturesKeyboardShortcuts,
-                capturesWebcam: capturesWebcam
+                request: captureRequest
             )
             guard capture.isRunning else {
                 countdownRemaining = nil
                 refreshRecordingHUD()
                 return
             }
-            capture.setMicrophoneMuted(isMicrophoneMuted)
+            if capturesMicrophone {
+                capture.setMicrophoneMuted(isMicrophoneMuted)
+            }
             isRecording = true
             countdownRemaining = nil
             isRecorderPresented = false
@@ -1139,6 +1264,7 @@ final class AppModel {
     }
 
     func toggleRecordingMicrophoneMuted() {
+        guard capturesMicrophone else { return }
         isMicrophoneMuted.toggle()
         capture.setMicrophoneMuted(isMicrophoneMuted)
         refreshRecordingHUD()

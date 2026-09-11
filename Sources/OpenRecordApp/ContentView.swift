@@ -8,11 +8,7 @@ struct ContentView: View {
     var body: some View {
         @Bindable var model = model
         Group {
-            if !model.allPermissionsGranted {
-                PermissionsView(model: model)
-            } else {
-                MainSplitView(model: model)
-            }
+            MainSplitView(model: model)
         }
         .alert(
             "OpenRecord",
@@ -68,9 +64,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshPermissions()
-            if model.allPermissionsGranted {
-                model.refreshProjects()
-            }
+            model.refreshProjects()
         }
     }
 }
@@ -93,18 +87,40 @@ struct MainSplitView: View {
         .sheet(isPresented: $model.isSettingsPresented) {
             SettingsView(model: model)
         }
+        .sheet(isPresented: $model.isPermissionsPresented) {
+            PermissionsView(model: model)
+        }
+        .toolbar {
+            ToolbarItem {
+                Button("Capture Permissions") {
+                    model.isPermissionsPresented = true
+                }
+                .help("Review capture-only permissions. Browsing and editing do not require them.")
+            }
+        }
         .onAppear { model.refreshProjects() }
         .overlay {
             if model.isProcessingCapture {
                 ZStack {
                     Color.black.opacity(0.28)
                     VStack(spacing: 12) {
-                        ProgressView()
+                        if let progress = model.editor?.analysisFraction {
+                            ProgressView(value: min(max(progress, 0), 1))
+                                .frame(width: 220)
+                        } else {
+                            ProgressView()
+                        }
                         Text("Finishing recording…")
                             .font(.headline)
-                        Text("Generating auto-zooms from cursor activity.")
+                        Text(model.editor?.analysisMessage ?? "Finalizing the captured bundle.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if model.editor?.isAnalysisCancellable == true {
+                            Button("Cancel Analysis") {
+                                model.cancelAnalysis()
+                            }
+                            .keyboardShortcut(.cancelAction)
+                        }
                     }
                     .padding(28)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

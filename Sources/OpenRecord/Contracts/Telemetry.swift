@@ -1,42 +1,63 @@
 import Foundation
 
+/// A raw telemetry record that can be assigned a per-stream sequence number.
+///
+/// Sequence numbers are deliberately optional in the contract.  Older bundles
+/// do not contain them, and decoding those bundles must remain lossless.  New
+/// capture writers assign a value while holding their write lock so a stream
+/// has one contiguous, monotonic sequence even when callbacks race.
+public protocol TelemetryRecord: Codable, Sendable, Hashable {
+    var sequence: UInt64? { get set }
+}
+
 /// One cursor-path sample. Written as a single JSONL line in `recording/mouse.jsonl`.
 /// Coordinates are in **points** (not pixels). `t` is seconds from recording start.
-public struct CursorSample: Codable, Sendable, Hashable {
+public struct CursorSample: TelemetryRecord {
     public var t: TimeInterval
     public var x: Double
     public var y: Double
     public var cursorId: String?
     /// `nil` is interpreted as visible for v1 projects.
     public var visible: Bool?
+    /// Optional per-stream sequence. Missing means this is a legacy sample.
+    public var sequence: UInt64?
 
     public init(
         t: TimeInterval,
         x: Double,
         y: Double,
         cursorId: String? = nil,
-        visible: Bool? = nil
+        visible: Bool? = nil,
+        sequence: UInt64? = nil
     ) {
         self.t = t
         self.x = x
         self.y = y
         self.cursorId = cursorId
         self.visible = visible
+        self.sequence = sequence
     }
 
     public var isVisible: Bool { visible ?? true }
 }
 
 /// Target bounds in global Quartz points at a recording timestamp.
-public struct TargetGeometrySample: Codable, Sendable, Hashable {
+public struct TargetGeometrySample: TelemetryRecord {
     public var t: TimeInterval
     public var bounds: Rect2D
     public var available: Bool
+    public var sequence: UInt64?
 
-    public init(t: TimeInterval, bounds: Rect2D, available: Bool = true) {
+    public init(
+        t: TimeInterval,
+        bounds: Rect2D,
+        available: Bool = true,
+        sequence: UInt64? = nil
+    ) {
         self.t = t
         self.bounds = bounds
         self.available = available
+        self.sequence = sequence
     }
 }
 
@@ -48,15 +69,30 @@ public enum MouseButton: String, Codable, Sendable, Hashable {
 }
 
 /// One mouse-button event. Written as a single JSONL line in `recording/clicks.jsonl`.
-public struct ClickSample: Codable, Sendable, Hashable {
+public struct ClickSample: TelemetryRecord {
     public var t: TimeInterval
     public var button: MouseButton
     public var down: Bool
+    /// Quartz-point position captured with the click. Optional for legacy
+    /// click streams, which only recorded button edges.
+    public var x: Double?
+    public var y: Double?
+    public var sequence: UInt64?
 
-    public init(t: TimeInterval, button: MouseButton, down: Bool) {
+    public init(
+        t: TimeInterval,
+        button: MouseButton,
+        down: Bool,
+        x: Double? = nil,
+        y: Double? = nil,
+        sequence: UInt64? = nil
+    ) {
         self.t = t
         self.button = button
         self.down = down
+        self.x = x
+        self.y = y
+        self.sequence = sequence
     }
 }
 
@@ -80,22 +116,25 @@ public enum KeyModifier: String, Codable, CaseIterable, Sendable, Hashable {
 
 /// One privacy-filtered keyboard event. Written as a single JSONL line in
 /// `recording/keys.jsonl`; `t` shares the display video's time origin.
-public struct KeySample: Codable, Sendable, Hashable {
+public struct KeySample: TelemetryRecord {
     public var t: TimeInterval
     public var key: String
     public var modifiers: [KeyModifier]
     public var down: Bool
+    public var sequence: UInt64?
 
     public init(
         t: TimeInterval,
         key: String,
         modifiers: [KeyModifier] = [],
-        down: Bool
+        down: Bool,
+        sequence: UInt64? = nil
     ) {
         self.t = t
         self.key = key
         self.modifiers = modifiers
         self.down = down
+        self.sequence = sequence
     }
 
     public var displayLabel: String {
@@ -163,25 +202,27 @@ public enum CursorSpriteLayout: Sendable {
 
 /// One typing / text-focus event. Written as a single JSONL line in `recording/typing.jsonl`.
 /// Coordinates are in Quartz points. Contains no key characters or text content (100% private).
-public struct TypingSample: Codable, Sendable, Hashable {
+public struct TypingSample: TelemetryRecord {
     public var t: TimeInterval
     public var x: Double
     public var y: Double
     public var width: Double?
     public var height: Double?
+    public var sequence: UInt64?
 
     public init(
         t: TimeInterval,
         x: Double,
         y: Double,
         width: Double? = nil,
-        height: Double? = nil
+        height: Double? = nil,
+        sequence: UInt64? = nil
     ) {
         self.t = t
         self.x = x
         self.y = y
         self.width = width
         self.height = height
+        self.sequence = sequence
     }
 }
-

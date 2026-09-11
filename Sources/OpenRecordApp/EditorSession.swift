@@ -18,6 +18,28 @@ private actor ProjectSaveCoordinator {
     }
 }
 
+enum EditorSaveState: String, Sendable, Equatable {
+    case dirty
+    case saving
+    case saved
+    case failed
+    case readOnly
+}
+
+enum EditorAnalysisPhase: String, Sendable, Equatable {
+    case idle
+    case autoZoom
+    case transcription
+    case silence
+}
+
+struct EditorAnalysisState: Sendable, Equatable {
+    var phase: EditorAnalysisPhase
+    var message: String?
+    var fraction: Double?
+    var cancellable: Bool
+}
+
 /// A project can still be opened when one telemetry stream is damaged. The
 /// issue carries the independently decoded streams so the caller can present
 /// an Open Anyway / Cancel choice without losing the healthy track.
@@ -87,6 +109,22 @@ final class EditorSession {
     private(set) var isCancellingExport = false
     var lastError: String?
     var lastErrorCategory: LocalDiagnosticsErrorCategory = .none
+    private(set) var saveState: EditorSaveState = .saved
+    var analysisPhase: EditorAnalysisPhase = .idle
+    var analysisMessage: String?
+    var analysisFraction: Double?
+    var isAnalysisCancellable: Bool {
+        analysisTask != nil && !(analysisTask?.isCancelled ?? true)
+    }
+    var analysisCancellable: Bool { isAnalysisCancellable }
+    var analysisState: EditorAnalysisState {
+        EditorAnalysisState(
+            phase: analysisPhase,
+            message: analysisMessage,
+            fraction: analysisFraction,
+            cancellable: isAnalysisCancellable
+        )
+    }
     private(set) var diagnosticsCopied = false
     /// Warnings retained for the lifetime of the editor and shown by the
     /// parent app as a persistent degraded-project indicator.
@@ -102,6 +140,12 @@ final class EditorSession {
     var webcamDuration: TimeInterval
     var webcamWidth: Int
     var webcamHeight: Int
+
+    /// Bundles outside the configured library can be opened for inspection and
+    /// edited in memory, but ProjectLibrary's write APIs intentionally refuse
+    /// to write them back. Use Save Copy or Add to Library for persistence.
+    let isReadOnly: Bool
+    private var securityScopeActive = false
 
     let player: AVPlayer
 
@@ -222,6 +266,9 @@ final class EditorSession {
     private var saveTask: Task<Void, Never>?
     private var engineTask: Task<Void, Never>?
     private var previewAudioTask: Task<Void, Never>?
+    var analysisTask: Task<Void, Never>?
+    var analysisError: Error?
+    var analysisCancellationRequested = false
     private let previewAudio = PreviewAudioController()
     private var exportTask: Task<Void, Never>?
     private var cachedProjectTimeMapper: ProjectTimeMapper?
@@ -237,6 +284,13 @@ final class EditorSession {
         library: ProjectLibrary,
         allowDegradedTelemetry: Bool = true
     ) async throws -> EditorSession {
+        let securityScopeActive = opened.url.startAccessingSecurityScopedResource()
+        var transferredSecurityScope = false
+        defer {
+            if securityScopeActive && !transferredSecurityScope {
+                opened.url.stopAccessingSecurityScopedResource()
+            }
+        }
         let mouseResult = Result { try ProjectJSON.decodeJSONL(
             CursorSample.self,
             from: ProjectLayout.mouseURL(in: opened.url)
@@ -343,8 +397,11 @@ final class EditorSession {
             webcamPlayer: webcamPlayer,
             webcamDuration: webcamMedia?.duration ?? 0,
             webcamWidth: webcamMedia?.width ?? 1,
-            webcamHeight: webcamMedia?.height ?? 1
+            webcamHeight: webcamMedia?.height ?? 1,
+            isReadOnly: !Self.isWritableProject(opened.url, in: library),
+            securityScopeActive: securityScopeActive
         )
+        transferredSecurityScope = true
         session.telemetryIssueMessages = messages
         session.persistentWarnings = messages
         if !messages.isEmpty {
@@ -398,7 +455,9 @@ final class EditorSession {
         webcamPlayer: AVPlayer?,
         webcamDuration: TimeInterval,
         webcamWidth: Int,
-        webcamHeight: Int
+        webcamHeight: Int,
+        isReadOnly: Bool,
+        securityScopeActive: Bool
     ) {
         self.projectURL = projectURL
         self.library = library
@@ -420,6 +479,9 @@ final class EditorSession {
         self.webcamDuration = webcamDuration
         self.webcamWidth = webcamWidth
         self.webcamHeight = webcamHeight
+        self.isReadOnly = isReadOnly
+        self.securityScopeActive = securityScopeActive
+        self.saveState = isReadOnly ? .readOnly : .saved
         self.savedDocument = document
         self.saveCoordinator = ProjectSaveCoordinator(library: library, projectURL: projectURL)
         player.currentItem?.audioTimePitchAlgorithm = .spectral
@@ -427,54 +489,145 @@ final class EditorSession {
         refreshAudioPresence()
     }
 
+    private static func isWritableProject(_ projectURL: URL, in library: ProjectLibrary) -> Bool {
+        let project = projectURL.resolvingSymlinksInPath().standardizedFileURL
+        let root = library.rootURL.resolvingSymlinksInPath().standardizedFileURL
+        return project.deletingLastPathComponent() == root
+    }
+
     func shutdown() {
         exportTask?.cancel()
         saveTask?.cancel()
         engineTask?.cancel()
         previewAudioTask?.cancel()
+        analysisTask?.cancel()
+        analysisTask = nil
+        analysisPhase = .idle
+        analysisMessage = nil
+        analysisFraction = nil
         detachPlayer()
         player.pause()
         webcamPlayer?.pause()
         previewAudio.shutdown()
         hasPreviewAudio = false
+        if securityScopeActive {
+            projectURL.stopAccessingSecurityScopedResource()
+            securityScopeActive = false
+        }
     }
 
     func dismissPersistentWarnings() {
         persistentWarnings.removeAll()
     }
 
+    func cancelAnalysis() {
+        guard let analysisTask else { return }
+        analysisCancellationRequested = true
+        analysisTask.cancel()
+        analysisMessage = "Analysis cancelled. Captured media and edits were preserved."
+        analysisFraction = nil
+    }
+
+    func noteAnalysisMessage(_ message: String) {
+        analysisMessage = message
+    }
+
     func applyAutoZoomsAndSave(preserveExisting: Bool = false) async throws {
-        let config = SmartAutoZoomConfig(base: document.autoZoomSensitivity.config)
-        if preserveExisting {
-            document.zoomRanges = SmartAutoZoom.regenerateRanges(
-                existing: document.zoomRanges,
-                samples: samples,
-                clicks: clicks,
-                typing: typing,
-                duration: max(duration, 0.01),
-                displayBounds: meta.displayBounds,
-                config: config,
-                targetGeometry: targetGeometry,
-                preserveLockedAndManual: true
-            )
-        } else {
-            document.zoomRanges = SmartAutoZoom.generateRanges(
-                samples: samples,
-                clicks: clicks,
-                typing: typing,
-                duration: max(duration, 0.01),
-                displayBounds: meta.displayBounds,
-                config: config,
-                targetGeometry: targetGeometry
-            )
+        guard analysisTask == nil else { return }
+        analysisCancellationRequested = false
+        analysisError = nil
+        analysisPhase = .autoZoom
+        analysisMessage = "Generating auto-zooms from cursor activity…"
+        analysisFraction = 0
+        let samples = self.samples
+        let clicks = self.clicks
+        let typing = self.typing
+        let duration = max(self.duration, 0.01)
+        let displayBounds = self.meta.displayBounds
+        let config = SmartAutoZoomConfig(base: self.document.autoZoomSensitivity.config)
+        let targetGeometry = self.targetGeometry
+        let existingRanges = self.document.zoomRanges
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try Task.checkCancellation()
+                guard !self.analysisCancellationRequested else { throw CancellationError() }
+                self.analysisFraction = 0.2
+
+                let computedRanges = try await Task.detached(priority: .userInitiated) {
+                    try Task.checkCancellation()
+                    if preserveExisting {
+                        return SmartAutoZoom.regenerateRanges(
+                            existing: existingRanges,
+                            samples: samples,
+                            clicks: clicks,
+                            typing: typing,
+                            duration: duration,
+                            displayBounds: displayBounds,
+                            config: config,
+                            targetGeometry: targetGeometry,
+                            preserveLockedAndManual: true
+                        )
+                    } else {
+                        return SmartAutoZoom.generateRanges(
+                            samples: samples,
+                            clicks: clicks,
+                            typing: typing,
+                            duration: duration,
+                            displayBounds: displayBounds,
+                            config: config,
+                            targetGeometry: targetGeometry
+                        )
+                    }
+                }.value
+
+                try Task.checkCancellation()
+                guard !self.analysisCancellationRequested else { throw CancellationError() }
+                self.analysisFraction = 0.65
+
+                self.document.zoomRanges = computedRanges
+                if self.document.trimOut == nil, self.duration > 0 {
+                    self.document.trimOut = self.duration
+                }
+                self.attachCursorSpriteIfMissing()
+                try Task.checkCancellation()
+                guard !self.analysisCancellationRequested else { throw CancellationError() }
+                self.rebuildEngine()
+                try Task.checkCancellation()
+                guard !self.analysisCancellationRequested else { throw CancellationError() }
+                self.markDirty()
+                self.analysisFraction = 0.8
+                if !self.isReadOnly {
+                    try await self.flushSave()
+                }
+                try Task.checkCancellation()
+                guard !self.analysisCancellationRequested else { throw CancellationError() }
+                self.analysisFraction = 1
+                self.analysisMessage = self.isReadOnly
+                    ? "Auto-zooms generated in memory. Use Save Copy to persist edits."
+                    : "Auto-zooms generated and saved."
+            } catch {
+                self.analysisError = error
+            }
         }
-        if document.trimOut == nil, duration > 0 {
-            document.trimOut = duration
+        analysisTask = task
+        await task.value
+        analysisTask = nil
+        analysisPhase = .idle
+        analysisFraction = nil
+        let error = analysisError
+        analysisError = nil
+        let cancelled = error is CancellationError || analysisCancellationRequested
+        if cancelled {
+            analysisMessage = "Analysis cancelled. Captured media and edits were preserved."
+            analysisCancellationRequested = false
+            throw CancellationError()
         }
-        attachCursorSpriteIfMissing()
-        rebuildEngine()
-        markDirty()
-        try await flushSave()
+        if let error {
+            analysisMessage = "Analysis failed: \(error.localizedDescription)"
+            throw error
+        }
     }
 
     func regenerateAutoZooms() {
@@ -489,6 +642,10 @@ final class EditorSession {
                     after: document,
                     actionName: "Regenerate Auto-Zooms"
                 )
+            } catch is CancellationError {
+                document = before
+                selectedZoomID = previousSelection
+                rebuildEngine()
             } catch {
                 document = before
                 selectedZoomID = previousSelection
@@ -973,14 +1130,33 @@ final class EditorSession {
     /// detached task so JSON encoding/filesystem I/O do not block the main
     /// actor.
     func flushSave() async throws {
+        guard !isReadOnly else {
+            saveState = .readOnly
+            throw OpenRecordError.io(
+                "This project is open read-only because it is outside the configured library. Use Save Copy or Add to Library to persist edits."
+            )
+        }
         saveTask?.cancel()
+        saveState = .saving
         let revision = editRevision
         let snapshot = document.upgradedForSave()
-        try await saveCoordinator.save(document: snapshot)
-        guard revision == editRevision else { return }
-        document = snapshot
-        markSaved()
-        lastError = nil
+        do {
+            try Task.checkCancellation()
+            try await saveCoordinator.save(document: snapshot)
+            try Task.checkCancellation()
+            guard revision == editRevision else {
+                saveState = .dirty
+                return
+            }
+            document = snapshot
+            markSaved()
+            lastError = nil
+        } catch {
+            saveState = error is CancellationError
+                ? (isReadOnly ? .readOnly : .dirty)
+                : .failed
+            throw error
+        }
     }
 
     /// Save a complete, independently-openable project bundle. Pending edits
@@ -990,8 +1166,26 @@ final class EditorSession {
         let snapshot = document.upgradedForSave()
         let library = library
         let projectURL = projectURL
+        let destinationURL = destinationURL.standardizedFileURL
+        let isReadOnly = isReadOnly
         return try await Task.detached(priority: .utility) {
-            try library.saveCopy(of: projectURL, document: snapshot, to: destinationURL)
+            if isReadOnly {
+                // A temporary ProjectLibrary rooted at the source's parent
+                // permits a copy while keeping the active library's mutation
+                // scope unchanged. No write is ever made to this source.
+                return try ProjectLibrary(
+                    rootURL: projectURL.deletingLastPathComponent()
+                ).saveCopy(
+                    of: projectURL,
+                    document: snapshot,
+                    to: destinationURL
+                )
+            }
+            return try library.saveCopy(
+                of: projectURL,
+                document: snapshot,
+                to: destinationURL
+            )
         }.value
     }
 
@@ -1011,10 +1205,14 @@ final class EditorSession {
         documentHistory.removeAll()
         rebuildEngine()
         // Serialize behind any save already in flight, then restore the last
-        // known-good bytes so a stale autosave cannot win after Discard.
-        try? await saveCoordinator.save(document: snapshot)
+        // known-good bytes so a stale autosave cannot win after Discard. A
+        // read-only external project has no bytes to rewrite.
+        if !isReadOnly {
+            try? await saveCoordinator.save(document: snapshot)
+        }
         savedDocument = snapshot
         savedRevision = editRevision
+        saveState = isReadOnly ? .readOnly : .saved
     }
 
     func export(to url: URL) async {
@@ -1413,13 +1611,20 @@ final class EditorSession {
     }
 
     private func scheduleSave() {
+        guard !isReadOnly else {
+            saveState = .readOnly
+            return
+        }
         saveTask?.cancel()
+        saveState = .dirty
         saveTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(400))
             guard !Task.isCancelled else { return }
             do {
                 try await flushSave()
             } catch {
+                guard !Task.isCancelled else { return }
+                saveState = .failed
                 lastErrorCategory = .projectSave
                 lastError = error.localizedDescription
             }
@@ -1429,11 +1634,13 @@ final class EditorSession {
     private func markDirty() {
         document = document.upgradedForSave()
         editRevision &+= 1
+        saveState = isReadOnly ? .readOnly : .dirty
     }
 
     private func markSaved() {
         savedRevision = editRevision
         savedDocument = document
+        saveState = isReadOnly ? .readOnly : .saved
     }
 
     private func clampZoom(_ zoom: inout ZoomRange) {

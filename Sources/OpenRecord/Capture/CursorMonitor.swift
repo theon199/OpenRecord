@@ -127,6 +127,7 @@ final class CursorMonitor: @unchecked Sendable {
         if mouseError != nil { closeWarnings.insert(.truncatedMouseTelemetry) }
         if clickError != nil { closeWarnings.insert(.truncatedClickTelemetry) }
         if keyError != nil { closeWarnings.insert(.truncatedKeyboardTelemetry) }
+        if typingError != nil { closeWarnings.insert(.truncatedTypingTelemetry) }
         if targetError != nil { closeWarnings.insert(.truncatedTargetGeometry) }
         if let mouseError { throw mouseError }
         if let clickError { throw clickError }
@@ -153,7 +154,13 @@ final class CursorMonitor: @unchecked Sendable {
         case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
             let down = type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
             guard updateVisibility(t: t, location: location) else { return }
-            clickWriter?.write(ClickSample(t: t, button: Self.button(type: type, event: event), down: down))
+            clickWriter?.write(ClickSample(
+                t: t,
+                button: Self.button(type: type, event: event),
+                down: down,
+                x: Double(location.x),
+                y: Double(location.y)
+            ))
             writeMove(t: t, location: location, force: true)
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             guard updateVisibility(t: t, location: location) else { return }

@@ -436,6 +436,7 @@ public enum CaptureWarningCode: String, Codable, Sendable, Hashable {
     case truncatedMouseTelemetry
     case truncatedClickTelemetry
     case truncatedKeyboardTelemetry
+    case truncatedTypingTelemetry
     case truncatedTargetGeometry
     case keyboardSecureInputGap
     case lowDiskSpace

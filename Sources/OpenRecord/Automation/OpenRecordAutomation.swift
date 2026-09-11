@@ -51,6 +51,9 @@ public struct ProjectInspection: Codable, Sendable, Equatable {
     public let duration: TimeInterval?
     public let editDuration: TimeInterval?
     public let trackPresence: [CaptureTrackKind: Bool]
+    /// Read-only metadata about the optional analysis cache.  This summary
+    /// contains counts and status only; it never contains sidecar payload.
+    public let analysis: AnalysisInspectionSummary
     public let validationIssues: [String]
 
     public init(
@@ -59,13 +62,15 @@ public struct ProjectInspection: Codable, Sendable, Equatable {
         duration: TimeInterval?,
         editDuration: TimeInterval?,
         trackPresence: [CaptureTrackKind: Bool],
-        validationIssues: [String]
+        validationIssues: [String],
+        analysis: AnalysisInspectionSummary = AnalysisInspectionSummary(status: .missing)
     ) {
         self.projectURL = projectURL
         self.formatVersion = formatVersion
         self.duration = duration
         self.editDuration = editDuration
         self.trackPresence = trackPresence
+        self.analysis = analysis
         self.validationIssues = validationIssues
     }
 
@@ -73,6 +78,11 @@ public struct ProjectInspection: Codable, Sendable, Equatable {
     public var format: Int? { formatVersion }
     public var issues: [String] { validationIssues }
     public var tracks: [CaptureTrackKind: Bool] { trackPresence }
+    public var analysisSummary: AnalysisInspectionSummary { analysis }
+    public var analysisAvailability: AnalysisAvailability { analysis.status }
+    public var analysisFreshness: AnalysisFreshness { analysis.status }
+    public var analysisRecordCounts: [AnalysisSidecarKind: Int] { analysis.recordCounts }
+    public var analysisWarnings: [String] { analysis.warnings }
 }
 
 /// Validation result for a project bundle.
@@ -568,13 +578,18 @@ public struct OpenRecordAutomation: Sendable {
         } else {
             editDuration = nil
         }
+        // Analysis is an optional, rebuildable cache.  Its malformed/future/
+        // stale states are deliberately kept out of project validation issues
+        // so they cannot block opening or exporting the underlying project.
+        let analysis = AnalysisStore(projectURL: projectURL).inspect()
         return ProjectInspection(
             projectURL: projectURL,
             formatVersion: formatVersion,
             duration: duration,
             editDuration: editDuration,
             trackPresence: tracks,
-            validationIssues: stableUnique(issues)
+            validationIssues: stableUnique(issues),
+            analysis: analysis
         )
     }
 
@@ -682,9 +697,11 @@ public enum OpenRecordAutomationCLI: Sendable {
             for track in CaptureTrackKind.allCases {
                 print("  \(track.rawValue): \(report.trackPresence[track] == true ? "present" : "missing")")
             }
+            printAnalysis(report.analysis)
             printIssues(report.validationIssues)
         } else if let report = report as? ProjectValidation {
             print(report.valid ? "Valid: \(report.projectURL.path)" : "Invalid: \(report.projectURL.path)")
+            printAnalysis(report.inspection.analysis)
             printIssues(report.issues)
         } else if let report = report as? BatchResult {
             for job in report.jobs {
@@ -699,6 +716,22 @@ public enum OpenRecordAutomationCLI: Sendable {
         guard !issues.isEmpty else { print("Issues: none"); return }
         print("Issues:")
         issues.forEach { print("  - \($0)") }
+    }
+
+    private static func printAnalysis(_ analysis: AnalysisInspectionSummary) {
+        print("Analysis: \(analysis.status.rawValue)")
+        if !analysis.recordCounts.isEmpty {
+            print("Analysis records:")
+            for kind in AnalysisSidecarKind.allCases {
+                if let count = analysis.recordCounts[kind] {
+                    print("  \(kind.rawValue): \(count)")
+                }
+            }
+        }
+        if !analysis.warnings.isEmpty {
+            print("Analysis warnings:")
+            analysis.warnings.forEach { print("  - \($0)") }
+        }
     }
 
     private static func formatted(_ value: TimeInterval?) -> String {

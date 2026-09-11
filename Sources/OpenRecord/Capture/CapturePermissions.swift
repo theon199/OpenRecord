@@ -12,12 +12,49 @@ public enum CapturePermissionKind: String, Sendable, CaseIterable, Hashable {
     case accessibility
     case camera
 
+    /// The only permission required merely to enumerate/start a screen target.
+    /// Optional capture features add their own permissions through
+    /// `CapturePermissions.requiredPermissions(for:)`.
     public static let requiredForScreenCapture: [CapturePermissionKind] = [
         .screenRecording,
-        .microphone,
-        .accessibility,
     ]
 }
+
+/// The complete set of capture choices for one recording.
+///
+/// Defaults intentionally preserve OpenRecord's pre-v4 behavior: microphone,
+/// system audio, cursor/focus telemetry, and keyboard shortcuts are enabled;
+/// webcam capture remains opt-in.
+public struct CaptureRequest: Codable, Sendable, Equatable, Hashable {
+    public var capturesMicrophone: Bool
+    public var capturesSystemAudio: Bool
+    public var capturesCursorTelemetry: Bool
+    public var capturesKeyboardShortcuts: Bool
+    public var capturesWebcam: Bool
+
+    public init(
+        capturesMicrophone: Bool = true,
+        capturesSystemAudio: Bool = true,
+        capturesCursorTelemetry: Bool = true,
+        capturesKeyboardShortcuts: Bool = true,
+        capturesWebcam: Bool = false
+    ) {
+        self.capturesMicrophone = capturesMicrophone
+        self.capturesSystemAudio = capturesSystemAudio
+        self.capturesCursorTelemetry = capturesCursorTelemetry
+        self.capturesKeyboardShortcuts = capturesKeyboardShortcuts
+        self.capturesWebcam = capturesWebcam
+    }
+
+    public static let `default` = CaptureRequest()
+
+    public var requiresAccessibility: Bool {
+        capturesCursorTelemetry || capturesKeyboardShortcuts
+    }
+}
+
+/// Alternate name used by recording setup clients.
+public typealias RecordingOptions = CaptureRequest
 
 /// Thrown when a required capture permission is missing. The UI should offer
 /// `CapturePermissions.openSystemSettings(for:)`.
@@ -80,22 +117,42 @@ public enum CapturePermissions: Sendable {
         }
     }
 
-    /// Screen Recording, Microphone, and Accessibility. Throws rather than
-    /// continuing without cursor telemetry or media.
-    public static func ensureGranted(includeCamera: Bool = false) async throws {
-        var kinds = CapturePermissionKind.requiredForScreenCapture
-        if includeCamera {
-            kinds.append(.camera)
-        }
-        for kind in kinds {
+    /// Permissions needed by the selected capture features, in a stable order.
+    /// System audio has no separate TCC permission.
+    public static func requiredPermissions(
+        for request: CaptureRequest
+    ) -> [CapturePermissionKind] {
+        var kinds: [CapturePermissionKind] = [.screenRecording]
+        if request.capturesMicrophone { kinds.append(.microphone) }
+        if request.requiresAccessibility { kinds.append(.accessibility) }
+        if request.capturesWebcam { kinds.append(.camera) }
+        return kinds
+    }
+
+    /// Require only the permissions selected for this capture request.
+    public static func ensureGranted(for request: CaptureRequest) async throws {
+        for kind in requiredPermissions(for: request) {
             if isGranted(kind) {
                 continue
             }
-            _ = await request(kind)
+            _ = await Self.request(kind)
             if !isGranted(kind) {
                 throw CapturePermissionError(kind: kind, message: denialMessage(for: kind))
             }
         }
+    }
+
+    /// Label-compatible spelling for callers that name the value `request`.
+    public static func ensureGranted(request: CaptureRequest) async throws {
+        try await ensureGranted(for: request)
+    }
+
+    /// Compatibility entry point for older callers. New capture setup should
+    /// pass an explicit `CaptureRequest` instead.
+    public static func ensureGranted(includeCamera: Bool = false) async throws {
+        var request = CaptureRequest.default
+        request.capturesWebcam = includeCamera
+        try await ensureGranted(for: request)
     }
 
     public static func openSystemSettings(for kind: CapturePermissionKind) {
@@ -127,7 +184,7 @@ public enum CapturePermissions: Sendable {
         case .microphone:
             return "Microphone permission is required. Enable OpenRecord in System Settings → Privacy & Security → Microphone, then try again."
         case .accessibility:
-            return "Accessibility permission is required to record the cursor. Enable OpenRecord in System Settings → Privacy & Security → Accessibility, then try again. Recording cannot continue without cursor telemetry."
+            return "Accessibility permission is required for the selected cursor, keyboard, or focus telemetry. Enable OpenRecord in System Settings → Privacy & Security → Accessibility, then try again."
         case .camera:
             return "Camera permission is required when webcam recording is enabled. Enable OpenRecord in System Settings → Privacy & Security → Camera, then try again."
         }

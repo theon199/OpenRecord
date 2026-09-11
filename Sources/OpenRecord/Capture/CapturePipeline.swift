@@ -35,9 +35,12 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private var unexpectedNotified = false
     private var healthWarnings = Set<CaptureWarningCode>()
     private var targetInitialBounds: Rect2D?
+    private var request = CaptureRequest.default
     private var capturesWebcam = false
     private var webcamActive = false
     private var microphoneActive = false
+    private var cursorActive = false
+    private var discardedCursorTelemetryURL: URL?
     var onUnexpectedStop: (@Sendable (Error) -> Void)?
     var webcamPreviewSession: AVCaptureSession? { webcam.previewCaptureSession }
 
@@ -53,13 +56,15 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     func start(
         target: CaptureTarget,
         projectURL: URL,
-        capturesKeyboardShortcuts: Bool = true,
-        capturesWebcam: Bool = false
+        request: CaptureRequest = .default
     ) async throws {
         self.projectURL = projectURL; self.captureTarget = target; createdAt = Date()
-        self.capturesWebcam = capturesWebcam
+        self.request = request
+        self.capturesWebcam = request.capturesWebcam
         try prepareRecordingDirectory(in: projectURL)
-        cursorSprite = try await MainActor.run { try CursorSpriteCapture.writeDefaultArrow(to: ProjectLayout.cursorsDirectory(in: projectURL)) }
+        if request.capturesCursorTelemetry {
+            cursorSprite = try await MainActor.run { try CursorSpriteCapture.writeDefaultArrow(to: ProjectLayout.cursorsDirectory(in: projectURL)) }
+        }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let (filter, bounds, scale, pixelWidth, pixelHeight) = try Self.makeFilter(target: target, content: content)
         displayBounds = bounds; self.scale = scale; targetInitialBounds = bounds
@@ -67,7 +72,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         try writeProvisionalMeta()
         try healthMonitor.start(
             projectURL: projectURL,
-            capturesWebcam: capturesWebcam
+            request: request
         ) { [weak self] event in
             guard let self else { return }
             switch event {
@@ -88,69 +93,105 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             self?.recordWarning(.truncatedVideo)
             self?.requestUnexpectedStop(error: error)
         }
-        do {
-            systemAudioWriter = try SampleBufferWriter.systemAudio(
-                url: ProjectLayout.systemAudioURL(in: projectURL),
-                queue: audioQueue
-            )
-            systemAudioWriter?.onFailure = { [weak self] error in
-                self?.recordOptionalFailure(error, warning: .truncatedSystemAudio)
-            }
-        } catch {
-            systemAudioWriter = nil
-            recordOptionalFailure(error, warning: .missingSystemAudio)
-        }
-        let targetURL = ProjectLayout.targetGeometryURL(in: projectURL)
-        let keysURL = capturesKeyboardShortcuts ? ProjectLayout.keysURL(in: projectURL) : nil
-        let typingURL = ProjectLayout.typingURL(in: projectURL)
-        cursor.onTargetUnavailable = { [weak self] in
-            guard let self else { return }
-            self.recordWarning(.captureTargetUnavailable)
-            self.requestUnexpectedStop(
-                error: OpenRecordError.io(
-                    "The captured window closed or became unavailable. OpenRecord is finalizing the display recording."
+        if request.capturesSystemAudio {
+            do {
+                systemAudioWriter = try SampleBufferWriter.systemAudio(
+                    url: ProjectLayout.systemAudioURL(in: projectURL),
+                    queue: audioQueue
                 )
-            )
+                systemAudioWriter?.onFailure = { [weak self] error in
+                    self?.recordOptionalFailure(error, warning: .truncatedSystemAudio)
+                }
+            } catch {
+                systemAudioWriter = nil
+                recordOptionalFailure(error, warning: .missingSystemAudio)
+            }
         }
-        mic.onFailure = { [weak self] error in
-            self?.recordOptionalFailure(error, warning: .microphoneInterrupted)
+        let targetURL = request.capturesCursorTelemetry
+            ? ProjectLayout.targetGeometryURL(in: projectURL)
+            : nil
+        let keysURL = request.capturesKeyboardShortcuts
+            ? ProjectLayout.keysURL(in: projectURL)
+            : nil
+        let typingURL = request.capturesCursorTelemetry
+            ? ProjectLayout.typingURL(in: projectURL)
+            : nil
+        if request.capturesCursorTelemetry || request.capturesKeyboardShortcuts {
+            cursor.onTargetUnavailable = { [weak self] in
+                guard let self else { return }
+                self.recordWarning(.captureTargetUnavailable)
+                self.requestUnexpectedStop(
+                    error: OpenRecordError.io(
+                        "The captured window closed or became unavailable. OpenRecord is finalizing the display recording."
+                    )
+                )
+            }
         }
-        webcam.onFailure = { [weak self] error in
-            self?.recordOptionalFailure(error, warning: .cameraInterrupted)
+        if request.capturesMicrophone {
+            mic.onFailure = { [weak self] error in
+                self?.recordOptionalFailure(error, warning: .microphoneInterrupted)
+            }
+        }
+        if request.capturesWebcam {
+            webcam.onFailure = { [weak self] error in
+                self?.recordOptionalFailure(error, warning: .cameraInterrupted)
+            }
         }
         let webcamStartTask: Task<Void, Error>?
-        if capturesWebcam {
+        if request.capturesWebcam {
             let webcamURL = ProjectLayout.webcamVideoURL(in: projectURL)
             webcamStartTask = Task { try await self.webcam.start(url: webcamURL) }
         } else {
             webcamStartTask = nil
         }
-        do {
-            try await MainActor.run {
-                try cursor.start(
-                    mouseURL: ProjectLayout.mouseURL(in: projectURL),
-                    clicksURL: ProjectLayout.clicksURL(in: projectURL),
-                    target: target,
-                    initialBounds: targetInitialBounds,
-                    targetURL: targetURL,
-                    keysURL: keysURL,
-                    typingURL: typingURL
+        if request.capturesCursorTelemetry || request.capturesKeyboardShortcuts {
+            let mouseURL: URL
+            let clicksURL: URL
+            if request.capturesCursorTelemetry {
+                mouseURL = ProjectLayout.mouseURL(in: projectURL)
+                clicksURL = ProjectLayout.clicksURL(in: projectURL)
+            } else {
+                let scratch = projectURL.appendingPathComponent(
+                    ".cursor-telemetry-\(UUID().uuidString)",
+                    isDirectory: true
                 )
+                try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+                discardedCursorTelemetryURL = scratch
+                mouseURL = scratch.appendingPathComponent("mouse.jsonl")
+                clicksURL = scratch.appendingPathComponent("clicks.jsonl")
             }
-        } catch {
-            recordWarning(.truncatedMouseTelemetry)
-            recordWarning(.truncatedClickTelemetry)
-            recordWarning(.truncatedTargetGeometry)
-            if capturesKeyboardShortcuts { recordWarning(.truncatedKeyboardTelemetry) }
-            recordComponentError(error)
+            do {
+                try await MainActor.run {
+                    try cursor.start(
+                        mouseURL: mouseURL,
+                        clicksURL: clicksURL,
+                        target: request.capturesCursorTelemetry ? target : nil,
+                        initialBounds: request.capturesCursorTelemetry ? targetInitialBounds : nil,
+                        targetURL: targetURL,
+                        keysURL: keysURL,
+                        typingURL: typingURL
+                    )
+                }
+                cursorActive = true
+            } catch {
+                if request.capturesCursorTelemetry {
+                    recordWarning(.truncatedMouseTelemetry)
+                    recordWarning(.truncatedClickTelemetry)
+                    recordWarning(.truncatedTargetGeometry)
+                }
+                if request.capturesKeyboardShortcuts { recordWarning(.truncatedKeyboardTelemetry) }
+                recordComponentError(error)
+            }
         }
-        do {
-            try await MainActor.run {
-                try mic.start(url: ProjectLayout.microphoneAudioURL(in: projectURL))
+        if request.capturesMicrophone {
+            do {
+                try await MainActor.run {
+                    try mic.start(url: ProjectLayout.microphoneAudioURL(in: projectURL))
+                }
+                microphoneActive = true
+            } catch {
+                recordOptionalFailure(error, warning: .missingMicrophone)
             }
-            microphoneActive = true
-        } catch {
-            recordOptionalFailure(error, warning: .missingMicrophone)
         }
         if let webcamStartTask {
             do {
@@ -161,7 +202,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             }
         }
         let configuration = SCStreamConfiguration()
-        configuration.capturesAudio = systemAudioWriter != nil; configuration.excludesCurrentProcessAudio = true; configuration.showsCursor = false
+        configuration.capturesAudio = request.capturesSystemAudio && systemAudioWriter != nil; configuration.excludesCurrentProcessAudio = true; configuration.showsCursor = false
         configuration.width = pixelWidth; configuration.height = pixelHeight
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CaptureMediaFormat.maxFrameRate)
         configuration.queueDepth = 8; configuration.pixelFormat = CaptureMediaFormat.videoPixelFormat
@@ -191,7 +232,9 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     func stop(reason: CaptureStopReason = .manual) async throws -> CaptureStopResult {
         stateLock.withLock { stopping = true }
         let minimumAvailableDiskBytes = healthMonitor.stop()
-        await MainActor.run { cursor.stop() }
+        if cursorActive {
+            await MainActor.run { cursor.stop() }
+        }
         if let stream {
             try? stream.removeStreamOutput(self, type: .screen); try? stream.removeStreamOutput(self, type: .audio)
             do {
@@ -222,7 +265,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             if !webcam.didAppend {
                 recordWarning(.missingWebcam)
             }
-        } else if capturesWebcam {
+        } else if request.capturesWebcam {
             recordWarning(.missingWebcam)
         }
         let video = videoWriter
@@ -238,11 +281,19 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         if video?.appendError != nil || video?.droppedSamples == true { recordWarning(.truncatedVideo) }
         if system?.appendError != nil || system?.droppedSamples == true { recordWarning(.truncatedSystemAudio) }
         videoWriter = nil; systemAudioWriter = nil
-        do { try cursor.closeFiles() } catch { finalError = finalError ?? error }
-        for warning in cursor.closeWarnings { recordWarning(warning) }
-        if mic.writeError != nil { recordWarning(.truncatedMicrophone); finalError = finalError ?? mic.writeError }
-        if mic.firstBufferHostTime == nil { recordWarning(.missingMicrophone) }
-        if system?.didAppend != true { recordWarning(.missingSystemAudio) }
+        if cursorActive {
+            do { try cursor.closeFiles() } catch { finalError = finalError ?? error }
+            for warning in cursor.closeWarnings { recordWarning(warning) }
+        }
+        if request.capturesMicrophone {
+            if mic.writeError != nil { recordWarning(.truncatedMicrophone); finalError = finalError ?? mic.writeError }
+            if mic.firstBufferHostTime == nil { recordWarning(.missingMicrophone) }
+        }
+        if request.capturesSystemAudio, system?.didAppend != true { recordWarning(.missingSystemAudio) }
+        if let discardedCursorTelemetryURL {
+            try? FileManager.default.removeItem(at: discardedCursorTelemetryURL)
+            self.discardedCursorTelemetryURL = nil
+        }
         let capturedStreamError = stateLock.withLock { streamError }
         if let capturedStreamError {
             recordWarning(.screenStoppedUnexpectedly)
@@ -337,13 +388,17 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         try? stream.removeStreamOutput(self, type: .screen); try? stream.removeStreamOutput(self, type: .audio); try? await stream.stopCapture()
         _ = healthMonitor.stop()
         await teardownCaptureComponents()
-        try? cursor.closeFiles()
+        if cursorActive { try? cursor.closeFiles() }
+        if let discardedCursorTelemetryURL {
+            try? FileManager.default.removeItem(at: discardedCursorTelemetryURL)
+            self.discardedCursorTelemetryURL = nil
+        }
         videoWriter = nil; systemAudioWriter = nil; self.stream = nil
     }
 
     private func teardownCaptureComponents() async {
         await MainActor.run {
-            cursor.stop()
+            if cursorActive { cursor.stop() }
             if microphoneActive { mic.stop() }
         }
         if webcamActive {
@@ -376,9 +431,9 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             microphoneOffset = nil
         }
         let timing = CaptureTiming(
-            systemAudioOffset: systemAudioOffset,
-            microphoneOffset: microphoneOffset,
-            webcamOffset: capturesWebcam ? webcam.firstFrameOffset : nil
+            systemAudioOffset: request.capturesSystemAudio ? systemAudioOffset : nil,
+            microphoneOffset: request.capturesMicrophone ? microphoneOffset : nil,
+            webcamOffset: request.capturesWebcam ? webcam.firstFrameOffset : nil
         )
         let meta = ProjectMeta(
             createdAt: existingCreatedAt,
@@ -389,7 +444,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             captureTiming: timing,
             captureHealth: health,
             captureDiagnostics: diagnostics,
-            webcam: capturesWebcam ? webcam.captureInfo : nil
+            webcam: request.capturesWebcam ? webcam.captureInfo : nil
         )
         try AtomicFileWrite.writeJSON(meta, to: url)
         let documentURL = ProjectLayout.documentURL(in: projectURL)
@@ -436,18 +491,24 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             at: ProjectLayout.displayVideoURL(in: projectURL),
             track: .displayVideo
         )
-        let systemDuration = await CaptureMediaProbe.duration(
-            at: ProjectLayout.systemAudioURL(in: projectURL),
-            track: .systemAudio
-        )
-        let microphoneDuration = await CaptureMediaProbe.duration(
-            at: ProjectLayout.microphoneAudioURL(in: projectURL),
-            track: .microphone
-        )
-        let webcamDuration = await CaptureMediaProbe.duration(
-            at: ProjectLayout.webcamVideoURL(in: projectURL),
-            track: .webcam
-        )
+        let systemDuration = request.capturesSystemAudio
+            ? await CaptureMediaProbe.duration(
+                at: ProjectLayout.systemAudioURL(in: projectURL),
+                track: .systemAudio
+            )
+            : nil
+        let microphoneDuration = request.capturesMicrophone
+            ? await CaptureMediaProbe.duration(
+                at: ProjectLayout.microphoneAudioURL(in: projectURL),
+                track: .microphone
+            )
+            : nil
+        let webcamDuration = request.capturesWebcam
+            ? await CaptureMediaProbe.duration(
+                at: ProjectLayout.webcamVideoURL(in: projectURL),
+                track: .webcam
+            )
+            : nil
         let microphoneOffset: TimeInterval?
         if let originHostTime, let firstBufferHostTime = mic.firstBufferHostTime {
             microphoneOffset = firstBufferHostTime - originHostTime
@@ -464,12 +525,14 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             ),
             CaptureTrackObservation(
                 track: .systemAudio,
+                requested: request.capturesSystemAudio,
                 duration: systemDuration,
                 initialOffset: systemAudioOffset,
                 truncated: warnings.contains(.truncatedSystemAudio)
             ),
             CaptureTrackObservation(
                 track: .microphone,
+                requested: request.capturesMicrophone,
                 duration: microphoneDuration,
                 initialOffset: microphoneOffset,
                 truncated: warnings.contains(.truncatedMicrophone)
@@ -477,7 +540,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             ),
             CaptureTrackObservation(
                 track: .webcam,
-                requested: capturesWebcam,
+                requested: request.capturesWebcam,
                 duration: webcamDuration,
                 initialOffset: webcam.firstFrameOffset,
                 truncated: warnings.contains(.truncatedWebcam)

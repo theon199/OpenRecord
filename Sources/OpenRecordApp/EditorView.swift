@@ -31,6 +31,8 @@ struct EditorView: View {
                     .background(.yellow.opacity(0.12))
                 }
 
+                editorStatusBar
+
                 PreviewCanvas(session: session)
                     .padding(12)
                 Divider()
@@ -81,6 +83,12 @@ struct EditorView: View {
                     session.presentExportPanel()
                 }
                 .disabled(session.exportProgress != nil)
+                if session.isAnalysisCancellable {
+                    Button("Cancel Analysis") {
+                        session.cancelAnalysis()
+                    }
+                    .keyboardShortcut(.cancelAction)
+                }
             }
         }
         .overlay {
@@ -140,6 +148,73 @@ struct EditorView: View {
         }
         .onDisappear {
             session.pause()
+        }
+    }
+
+    private var editorStatusBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: saveStateSymbol)
+                .foregroundStyle(saveStateColor)
+            Text(saveStateLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if session.isReadOnly {
+                Button("Save Copy…") { model.saveEditorCopy() }
+                    .buttonStyle(.link)
+                Button("Add to Library…") { model.addEditorCopyToLibrary() }
+                    .buttonStyle(.link)
+            }
+            if let message = session.analysisMessage,
+               session.analysisPhase != .idle || session.isAnalysisCancellable
+            {
+                Divider().frame(height: 12)
+                if let fraction = session.analysisFraction {
+                    ProgressView(value: min(max(fraction, 0), 1))
+                        .frame(width: 100)
+                }
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if session.isAnalysisCancellable {
+                    Button("Cancel") { session.cancelAnalysis() }
+                        .buttonStyle(.link)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.2))
+    }
+
+    private var saveStateLabel: String {
+        switch session.saveState {
+        case .dirty: "Unsaved changes"
+        case .saving: "Saving…"
+        case .saved: "Saved"
+        case .failed: "Save failed"
+        case .readOnly: "Read-only copy"
+        }
+    }
+
+    private var saveStateSymbol: String {
+        switch session.saveState {
+        case .dirty: "pencil.circle"
+        case .saving: "arrow.triangle.2.circlepath"
+        case .saved: "checkmark.circle"
+        case .failed: "exclamationmark.triangle"
+        case .readOnly: "lock"
+        }
+    }
+
+    private var saveStateColor: Color {
+        switch session.saveState {
+        case .dirty: .orange
+        case .saving: .accentColor
+        case .saved: .green
+        case .failed: .red
+        case .readOnly: .secondary
         }
     }
 

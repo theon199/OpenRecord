@@ -78,15 +78,19 @@ public final class CaptureSession: @unchecked Sendable {
     public func start(
         target: CaptureTarget,
         projectURL: URL,
-        capturesKeyboardShortcuts: Bool = true,
-        capturesWebcam: Bool = false
+        request: CaptureRequest = .default,
+        capturesKeyboardShortcuts: Bool? = nil,
+        capturesWebcam: Bool? = nil
     ) async throws {
-        try await CapturePermissions.ensureGranted(includeCamera: false)
-        if capturesWebcam, !CapturePermissions.isGranted(.camera) {
-            // Webcam is optional. Prompt when possible, then let the pipeline
-            // continue as a degraded display capture if access stays denied.
-            _ = await CapturePermissions.request(.camera)
+        var effectiveRequest = request
+        if let capturesKeyboardShortcuts {
+            effectiveRequest.capturesKeyboardShortcuts = capturesKeyboardShortcuts
         }
+        if let capturesWebcam {
+            effectiveRequest.capturesWebcam = capturesWebcam
+        }
+        try await CapturePermissions.ensureGranted(for: effectiveRequest)
+
         let reserved = unfairLock.withLock { () -> Bool in
             guard sessionState == .idle || sessionState == .finalized else { return false }
             sessionState = .starting
@@ -96,12 +100,19 @@ public final class CaptureSession: @unchecked Sendable {
             return true
         }
         guard reserved else { throw OpenRecordError.io("Capture is already running.") }
-        let webcam = unfairLock.withLock { () -> WebcamRecorder in
-            if let primedWebcam {
-                self.primedWebcam = nil
-                return primedWebcam
+
+        let webcam: WebcamRecorder
+        if effectiveRequest.capturesWebcam {
+            webcam = unfairLock.withLock { () -> WebcamRecorder in
+                if let primedWebcam {
+                    self.primedWebcam = nil
+                    return primedWebcam
+                }
+                return WebcamRecorder()
             }
-            return WebcamRecorder()
+        } else {
+            webcam = WebcamRecorder()
+            Task { await cancelWebcamPrepare() }
         }
         let pipeline = CapturePipeline(webcam: webcam)
         unfairLock.withLock { self.pipeline = pipeline }
@@ -117,8 +128,7 @@ public final class CaptureSession: @unchecked Sendable {
             try await pipeline.start(
                 target: target,
                 projectURL: projectURL,
-                capturesKeyboardShortcuts: capturesKeyboardShortcuts,
-                capturesWebcam: capturesWebcam
+                request: effectiveRequest
             )
         } catch {
             try? await webcam.stop()
@@ -139,6 +149,16 @@ public final class CaptureSession: @unchecked Sendable {
         if state == .recording {
             eventContinuation.yield(.started(projectURL))
         }
+    }
+
+    /// Label-compatible spelling for clients that call the setup value
+    /// `RecordingOptions`.
+    public func start(
+        target: CaptureTarget,
+        projectURL: URL,
+        options: RecordingOptions
+    ) async throws {
+        try await start(target: target, projectURL: projectURL, request: options)
     }
 
     @discardableResult

@@ -18,58 +18,48 @@ struct PreviewCanvas: View {
 
     var body: some View {
         GeometryReader { geo in
-            // The UI playhead is displayed on the source-authored timeline,
-            // but every preview track resolves through the same composed
-            // output/edit/speed mapper used by export. This canonicalizes cut
-            // boundaries before any source-timed telemetry or overlay lookup.
-            let sourceTime = session.previewSourceTime
-            let liveCrop = session.engine.crop(at: sourceTime)
-            let crop = anchorDrag?.cropUV ?? liveCrop
-            let cursor = session.engine.interpolateCursor(at: sourceTime)
-            let cursorVelocity = session.engine.cursorVelocity(at: sourceTime)
-            let click = session.engine.smoother.clickState(at: sourceTime)
-            let clicking = session.engine.smoother.isVisible(at: sourceTime) && click.isDown
-            let canvas = session.document.canvas
-            let cursorTreatment = CursorTreatmentEvaluator(
-                ranges: session.document.cursorEffects
-            ).state(
-                at: sourceTime,
-                baseScale: canvas.cursorScale,
-                baseClickEmphasis: canvas.cursorClickEmphasis,
-                baseHalo: canvas.cursorHalo
+            // Preview resolves the output playhead through the same immutable
+            // scene used by export. The anchor drag is an interaction-only
+            // crop override; all other render state remains canonical.
+            let scene = FrameSceneResolver.resolve(
+                document: session.document,
+                timeMapper: session.projectTimeMapper,
+                zoomEngine: session.engine,
+                sourceWidth: session.sourceWidth,
+                sourceHeight: session.sourceHeight,
+                displayScale: session.meta.scale,
+                requestedOutputTime: session.outputPlayhead,
+                webcamSourceDuration: session.webcamDuration,
+                webcamOffset: session.meta.captureTiming?.webcamOffset ?? 0,
+                captureDiagnostics: session.meta.captureDiagnostics,
+                webcamMirror: session.meta.webcam?.mirror ?? false,
+                webcamSourceAspect: session.webcamAspect,
+                cursorSprite: session.cursorSprite,
+                cursorImagePixelSize: session.cursorImagePixelSize
+                    ?? session.cursorImage.map { ExportLayout.cursorPixelSize(for: $0) },
+                keyboardTimeline: session.keyboardTimeline,
+                cropOverride: anchorDrag?.cropUV
             )
-            let sourceWidth = session.sourceWidth
-            let sourceHeight = session.sourceHeight
-            let layout = ExportLayout.canvasLayout(
-                canvas: canvas,
-                sourceWidth: sourceWidth,
-                sourceHeight: sourceHeight,
-                cropUV: crop,
-                resolution: session.document.videoExportSettings.resolution
-            )
+            let sourceTime = scene.sourceTime
+            let crop = scene.cropUV
+            let cursor = scene.cursorUV
+            let clicking = scene.clicking
+            let canvas = scene.canvas
+            let cursorTreatment = scene.cursorTreatment
+            let layout = scene.layout
             let outer = ExportLayout.aspectFit(layout.size, in: CGRect(origin: .zero, size: geo.size))
             let viewScale = outer.width / CGFloat(max(layout.width, 1))
             let authoredViewScale = viewScale
                 * ExportLayout.authoredContentScale(for: layout.size)
-            let cursorMotionBlur = CursorMotionBlurEffect.state(
-                velocity: cursorVelocity,
-                canvasSize: layout.size,
-                settings: canvas.cursorMotionBlur
-            )
-            let deviceGeometry = DeviceFrameLayout.geometry(
-                settings: session.document.deviceFrame,
-                contentRect: layout.videoRect
-            )
+            let cursorMotionBlur = scene.cursorMotionBlur
+            let deviceGeometry = scene.deviceFrameGeometry
             let video = mapRect(deviceGeometry.screenRect, from: layout.size, into: outer)
-            let screenCorner = session.document.deviceFrame.enabled
-                ? Double(deviceGeometry.cornerRadius * 0.55)
+            let screenCorner = scene.deviceFrame.enabled
+                ? Double(scene.deviceFrameGeometry.cornerRadius * 0.55)
                 : layout.cornerRadius
             let corner = screenCorner * Double(viewScale)
-            let clickAge = clicking ? click.age : nil
-            let keyboardState = session.keyboardTimeline.state(
-                at: sourceTime,
-                settings: session.document.keyboardOverlay
-            )
+            let clickAge = scene.clickAge
+            let keyboardState = scene.keyboardState
 
             ZStack(alignment: .topLeading) {
                 canvasFill(canvas.background)
@@ -79,6 +69,7 @@ struct PreviewCanvas: View {
 
                 deviceFrameShell(
                     geometry: deviceGeometry,
+                    settings: scene.deviceFrame,
                     canvasSize: layout.size,
                     outer: outer,
                     viewScale: viewScale
@@ -88,20 +79,24 @@ struct PreviewCanvas: View {
 
                 deviceFrameChrome(
                     geometry: deviceGeometry,
+                    settings: scene.deviceFrame,
                     canvasSize: layout.size,
                     outer: outer,
                     viewScale: viewScale
                 )
 
                 if let webcamPlayer = session.webcamPlayer,
-                   session.webcamIsVisible(at: sourceTime)
+                   scene.webcamSourceTime != nil,
+                   let webcamGeometry = scene.webcamGeometry
                 {
                     webcamOverlay(
                         player: webcamPlayer,
+                        geometry: webcamGeometry,
+                        settings: scene.webcamOverlay,
                         canvasSize: layout.size,
                         outer: outer,
                         viewScale: viewScale,
-                        mirror: session.meta.webcam?.mirror ?? false
+                        mirror: scene.webcamMirror
                     )
                 }
 
@@ -112,27 +107,27 @@ struct PreviewCanvas: View {
                         clickAge: clickAge,
                         treatment: cursorTreatment,
                         crop: crop,
-                            canvasVideo: deviceGeometry.screenRect,
                         viewVideo: video,
                         viewScale: viewScale,
-                        sourceWidth: sourceWidth,
-                        motionBlur: cursorMotionBlur
+                        motionBlur: cursorMotionBlur,
+                        spritePlacement: scene.cursorSpritePlacement,
+                        pixelsPerPoint: scene.cursorPixelsPerPoint
                     )
                 }
 
                 keyboardOverlay(
                     state: keyboardState,
+                    geometry: scene.keyboardGeometry,
                     canvasSize: layout.size,
-                    canvasPadding: canvas.padding,
                     outer: outer,
                     viewScale: viewScale
                 )
 
-                ForEach(session.document.captions.filter { $0.isActive(at: sourceTime) }) { caption in
+                ForEach(scene.activeCaptions) { caption in
                     captionOverlay(caption, outer: outer, viewScale: authoredViewScale)
                 }
 
-                ForEach(session.document.annotations.filter { $0.isActive(at: sourceTime) }) { annotation in
+                ForEach(scene.activeAnnotations) { annotation in
                     annotationOverlay(
                         annotation,
                         at: sourceTime,
@@ -141,7 +136,7 @@ struct PreviewCanvas: View {
                     )
                 }
 
-                ForEach(session.document.drawings.filter { $0.isActive(at: sourceTime) }) { drawing in
+                ForEach(scene.activeDrawings) { drawing in
                     drawingOverlay(drawing, outer: outer, viewScale: authoredViewScale)
                 }
 
@@ -164,7 +159,7 @@ struct PreviewCanvas: View {
                     .allowsHitTesting(false)
                 }
 
-                ForEach(session.document.redactions.filter { $0.isActive(at: sourceTime) }) { region in
+                ForEach(scene.activeRedactions) { region in
                     redactionOverlay(region, outer: outer, viewScale: viewScale)
                 }
 
@@ -531,13 +526,14 @@ struct PreviewCanvas: View {
     @ViewBuilder
     private func deviceFrameShell(
         geometry: DeviceFrameGeometry,
+        settings: DeviceFrameSettings,
         canvasSize: CGSize,
         outer: CGRect,
         viewScale: CGFloat
     ) -> some View {
-        if session.document.deviceFrame.enabled {
+        if settings.enabled {
             let rect = mapRect(geometry.frameRect, from: canvasSize, into: outer)
-            let color: Color = session.document.deviceFrame.id == .genericBrowserLight
+            let color: Color = settings.id == .genericBrowserLight
                 ? Color(red: 0.9, green: 0.91, blue: 0.93)
                 : Color(red: 0.055, green: 0.06, blue: 0.075)
             RoundedRectangle(
@@ -548,9 +544,9 @@ struct PreviewCanvas: View {
             .frame(width: rect.width, height: rect.height)
             .position(x: rect.midX, y: rect.midY)
             .shadow(
-                color: session.document.deviceFrame.shadow ? .black.opacity(0.45) : .clear,
-                radius: session.document.deviceFrame.shadow ? 12 * viewScale : 0,
-                y: session.document.deviceFrame.shadow ? 6 * viewScale : 0
+                color: settings.shadow ? .black.opacity(0.45) : .clear,
+                radius: settings.shadow ? 12 * viewScale : 0,
+                y: settings.shadow ? 6 * viewScale : 0
             )
             .allowsHitTesting(false)
         }
@@ -559,13 +555,14 @@ struct PreviewCanvas: View {
     @ViewBuilder
     private func deviceFrameChrome(
         geometry: DeviceFrameGeometry,
+        settings: DeviceFrameSettings,
         canvasSize: CGSize,
         outer: CGRect,
         viewScale: CGFloat
     ) -> some View {
-        if session.document.deviceFrame.enabled {
+        if settings.enabled {
             let frame = mapRect(geometry.frameRect, from: canvasSize, into: outer)
-            switch session.document.deviceFrame.id {
+            switch settings.id {
             case .genericBrowserLight:
                 HStack(spacing: max(4 * viewScale, 2)) {
                     Circle().fill(.red.opacity(0.85))
@@ -850,18 +847,14 @@ struct PreviewCanvas: View {
     @ViewBuilder
     private func webcamOverlay(
         player: AVPlayer,
+        geometry: WebcamOverlayGeometry,
+        settings: WebcamOverlaySettings,
         canvasSize: CGSize,
         outer: CGRect,
         viewScale: CGFloat,
         mirror: Bool
     ) -> some View {
-        let settings = session.document.webcamOverlay
-        if let geometry = WebcamOverlayLayout.geometry(
-            settings: settings,
-            canvasSize: canvasSize,
-            sourceAspect: session.webcamAspect
-        ) {
-            let rect = mapRect(geometry.frame, from: canvasSize, into: outer)
+        let rect = mapRect(geometry.frame, from: canvasSize, into: outer)
             let radius = geometry.cornerRadius * Double(viewScale)
             let shape = WebcamPreviewShape(kind: settings.shape, cornerRadius: radius)
             let border = WebcamOverlayLayout.borderWidth(
@@ -936,7 +929,6 @@ struct PreviewCanvas: View {
             )
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Webcam overlay")
-        }
     }
 
     private func webcamMoveGesture(
@@ -1022,17 +1014,12 @@ struct PreviewCanvas: View {
     @ViewBuilder
     private func keyboardOverlay(
         state: KeyboardOverlayState,
+        geometry: KeyboardOverlayGeometry?,
         canvasSize: CGSize,
-        canvasPadding: Double,
         outer: CGRect,
         viewScale: CGFloat
     ) -> some View {
-        if let geometry = KeyboardOverlayLayout.geometry(
-            for: state,
-            settings: session.document.keyboardOverlay,
-            canvasSize: canvasSize,
-            canvasPadding: canvasPadding
-        ) {
+        if let geometry {
             let count = min(state.keys.count, geometry.keyRects.count)
             ForEach(0..<count, id: \.self) { index in
                 let key = state.keys[index]
@@ -1196,22 +1183,16 @@ struct PreviewCanvas: View {
         clickAge: TimeInterval?,
         treatment: CursorTreatmentState,
         crop: CGRect,
-        canvasVideo: CGRect,
         viewVideo: CGRect,
         viewScale: CGFloat,
-        sourceWidth: Int,
-        motionBlur: CursorMotionBlurState
+        motionBlur: CursorMotionBlurState,
+        spritePlacement: CursorSpritePlacement?,
+        pixelsPerPoint: Double
     ) -> some View {
         let point = ExportLayout.mapSourceUVToCanvas(
             cursor,
             cropUV: crop,
             videoRect: viewVideo
-        )
-        let pixelsPerPoint = ExportLayout.canvasPixelsPerPoint(
-            displayScale: session.meta.scale,
-            sourceWidth: sourceWidth,
-            cropUV: crop,
-            videoRect: canvasVideo
         )
         let viewPixelsPerPoint = pixelsPerPoint * Double(viewScale)
 
@@ -1242,7 +1223,7 @@ struct PreviewCanvas: View {
                     let sprite = session.cursorSprite
                     let pixelSize = session.cursorImagePixelSize
                         ?? ExportLayout.cursorPixelSize(for: image)
-                    let placement = sprite.map {
+                    let placement = spritePlacement ?? sprite.map {
                         CursorSpriteLayout.placement(
                             sprite: $0,
                             imagePixelSize: pixelSize,
@@ -1250,11 +1231,16 @@ struct PreviewCanvas: View {
                             pixelsPerPoint: viewPixelsPerPoint
                         )
                     }
-                    let width = placement?.drawSize.width
+                    let width = placement.map { $0.drawSize.width * Double(viewScale) }
                         ?? image.size.width * treatment.scale * viewPixelsPerPoint
-                    let height = placement?.drawSize.height
+                    let height = placement.map { $0.drawSize.height * Double(viewScale) }
                         ?? image.size.height * treatment.scale * viewPixelsPerPoint
-                    let hotspot = placement?.hotspot ?? Point2D(x: 1, y: 1)
+                    let hotspot = placement.map {
+                        Point2D(
+                            x: $0.hotspot.x * Double(viewScale),
+                            y: $0.hotspot.y * Double(viewScale)
+                        )
+                    } ?? Point2D(x: 1, y: 1)
                     Image(nsImage: image)
                         .resizable()
                         .interpolation(.high)

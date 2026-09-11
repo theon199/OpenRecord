@@ -5,6 +5,16 @@ public enum ProjectLayout: Sendable {
     public static let bundleExtension = "openrecord"
     public static let metaFileName = "meta.json"
     public static let documentFileName = "project.json"
+    /// Optional, rebuildable analysis cache.  Analysis never belongs in
+    /// `meta.json` or `project.json`; keeping it in its own directory also
+    /// lets older readers ignore it safely.
+    public static let analysisDirectoryName = "analysis"
+    public static let analysisManifestFileName = "manifest.json"
+    public static let analysisActionsFileName = "actions.jsonl"
+    public static let analysisOCRFileName = "ocr.jsonl"
+    public static let analysisPrivacyFileName = "privacy.jsonl"
+    public static let analysisSuggestionsFileName = "suggestions.jsonl"
+    public static let analysisIndexFileName = "index.json"
     public static let recordingDirectoryName = "recording"
     public static let displayVideoFileName = "display.mp4"
     public static let webcamVideoFileName = "webcam.mp4"
@@ -24,6 +34,54 @@ public enum ProjectLayout: Sendable {
 
     public static func documentURL(in projectURL: URL) -> URL {
         projectURL.appendingPathComponent(documentFileName, isDirectory: false)
+    }
+
+    public static func analysisDirectory(in projectURL: URL) -> URL {
+        projectURL.appendingPathComponent(analysisDirectoryName, isDirectory: true)
+    }
+
+    public static func analysisManifestURL(in projectURL: URL) -> URL {
+        analysisDirectory(in: projectURL)
+            .appendingPathComponent(analysisManifestFileName, isDirectory: false)
+    }
+
+    public static func analysisActionsURL(in projectURL: URL) -> URL {
+        analysisDirectory(in: projectURL)
+            .appendingPathComponent(analysisActionsFileName, isDirectory: false)
+    }
+
+    public static func analysisOCRURL(in projectURL: URL) -> URL {
+        analysisDirectory(in: projectURL)
+            .appendingPathComponent(analysisOCRFileName, isDirectory: false)
+    }
+
+    public static func analysisPrivacyURL(in projectURL: URL) -> URL {
+        analysisDirectory(in: projectURL)
+            .appendingPathComponent(analysisPrivacyFileName, isDirectory: false)
+    }
+
+    public static func analysisSuggestionsURL(in projectURL: URL) -> URL {
+        analysisDirectory(in: projectURL)
+            .appendingPathComponent(analysisSuggestionsFileName, isDirectory: false)
+    }
+
+    public static func analysisIndexURL(in projectURL: URL) -> URL {
+        analysisDirectory(in: projectURL)
+            .appendingPathComponent(analysisIndexFileName, isDirectory: false)
+    }
+
+    /// Resolves one of the known analysis files without allowing callers to
+    /// accidentally construct a path outside the cache directory.
+    public static func analysisURL(
+        for kind: AnalysisSidecarKind,
+        in projectURL: URL
+    ) -> URL {
+        switch kind {
+        case .actions: analysisActionsURL(in: projectURL)
+        case .ocr: analysisOCRURL(in: projectURL)
+        case .privacy: analysisPrivacyURL(in: projectURL)
+        case .suggestions: analysisSuggestionsURL(in: projectURL)
+        }
     }
 
     public static func recordingDirectory(in projectURL: URL) -> URL {

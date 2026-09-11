@@ -12,7 +12,7 @@ struct PermissionsView: View {
                     .foregroundStyle(.red)
                 Text("Allow OpenRecord to record")
                     .font(.title2.weight(.semibold))
-                Text("Screen Recording, Microphone, and Accessibility are required. Accessibility captures the cursor so auto-zoom can work after you stop.")
+                Text("OpenRecord asks for each permission only when the selected recording feature needs it. You can browse and edit projects without capture permissions.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -20,7 +20,7 @@ struct PermissionsView: View {
             }
 
             VStack(spacing: 10) {
-                ForEach(CapturePermissionKind.requiredForScreenCapture, id: \.self) { kind in
+                ForEach(CapturePermissionKind.allCases, id: \.self) { kind in
                     permissionRow(kind)
                 }
             }
@@ -32,7 +32,7 @@ struct PermissionsView: View {
                 }
                 Button("Request Remaining") {
                     Task {
-                        for kind in CapturePermissionKind.requiredForScreenCapture
+                        for kind in CapturePermissionKind.allCases
                             where model.permissionGranted[kind] != true
                         {
                             await model.requestPermission(kind)

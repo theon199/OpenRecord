@@ -30,6 +30,41 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>app.openrecord.project</string>
+			<key>UTTypeDescription</key>
+			<string>OpenRecord Project Bundle</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.directory</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<string>openrecord</string>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>OpenRecord Project</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSTypeIsPackage</key>
+			<true/>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>app.openrecord.project</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>OpenRecord records your screen to create local video projects.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -1,10 +1,12 @@
 import Foundation
 
 /// Appends compact JSON objects plus a newline. Not pretty-printed.
-final class JSONLWriter<Sample: Encodable>: @unchecked Sendable {
+final class JSONLWriter<Sample: TelemetryRecord>: @unchecked Sendable {
     private let handle: FileHandle
     private let lock = NSLock()
     private(set) var writeError: Error?
+    private var nextSequence: UInt64 = 0
+    private var closed = false
 
     init(url: URL) throws {
         let fm = FileManager.default
@@ -18,21 +20,46 @@ final class JSONLWriter<Sample: Encodable>: @unchecked Sendable {
     }
 
     func write(_ sample: Sample) {
+        // Sequence allocation, encoding, and the append are one critical
+        // section. Capture callbacks arrive from different event sources and
+        // must never be able to reorder or duplicate a sequence number.
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed else {
+            if writeError == nil {
+                writeError = OpenRecordError.io("JSONL writer is already closed.")
+            }
+            return
+        }
+        guard nextSequence < UInt64.max else {
+            if writeError == nil {
+                writeError = OpenRecordError.io("JSONL telemetry sequence exhausted.")
+            }
+            return
+        }
+
+        var sequenced = sample
+        sequenced.sequence = nextSequence
+        // Consume the allocation before encoding. An encoder or file handle
+        // can fail after bytes have been partially written; reusing that
+        // number on a later successful write would make a recovered stream
+        // ambiguous rather than strictly increasing.
+        nextSequence += 1
         do {
-            var data = try ProjectJSON.jsonlEncoder.encode(sample)
+            var data = try ProjectJSON.jsonlEncoder.encode(sequenced)
             data.append(0x0A)
-            lock.lock()
-            defer { lock.unlock() }
             try handle.write(contentsOf: data)
         } catch {
-            lock.lock()
             writeError = error
-            lock.unlock()
         }
     }
 
     func close() {
         lock.lock()
+        guard !closed else {
+            lock.unlock()
+            return
+        }
         do {
             try handle.synchronize()
         } catch {
@@ -43,6 +70,7 @@ final class JSONLWriter<Sample: Encodable>: @unchecked Sendable {
         } catch {
             if writeError == nil { writeError = error }
         }
+        closed = true
         lock.unlock()
     }
 }

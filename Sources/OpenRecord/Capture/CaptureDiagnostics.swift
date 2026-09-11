@@ -1,6 +1,94 @@
 import AVFoundation
 import Foundation
 
+/// Capture streams that can report precise gaps independently of coarse track
+/// health. Media names correspond to `CaptureTrackKind`; the remaining values
+/// identify raw telemetry JSONL streams.
+public enum CaptureStreamKind: String, Codable, CaseIterable, Sendable, Hashable {
+    case displayVideo
+    case systemAudio
+    case microphone
+    case webcam
+    case mouse
+    case clicks
+    case keys
+    case typing
+    case target
+
+    public var isMedia: Bool {
+        switch self {
+        case .displayVideo, .systemAudio, .microphone, .webcam: true
+        case .mouse, .clicks, .keys, .typing, .target: false
+        }
+    }
+
+    public static var cursor: Self { .mouse }
+    public static var click: Self { .clicks }
+    public static var keyboard: Self { .keys }
+}
+
+/// Why a capture stream has no samples for a half-open interval.
+public enum CaptureLossReason: String, Codable, CaseIterable, Sendable, Hashable {
+    case writerFailure
+    case permissionLost
+    case interrupted
+    case secureInput
+    case targetUnavailable
+    case diskSpace
+    case missing
+    case truncated
+    case stopped
+    case unknown
+
+    public static var writer: Self { .writerFailure }
+    public static var permission: Self { .permissionLost }
+    public static var interruption: Self { .interrupted }
+}
+
+/// A precise half-open loss interval `[start, end)` on one capture stream.
+public struct CaptureLossInterval: Codable, Sendable, Hashable {
+    public var stream: CaptureStreamKind
+    public var start: TimeInterval
+    public var end: TimeInterval
+    public var reason: CaptureLossReason
+
+    public init(
+        stream: CaptureStreamKind,
+        start: TimeInterval,
+        end: TimeInterval,
+        reason: CaptureLossReason
+    ) {
+        self.stream = stream
+        self.start = start
+        self.end = end
+        self.reason = reason
+    }
+
+    public var duration: TimeInterval { max(0, end - start) }
+    public var streamKind: CaptureStreamKind {
+        get { stream }
+        set { stream = newValue }
+    }
+    public var lossReason: CaptureLossReason {
+        get { reason }
+        set { reason = newValue }
+    }
+
+    /// Clamps a valid interval's start to the timeline origin. Invalid and
+    /// empty ranges are omitted by `CaptureDiagnostics.normalizedLossIntervals`.
+    public var normalized: CaptureLossInterval? {
+        guard start.isFinite, end.isFinite else { return nil }
+        let normalizedStart = max(0, start)
+        guard end > normalizedStart else { return nil }
+        return CaptureLossInterval(
+            stream: stream,
+            start: normalizedStart,
+            end: end,
+            reason: reason
+        )
+    }
+}
+
 /// Media and telemetry tracks whose capture health is persisted in `meta.json`.
 public enum CaptureTrackKind: String, Codable, CaseIterable, Sendable, Hashable {
     case displayVideo
@@ -93,17 +181,104 @@ public struct CaptureDiagnostics: Codable, Sendable, Hashable {
     public var driftTolerance: TimeInterval
     public var minimumAvailableDiskBytes: Int64?
     public var tracks: [CaptureTrackDiagnostic]
+    /// Precise per-stream gaps. Missing on v1-v3 metadata and therefore
+    /// defaults to an empty collection during decoding.
+    public var lossIntervals: [CaptureLossInterval]
 
     public init(
         referenceDuration: TimeInterval,
         driftTolerance: TimeInterval,
         minimumAvailableDiskBytes: Int64? = nil,
-        tracks: [CaptureTrackDiagnostic]
+        tracks: [CaptureTrackDiagnostic],
+        lossIntervals: [CaptureLossInterval] = []
     ) {
         self.referenceDuration = referenceDuration.isFinite ? max(0, referenceDuration) : 0
         self.driftTolerance = driftTolerance.isFinite ? max(0, driftTolerance) : 0
         self.minimumAvailableDiskBytes = minimumAvailableDiskBytes
         self.tracks = tracks
+        self.lossIntervals = Self.normalizedLossIntervals(lossIntervals)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case referenceDuration
+        case driftTolerance
+        case minimumAvailableDiskBytes
+        case tracks
+        case lossIntervals
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            referenceDuration: try container.decodeIfPresent(TimeInterval.self, forKey: .referenceDuration) ?? 0,
+            driftTolerance: try container.decodeIfPresent(TimeInterval.self, forKey: .driftTolerance) ?? 0,
+            minimumAvailableDiskBytes: try container.decodeIfPresent(Int64.self, forKey: .minimumAvailableDiskBytes),
+            tracks: try container.decodeIfPresent([CaptureTrackDiagnostic].self, forKey: .tracks) ?? [],
+            lossIntervals: try container.decodeIfPresent([CaptureLossInterval].self, forKey: .lossIntervals) ?? []
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(referenceDuration, forKey: .referenceDuration)
+        try container.encode(driftTolerance, forKey: .driftTolerance)
+        try container.encodeIfPresent(minimumAvailableDiskBytes, forKey: .minimumAvailableDiskBytes)
+        try container.encode(tracks, forKey: .tracks)
+        try container.encode(Self.normalizedLossIntervals(lossIntervals), forKey: .lossIntervals)
+    }
+
+    /// Normalizes, sorts, and merges overlapping/adjacent intervals with the
+    /// same stream and reason. Different reasons remain distinct so recovery
+    /// diagnostics never erase why a gap occurred.
+    public static func normalizedLossIntervals(
+        _ intervals: [CaptureLossInterval]
+    ) -> [CaptureLossInterval] {
+        var grouped: [CaptureStreamKind: [CaptureLossReason: [CaptureLossInterval]]] = [:]
+        for interval in intervals.compactMap(\.normalized) {
+            grouped[interval.stream, default: [:]][interval.reason, default: []].append(interval)
+        }
+
+        var merged: [CaptureLossInterval] = []
+        merged.reserveCapacity(intervals.count)
+        for stream in grouped.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let reasons = grouped[stream] else { continue }
+            for reason in reasons.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+                let sorted = (reasons[reason] ?? []).sorted {
+                    if $0.start != $1.start { return $0.start < $1.start }
+                    return $0.end < $1.end
+                }
+                var mergedReason: [CaptureLossInterval] = []
+                mergedReason.reserveCapacity(sorted.count)
+                for interval in sorted {
+                    guard var last = mergedReason.last else {
+                        mergedReason.append(interval)
+                        continue
+                    }
+                    if interval.start <= last.end {
+                        last.end = max(last.end, interval.end)
+                        mergedReason[mergedReason.index(before: mergedReason.endIndex)] = last
+                    } else {
+                        mergedReason.append(interval)
+                    }
+                }
+                merged.append(contentsOf: mergedReason)
+            }
+        }
+        return merged.sorted {
+            if $0.stream != $1.stream { return $0.stream.rawValue < $1.stream.rawValue }
+            if $0.start != $1.start { return $0.start < $1.start }
+            if $0.end != $1.end { return $0.end < $1.end }
+            return $0.reason.rawValue < $1.reason.rawValue
+        }
+    }
+
+    public var normalizedLossIntervals: [CaptureLossInterval] {
+        Self.normalizedLossIntervals(lossIntervals)
+    }
+
+    public var captureLossIntervals: [CaptureLossInterval] {
+        get { lossIntervals }
+        set { lossIntervals = Self.normalizedLossIntervals(newValue) }
     }
 
     public func diagnostic(for track: CaptureTrackKind) -> CaptureTrackDiagnostic? {

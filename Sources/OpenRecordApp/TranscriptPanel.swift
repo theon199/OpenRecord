@@ -11,6 +11,10 @@ struct TranscriptPanel: View {
                 Label("Transcript", systemImage: "quote.bubble")
                     .font(.headline)
                 Spacer()
+                if session.isAnalysisCancellable {
+                    Button("Cancel") { session.cancelAnalysis() }
+                        .buttonStyle(.borderless)
+                }
                 transcriptionMenu
             }
 
@@ -58,7 +62,7 @@ struct TranscriptPanel: View {
                 Label("Transcribe", systemImage: "waveform.badge.mic")
             }
         }
-        .disabled(session.isTranscribing)
+        .disabled(session.isTranscribing || session.isAnalyzingSilence)
         .help("Uses Apple on-device speech recognition; no account or network service is required")
     }
 
@@ -192,6 +196,7 @@ struct TranscriptPanel: View {
                 .disabled(session.isAnalyzingSilence)
                 if session.isAnalyzingSilence {
                     ProgressView().controlSize(.small)
+                    Button("Cancel") { session.cancelAnalysis() }
                 }
                 Spacer()
                 Button(

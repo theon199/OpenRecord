@@ -34,7 +34,14 @@ final class ExportCompositor {
     private var authoredOverlayCache: CIImage?
     /// Keyboard pills are also static during their hold interval. Fade frames
     /// naturally miss this cache because opacity is part of the state key.
-    private var keyboardOverlayCacheKey: KeyboardOverlayState?
+    private struct KeyboardOverlayCacheKey: Hashable {
+        var state: KeyboardOverlayState
+        var settings: KeyboardOverlaySettings
+        var canvasSize: CGSize
+        var canvasPadding: Double
+    }
+
+    private var keyboardOverlayCacheKey: KeyboardOverlayCacheKey?
     private var keyboardOverlayCache: CIImage?
 
     private struct AuthoredOverlayCacheKey: Hashable {
@@ -86,6 +93,139 @@ final class ExportCompositor {
         self.background = Self.makeBackground(canvas: canvas, extent: canvasExtent)
     }
 
+    /// Composites media using an already-resolved scene. No source/output
+    /// mapping, crop selection, active-item lookup, or geometry calculation is
+    /// performed here; those decisions belong to `FrameSceneResolver`.
+    func render(
+        source: CIImage,
+        webcam: CIImage?,
+        scene: FrameScene,
+        into pixelBuffer: CVPixelBuffer
+    ) {
+        let layout = scene.layout
+        let canvasExtent = CGRect(
+            x: 0,
+            y: 0,
+            width: layout.width,
+            height: layout.height
+        )
+        let videoRect = scene.deviceFrameGeometry.screenRect
+        let requestedRadius = scene.deviceFrame.enabled
+            ? Double(scene.deviceFrameGeometry.cornerRadius * 0.55)
+            : layout.cornerRadius
+        let radius = min(
+            requestedRadius,
+            Double(videoRect.width) / 2,
+            Double(videoRect.height) / 2
+        )
+
+        let placed = placeSource(
+            source,
+            cropUV: scene.cropUV,
+            videoRect: videoRect,
+            sourceWidth: scene.sourceWidth,
+            sourceHeight: scene.sourceHeight,
+            canvasHeight: canvasExtent.height
+        )
+        let masked = roundCorners(placed, videoRect: videoRect, radius: radius, canvasHeight: canvasExtent.height)
+        let sceneBackground = scene.canvas == canvas
+            ? background
+            : Self.makeBackground(canvas: scene.canvas, extent: canvasExtent)
+        var output = masked.composited(over: sceneBackground)
+
+        if let frame = deviceFrameOverlay(
+            geometry: scene.deviceFrameGeometry,
+            settings: scene.deviceFrame,
+            canvasSize: layout.size
+        ) {
+            output = frame.composited(over: output)
+        }
+
+        if let webcam,
+           scene.webcamSourceTime != nil,
+           scene.webcamGeometry != nil,
+           let overlay = WebcamOverlayRenderer.image(
+            webcam,
+            settings: scene.webcamOverlay,
+            canvasSize: layout.size,
+            mirror: scene.webcamMirror
+           )
+        {
+            output = overlay.composited(over: output)
+        }
+
+        let cursorTreatment = scene.cursorTreatment
+        if cursorTreatment.visible, let cursorUV = scene.cursorUV {
+            let hotspot = ExportLayout.mapSourceUVToCanvas(
+                cursorUV,
+                cropUV: scene.cropUV,
+                videoRect: videoRect
+            )
+            let pxPerPoint = scene.cursorPixelsPerPoint
+            if scene.clicking, cursorTreatment.clickEmphasis, let clickAge = scene.clickAge {
+                let ripple = ExportLayout.clickRipple(
+                    age: clickAge,
+                    canvasPixelsPerPoint: pxPerPoint,
+                    cursorScale: cursorTreatment.scale
+                )
+                output = makeRipple(at: hotspot, ripple: ripple, canvasHeight: canvasExtent.height)
+                    .composited(over: output)
+            }
+            if cursorTreatment.halo {
+                output = makeHalo(
+                    at: hotspot,
+                    pixelsPerPoint: pxPerPoint,
+                    cursorScale: cursorTreatment.scale,
+                    canvasHeight: canvasExtent.height
+                ).composited(over: output)
+            }
+            if let cursor = makeCursor(
+                hotspot: hotspot,
+                motionBlur: scene.cursorMotionBlur,
+                placement: scene.cursorSpritePlacement,
+                cursorScale: cursorTreatment.scale,
+                pixelsPerPoint: pxPerPoint,
+                canvasHeight: canvasExtent.height
+            ) {
+                output = cursor.composited(over: output)
+            }
+        }
+
+        if let keyboard = cachedKeyboardOverlay(
+            for: scene.keyboardState,
+            settings: scene.keyboardOverlay,
+            canvasSize: layout.size,
+            canvasPadding: scene.canvas.padding
+        ) {
+            output = keyboard.composited(over: output)
+        }
+
+        // Captions and annotations intentionally sit above keyboard overlays so
+        // authored content is legible in both preview and every export format.
+        if let authored = authoredOverlay(
+            captions: scene.activeCaptions,
+            annotations: scene.activeAnnotations,
+            drawings: scene.activeDrawings,
+            at: scene.sourceTime,
+            canvasSize: layout.size
+        ) {
+            output = authored.composited(over: output)
+        }
+
+        for redaction in scene.activeRedactions {
+            output = apply(redaction, to: output, canvasSize: layout.size, canvasHeight: canvasExtent.height)
+        }
+
+        context.render(
+            output.cropped(to: canvasExtent),
+            to: pixelBuffer,
+            bounds: canvasExtent,
+            colorSpace: colorSpace
+        )
+    }
+
+    /// Compatibility adapter for callers that still provide frame state
+    /// directly. New video/GIF/snapshot/preview paths use the scene overload.
     func render(
         source: CIImage,
         webcam: CIImage?,
@@ -98,120 +238,120 @@ final class ExportCompositor {
         sourceTime: TimeInterval = 0,
         into pixelBuffer: CVPixelBuffer
     ) {
-        let contentRect = ExportLayout.videoRect(
+        let croppedVideoRect = ExportLayout.videoRect(
             canvasSize: layout.size,
             padding: canvas.padding,
             sourceWidth: sourceWidth,
             sourceHeight: sourceHeight,
             cropUV: cropUV
         )
-        let frameGeometry = DeviceFrameLayout.geometry(
-            settings: deviceFrame,
-            contentRect: contentRect
+        let compatibilityLayout = ExportCanvasLayout(
+            width: layout.width,
+            height: layout.height,
+            videoRect: croppedVideoRect,
+            cornerRadius: min(
+                max(0, canvas.cornerRadius),
+                Double(croppedVideoRect.width) / 2,
+                Double(croppedVideoRect.height) / 2
+            ),
+            padding: canvas.padding
         )
-        let videoRect = frameGeometry.screenRect
-        let requestedRadius = deviceFrame.enabled
-            ? Double(frameGeometry.cornerRadius * 0.55)
-            : layout.cornerRadius
-        let radius = min(
-            requestedRadius,
-            Double(videoRect.width) / 2,
-            Double(videoRect.height) / 2
+        let deviceSettings = deviceFrame.normalized
+        let deviceGeometry = DeviceFrameLayout.geometry(
+            settings: deviceSettings,
+            contentRect: croppedVideoRect
         )
-
-        let placed = placeSource(source, cropUV: cropUV, videoRect: videoRect)
-        let masked = roundCorners(placed, videoRect: videoRect, radius: radius)
-        var output = masked.composited(over: background)
-
-        if let frame = deviceFrameOverlay(geometry: frameGeometry) {
-            output = frame.composited(over: output)
-        }
-
-        if let webcam,
-           let overlay = WebcamOverlayRenderer.image(
-            webcam,
-            settings: webcamOverlay,
-            canvasSize: layout.size,
-            mirror: webcamMirror
-           )
-        {
-            output = overlay.composited(over: output)
-        }
-
-        let cursorTreatment = cursorTreatmentEvaluator.state(
+        let treatment = cursorTreatmentEvaluator.state(
             at: sourceTime,
             baseScale: canvas.cursorScale,
             baseClickEmphasis: canvas.cursorClickEmphasis,
             baseHalo: canvas.cursorHalo
         )
-        if cursorTreatment.visible, let cursorUV {
-            let hotspot = ExportLayout.mapSourceUVToCanvas(
-                cursorUV,
-                cropUV: cropUV,
-                videoRect: videoRect
-            )
-            let pxPerPoint = ExportLayout.canvasPixelsPerPoint(
-                displayScale: displayScale,
-                sourceWidth: sourceWidth,
-                cropUV: cropUV,
-                videoRect: videoRect
-            )
-            let motionBlur = CursorMotionBlurEffect.state(
-                velocity: cursorVelocity,
-                canvasSize: layout.size,
-                settings: canvas.cursorMotionBlur
-            )
-            if clicking, cursorTreatment.clickEmphasis, let clickAge {
-                let ripple = ExportLayout.clickRipple(
-                    age: clickAge,
-                    canvasPixelsPerPoint: pxPerPoint,
-                    cursorScale: cursorTreatment.scale
-                )
-                output = makeRipple(at: hotspot, ripple: ripple).composited(over: output)
-            }
-            if cursorTreatment.halo {
-                output = makeHalo(
-                    at: hotspot,
-                    pixelsPerPoint: pxPerPoint,
-                    cursorScale: cursorTreatment.scale
-                ).composited(over: output)
-            }
-            if let cursor = makeCursor(
-                hotspot: hotspot,
-                pixelsPerPoint: pxPerPoint,
-                motionBlur: motionBlur,
-                cursorScale: cursorTreatment.scale
-            ) {
-                output = cursor.composited(over: output)
-            }
-        }
-
-        if let keyboard = cachedKeyboardOverlay(for: keyboardState) {
-            output = keyboard.composited(over: output)
-        }
-
-        // Captions and annotations intentionally sit above keyboard overlays so
-        // authored content is legible in both preview and every export format.
-        if let authored = authoredOverlay(at: sourceTime, canvasSize: layout.size) {
-            output = authored.composited(over: output)
-        }
-
-        for redaction in redactions where redaction.isActive(at: sourceTime) {
-            output = apply(redaction, to: output)
-        }
-
-        context.render(
-            output.cropped(to: canvasExtent),
-            to: pixelBuffer,
-            bounds: canvasExtent,
-            colorSpace: colorSpace
+        let motionBlur = CursorMotionBlurEffect.state(
+            velocity: cursorVelocity,
+            canvasSize: compatibilityLayout.size,
+            settings: canvas.cursorMotionBlur
         )
+        let cursorPixelsPerPoint = ExportLayout.canvasPixelsPerPoint(
+            displayScale: displayScale,
+            sourceWidth: sourceWidth,
+            cropUV: cropUV,
+            videoRect: deviceGeometry.screenRect
+        )
+        let cursorPlacement: CursorSpritePlacement?
+        if let cursorSprite {
+            cursorPlacement = CursorSpriteLayout.placement(
+                sprite: cursorSprite,
+                imagePixelSize: Size2D(
+                    width: Double(cursorImage?.extent.width ?? 1),
+                    height: Double(cursorImage?.extent.height ?? 1)
+                ),
+                cursorScale: treatment.scale,
+                pixelsPerPoint: cursorPixelsPerPoint
+            )
+        } else {
+            cursorPlacement = nil
+        }
+        let keyboardSettings = keyboardOverlay.normalized
+        let keyboardGeometry = KeyboardOverlayLayout.geometry(
+            for: keyboardState,
+            settings: keyboardSettings,
+            canvasSize: compatibilityLayout.size,
+            canvasPadding: canvas.padding
+        )
+        let webcamSettings = webcamOverlay.normalized
+        let webcamGeometry = webcamSettings.enabled
+            ? WebcamOverlayLayout.geometry(
+                settings: webcamSettings,
+                canvasSize: compatibilityLayout.size,
+                sourceAspect: webcam.map {
+                    Double($0.extent.width / max($0.extent.height, 1))
+                } ?? 16.0 / 9.0
+            )
+            : nil
+        let scene = FrameScene(
+            outputTime: sourceTime,
+            sourceTime: sourceTime,
+            cropUV: cropUV,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight,
+            layout: compatibilityLayout,
+            canvas: canvas,
+            deviceFrame: deviceSettings,
+            deviceFrameGeometry: deviceGeometry,
+            webcamOverlay: webcamSettings,
+            webcamSourceTime: webcam == nil ? nil : sourceTime,
+            webcamGeometry: webcamGeometry,
+            webcamMirror: webcamMirror,
+            webcamSourceAspect: webcam.map {
+                Double($0.extent.width / max($0.extent.height, 1))
+            },
+            cursorUV: cursorUV,
+            cursorVelocity: cursorVelocity,
+            cursorTreatment: treatment,
+            clicking: clicking,
+            clickAge: clicking ? clickAge : nil,
+            cursorMotionBlur: motionBlur,
+            cursorSpritePlacement: cursorPlacement,
+            cursorPixelsPerPoint: cursorPixelsPerPoint,
+            keyboardOverlay: keyboardSettings,
+            keyboardState: keyboardState,
+            keyboardGeometry: keyboardGeometry,
+            activeCaptions: captions.filter { $0.isActive(at: sourceTime) },
+            activeAnnotations: annotations.filter { $0.isActive(at: sourceTime) },
+            activeDrawings: drawings.filter { $0.isActive(at: sourceTime) },
+            activeRedactions: redactions.filter { $0.isActive(at: sourceTime) }
+        )
+        render(source: source, webcam: webcam, scene: scene, into: pixelBuffer)
     }
 
-    private func authoredOverlay(at time: TimeInterval, canvasSize: CGSize) -> CIImage? {
-        let activeCaptions = captions.filter { $0.isActive(at: time) }
-        let activeAnnotations = annotations.filter { $0.isActive(at: time) }
-        let activeDrawings = drawings.filter { $0.isActive(at: time) }
+    private func authoredOverlay(
+        captions activeCaptions: [CaptionCue],
+        annotations activeAnnotations: [Annotation],
+        drawings activeDrawings: [DrawingStroke],
+        at time: TimeInterval,
+        canvasSize: CGSize
+    ) -> CIImage? {
         let hasAnimatedAnnotations = activeAnnotations.contains { $0.animation != .none }
         let cacheKey = AuthoredOverlayCacheKey(
             captions: activeCaptions,
@@ -260,16 +400,27 @@ final class ExportCompositor {
         return rendered
     }
 
-    private func cachedKeyboardOverlay(for state: KeyboardOverlayState) -> CIImage? {
-        if state == keyboardOverlayCacheKey {
+    private func cachedKeyboardOverlay(
+        for state: KeyboardOverlayState,
+        settings: KeyboardOverlaySettings,
+        canvasSize: CGSize,
+        canvasPadding: Double
+    ) -> CIImage? {
+        let cacheKey = KeyboardOverlayCacheKey(
+            state: state,
+            settings: settings,
+            canvasSize: canvasSize,
+            canvasPadding: canvasPadding
+        )
+        if cacheKey == keyboardOverlayCacheKey {
             return keyboardOverlayCache
         }
-        keyboardOverlayCacheKey = state
+        keyboardOverlayCacheKey = cacheKey
         let image = KeyboardOverlayRenderer.image(
             state: state,
-            settings: keyboardOverlay,
-            canvasSize: layout.size,
-            canvasPadding: canvas.padding
+            settings: settings,
+            canvasSize: canvasSize,
+            canvasPadding: canvasPadding
         )
         keyboardOverlayCache = image
         return image
@@ -558,10 +709,15 @@ final class ExportCompositor {
         CTLineDraw(line, context)
     }
 
-    private func deviceFrameOverlay(geometry: DeviceFrameGeometry) -> CIImage? {
-        guard deviceFrame.enabled else { return nil }
-        let width = max(layout.width, 2)
-        let height = max(layout.height, 2)
+    private func deviceFrameOverlay(
+        geometry: DeviceFrameGeometry,
+        settings rawSettings: DeviceFrameSettings,
+        canvasSize: CGSize
+    ) -> CIImage? {
+        let settings = rawSettings.normalized
+        guard settings.enabled else { return nil }
+        let width = max(Int(canvasSize.width.rounded()), 2)
+        let height = max(Int(canvasSize.height.rounded()), 2)
         guard let cg = CGContext(
             data: nil,
             width: width,
@@ -580,7 +736,7 @@ final class ExportCompositor {
             fromTopLeft: geometry.screenRect,
             canvasHeight: CGFloat(height)
         )
-        if deviceFrame.shadow {
+        if settings.shadow {
             cg.setShadow(
                 offset: CGSize(width: 0, height: -max(frame.height * 0.015, 2)),
                 blur: max(frame.height * 0.04, 5),
@@ -598,7 +754,7 @@ final class ExportCompositor {
             cornerWidth: max(geometry.cornerRadius * 0.55, 1),
             cornerHeight: max(geometry.cornerRadius * 0.55, 1)
         )
-        switch deviceFrame.id {
+        switch settings.id {
         case .genericBrowserLight:
             cg.setFillColor(CGColor(red: 0.9, green: 0.91, blue: 0.93, alpha: 1))
         case .genericLaptopDark, .genericPhoneDark:
@@ -610,7 +766,7 @@ final class ExportCompositor {
         cg.drawPath(using: .eoFill)
         cg.setShadow(offset: .zero, blur: 0, color: nil)
 
-        switch deviceFrame.id {
+        switch settings.id {
         case .genericBrowserLight:
             let dotRadius = max(frame.height * 0.012, 2)
             let dotY = frame.maxY - max(geometry.chromeHeight * 0.5, dotRadius * 2)
@@ -663,13 +819,18 @@ final class ExportCompositor {
         return CIImage(cgImage: image)
     }
 
-    private func apply(_ redaction: RedactionRegion, to image: CIImage) -> CIImage {
+    private func apply(
+        _ redaction: RedactionRegion,
+        to image: CIImage,
+        canvasSize: CGSize,
+        canvasHeight: CGFloat
+    ) -> CIImage {
         let value = redaction.normalized
-        let topLeft = AuthoredVisualLayout.rect(value.rect, in: layout.size)
+        let topLeft = AuthoredVisualLayout.rect(value.rect, in: canvasSize)
         let rect = ExportLayout.ciRect(
             fromTopLeft: topLeft,
-            canvasHeight: canvasExtent.height
-        ).intersection(canvasExtent)
+            canvasHeight: canvasHeight
+        ).intersection(CGRect(x: 0, y: 0, width: canvasSize.width, height: canvasSize.height))
         guard rect.width > 1, rect.height > 1 else { return image }
         let filtered: CIImage
         switch value.mode {
@@ -693,13 +854,20 @@ final class ExportCompositor {
         CGColor(red: color.r, green: color.g, blue: color.b, alpha: color.a)
     }
 
-    private func placeSource(_ source: CIImage, cropUV: CGRect, videoRect: CGRect) -> CIImage {
+    private func placeSource(
+        _ source: CIImage,
+        cropUV: CGRect,
+        videoRect: CGRect,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        canvasHeight: CGFloat
+    ) -> CIImage {
         let srcCrop = ExportLayout.ciRect(
             fromUV: cropUV,
-            sourceWidth: sourceWidth,
-            sourceHeight: sourceHeight
+                sourceWidth: sourceWidth,
+                sourceHeight: sourceHeight
         )
-        let dest = ExportLayout.ciRect(fromTopLeft: videoRect, canvasHeight: canvasExtent.height)
+        let dest = ExportLayout.ciRect(fromTopLeft: videoRect, canvasHeight: canvasHeight)
         guard srcCrop.width >= 1, srcCrop.height >= 1, dest.width >= 1, dest.height >= 1 else {
             return source.cropped(to: source.extent)
         }
@@ -714,8 +882,13 @@ final class ExportCompositor {
         return source.cropped(to: srcCrop).transformed(by: transform)
     }
 
-    private func roundCorners(_ video: CIImage, videoRect: CGRect, radius: Double) -> CIImage {
-        let dest = ExportLayout.ciRect(fromTopLeft: videoRect, canvasHeight: canvasExtent.height)
+    private func roundCorners(
+        _ video: CIImage,
+        videoRect: CGRect,
+        radius: Double,
+        canvasHeight: CGFloat
+    ) -> CIImage {
+        let dest = ExportLayout.ciRect(fromTopLeft: videoRect, canvasHeight: canvasHeight)
         guard let filter = CIFilter(name: "CIRoundedRectangleGenerator") else {
             return video.cropped(to: dest)
         }
@@ -731,15 +904,17 @@ final class ExportCompositor {
 
     private func makeCursor(
         hotspot: CGPoint,
-        pixelsPerPoint: Double,
         motionBlur: CursorMotionBlurState,
-        cursorScale: Double
+        placement: CursorSpritePlacement?,
+        cursorScale: Double,
+        pixelsPerPoint: Double,
+        canvasHeight: CGFloat
     ) -> CIImage? {
         guard let cursorImage, let sprite = cursorSprite else { return nil }
         let extent = cursorImage.extent
         guard extent.width > 0, extent.height > 0 else { return nil }
 
-        let placement = CursorSpriteLayout.placement(
+        let placement = placement ?? CursorSpriteLayout.placement(
             sprite: sprite,
             imagePixelSize: Size2D(width: extent.width, height: extent.height),
             cursorScale: cursorScale,
@@ -758,7 +933,7 @@ final class ExportCompositor {
         )
         let ciOrigin = ExportLayout.ciRect(
             fromTopLeft: CGRect(origin: topLeft, size: CGSize(width: drawWidth, height: drawHeight)),
-            canvasHeight: canvasExtent.height
+            canvasHeight: canvasHeight
         ).origin
         transform = transform.concatenating(
             CGAffineTransform(translationX: ciOrigin.x, y: ciOrigin.y)
@@ -770,9 +945,10 @@ final class ExportCompositor {
     private func makeHalo(
         at hotspot: CGPoint,
         pixelsPerPoint: Double,
-        cursorScale: Double
+        cursorScale: Double,
+        canvasHeight: CGFloat
     ) -> CIImage {
-        let center = ExportLayout.ciPoint(fromTopLeft: hotspot, canvasHeight: canvasExtent.height)
+        let center = ExportLayout.ciPoint(fromTopLeft: hotspot, canvasHeight: canvasHeight)
         let outerRadius = CGFloat(max(17 * cursorScale * pixelsPerPoint, 1))
         let innerRadius = outerRadius * 0.86
         let filter = CIFilter.radialGradient()
@@ -792,8 +968,12 @@ final class ExportCompositor {
         )
     }
 
-    private func makeRipple(at hotspot: CGPoint, ripple: ExportClickRipple) -> CIImage {
-        let center = ExportLayout.ciPoint(fromTopLeft: hotspot, canvasHeight: canvasExtent.height)
+    private func makeRipple(
+        at hotspot: CGPoint,
+        ripple: ExportClickRipple,
+        canvasHeight: CGFloat
+    ) -> CIImage {
+        let center = ExportLayout.ciPoint(fromTopLeft: hotspot, canvasHeight: canvasHeight)
         let radius = CGFloat(max(ripple.radius, 1))
         let filter = CIFilter.radialGradient()
         filter.center = center

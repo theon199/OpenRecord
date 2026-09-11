@@ -39,6 +39,12 @@ struct OpenRecordApp: App {
                 }
                 .keyboardShortcut("n")
             }
+            CommandGroup(after: .newItem) {
+                Button("Open Project…") {
+                    model.presentOpenProjectPanel()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
             CommandMenu("Recording") {
                 Button(model.isRecording ? "Stop Recording" : "Start Recording") {
                     Task { await model.handleRecordShortcut() }
@@ -171,9 +177,32 @@ struct OpenRecordApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var terminationHandler: (() async -> Bool)?
+    private static var openURLHandler: (([URL]) -> Void)?
+    private static var pendingOpenURLs: [URL] = []
     private static let preferredMainWindowContentSize = NSSize(width: 1_100, height: 720)
     private static let visibleWorkspaceMargin: CGFloat = 12
     private var terminationInProgress = false
+
+    static func installOpenURLHandler(_ handler: @escaping ([URL]) -> Void) {
+        openURLHandler = handler
+        let pending = pendingOpenURLs
+        pendingOpenURLs.removeAll()
+        if !pending.isEmpty {
+            handler(pending)
+        }
+    }
+
+    private static func deliverOpenURLs(_ urls: [URL]) {
+        let projects = urls.filter {
+            $0.pathExtension.lowercased() == ProjectLayout.bundleExtension
+        }
+        guard !projects.isEmpty else { return }
+        if let openURLHandler {
+            openURLHandler(projects)
+        } else {
+            pendingOpenURLs.append(contentsOf: projects)
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -181,6 +210,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             Self.orderFrontMainWindows()
         }
+    }
+
+    func application(_ application: NSApplication, openFiles filenames: [String]) {
+        Self.deliverOpenURLs(filenames.map { URL(fileURLWithPath: $0) })
+        application.reply(toOpenOrPrint: .success)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Self.deliverOpenURLs(urls)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -255,18 +255,27 @@ extension EditorSession {
     }
 
     func transcribe(source: TranscriptSource) {
-        guard !isTranscribing else { return }
+        guard !isTranscribing, analysisTask == nil else { return }
         isTranscribing = true
+        analysisCancellationRequested = false
+        analysisError = nil
+        analysisPhase = .transcription
+        analysisMessage = "Preparing on-device transcription…"
+        analysisFraction = 0
         transcriptionStatus = "Preparing on-device transcription…"
-        Task { @MainActor in
-            defer { isTranscribing = false }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
                 try await Self.authorizeSpeechRecognition()
-                let requests = try transcriptionRequests(for: source)
+                try Task.checkCancellation()
+                let requests = try self.transcriptionRequests(for: source)
                 let provider = OnDeviceSpeechTranscriptionProvider()
                 var transcript: [TranscriptSegment] = []
-                for request in requests {
-                    transcriptionStatus = "Transcribing \(request.label)…"
+                for (index, request) in requests.enumerated() {
+                    try Task.checkCancellation()
+                    self.analysisFraction = Double(index) / Double(max(requests.count, 1))
+                    self.analysisMessage = "Transcribing \(request.label)…"
+                    self.transcriptionStatus = self.analysisMessage
                     let raw = try await provider.transcribe(request: TranscriptionRequest(
                         audioURL: request.url,
                         source: request.source,
@@ -279,13 +288,14 @@ extension EditorSession {
                         return value.normalized
                     })
                 }
+                try Task.checkCancellation()
                 transcript.sort {
                     if $0.start != $1.start { return $0.start < $1.start }
                     return $0.id.uuidString < $1.id.uuidString
                 }
-                let before = document
+                let before = self.document
                 let corrections = Dictionary(
-                    uniqueKeysWithValues: document.transcript.compactMap { segment in
+                    uniqueKeysWithValues: self.document.transcript.compactMap { segment in
                         segment.editedText.map { (segment.id, $0) }
                     }
                 )
@@ -294,22 +304,44 @@ extension EditorSession {
                     value.editedText = corrections[segment.id]
                     return value
                 }
-                document.transcript = transcript
-                selectedTranscriptSegmentIDs.removeAll()
-                documentDidChange(from: before, actionName: "Generate Transcript")
-                transcriptionStatus = transcript.isEmpty
+                try Task.checkCancellation()
+                self.document.transcript = transcript
+                self.selectedTranscriptSegmentIDs.removeAll()
+                self.documentDidChange(from: before, actionName: "Generate Transcript")
+                self.analysisFraction = 1
+                self.transcriptionStatus = transcript.isEmpty
                     ? "No speech was recognized."
                     : "Generated \(transcript.count) transcript segments on device."
             } catch {
-                transcriptionStatus = nil
-                lastErrorCategory = .projectContent
-                lastError = "Could not transcribe locally: \(error.localizedDescription)"
+                self.analysisError = error
+            }
+        }
+        analysisTask = task
+        Task { @MainActor [weak self] in
+            await task.value
+            guard let self else { return }
+            self.analysisTask = nil
+            self.isTranscribing = false
+            let error = self.analysisError
+            self.analysisError = nil
+            let cancelled = error is CancellationError || self.analysisCancellationRequested
+            self.analysisPhase = .idle
+            self.analysisFraction = nil
+            if cancelled {
+                self.analysisMessage = "Transcription cancelled. Captured media and edits were preserved."
+                self.transcriptionStatus = "Transcription cancelled."
+                self.analysisCancellationRequested = false
+            } else if let error {
+                self.analysisMessage = "Transcription failed: \(error.localizedDescription)"
+                self.transcriptionStatus = nil
+                self.lastErrorCategory = .projectContent
+                self.lastError = "Could not transcribe locally: \(error.localizedDescription)"
             }
         }
     }
 
     func analyzeSilence(source: TranscriptSource, preset: SilencePreset? = nil) {
-        guard !isAnalyzingSilence else { return }
+        guard !isAnalyzingSilence, analysisTask == nil else { return }
         let selectedPreset = preset ?? silencePreset
         if let preset {
             selectSilencePreset(preset)
@@ -318,6 +350,11 @@ extension EditorSession {
         let breathingRoom = silenceBreathingRoom
         isPreviewingSilenceSuggestions = false
         isAnalyzingSilence = true
+        analysisCancellationRequested = false
+        analysisError = nil
+        analysisPhase = .silence
+        analysisMessage = "Analyzing pauses locally…"
+        analysisFraction = 0
         transcriptionStatus = "Analyzing pauses locally…"
         let micURL = hasMicrophoneAudio ? ProjectLayout.microphoneAudioURL(in: projectURL) : nil
         let systemURL = hasSystemAudio ? ProjectLayout.systemAudioURL(in: projectURL) : nil
@@ -328,8 +365,8 @@ extension EditorSession {
             for: source
         )
         let duration = duration
-        Task { @MainActor in
-            defer { isAnalyzingSilence = false }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
                 let levels = try await Task.detached(priority: .userInitiated) {
                     try Self.audioLevels(
@@ -342,7 +379,9 @@ extension EditorSession {
                         systemSourceRate: systemTiming.sourceRate
                     )
                 }.value
-                silenceSuggestions = SilenceAnalyzer.detect(
+                try Task.checkCancellation()
+                self.analysisFraction = 0.75
+                self.silenceSuggestions = SilenceAnalyzer.detect(
                     samples: levels,
                     options: SilenceAnalysisOptions(
                         preset: selectedPreset,
@@ -352,14 +391,36 @@ extension EditorSession {
                     duration: duration,
                     transcript: transcript
                 )
-                acceptedSilenceSuggestionIDs = Set(silenceSuggestions.map(\.id))
-                transcriptionStatus = silenceSuggestions.isEmpty
+                try Task.checkCancellation()
+                self.acceptedSilenceSuggestionIDs = Set(self.silenceSuggestions.map(\.id))
+                self.analysisFraction = 1
+                self.transcriptionStatus = self.silenceSuggestions.isEmpty
                     ? "No matching pauses found."
-                    : "Found \(silenceSuggestions.count) pause suggestions."
+                    : "Found \(self.silenceSuggestions.count) pause suggestions."
             } catch {
-                transcriptionStatus = nil
-                lastErrorCategory = .projectContent
-                lastError = "Could not analyze pauses: \(error.localizedDescription)"
+                self.analysisError = error
+            }
+        }
+        analysisTask = task
+        Task { @MainActor [weak self] in
+            await task.value
+            guard let self else { return }
+            self.analysisTask = nil
+            self.isAnalyzingSilence = false
+            let error = self.analysisError
+            self.analysisError = nil
+            let cancelled = error is CancellationError || self.analysisCancellationRequested
+            self.analysisPhase = .idle
+            self.analysisFraction = nil
+            if cancelled {
+                self.analysisMessage = "Pause analysis cancelled. Captured media and edits were preserved."
+                self.transcriptionStatus = "Pause analysis cancelled."
+                self.analysisCancellationRequested = false
+            } else if let error {
+                self.analysisMessage = "Pause analysis failed: \(error.localizedDescription)"
+                self.transcriptionStatus = nil
+                self.lastErrorCategory = .projectContent
+                self.lastError = "Could not analyze pauses: \(error.localizedDescription)"
             }
         }
     }

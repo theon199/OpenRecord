@@ -93,8 +93,9 @@ private enum ExportAlternateSession {
         for index in 0..<count {
             try Task.checkCancellation()
             let outputTime = min(duration, Double(index) / Double(frameRate))
-            let sourceTime = frames.timeMapper.sourceTime(atOutputTime: outputTime)
-            guard let image = try frames.image(at: sourceTime) else { throw OpenRecordError.io("Could not render a GIF frame.") }
+            guard let image = try frames.image(atOutputTime: outputTime) else {
+                throw OpenRecordError.io("Could not render a GIF frame.")
+            }
             let frameProperties: [CFString: Any] = [
                 kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(frameRate)] as [CFString: Any]
             ]
@@ -136,18 +137,21 @@ private enum ExportAlternateSession {
         guard frames.outputDuration > 0 else {
             throw OpenRecordError.io("The project has no included media to export.")
         }
-        let sourceTime: TimeInterval
+        let outputTime: TimeInterval
         switch position {
-        case .output(let outputTime):
-            sourceTime = frames.timeMapper.sourceTime(atOutputTime: outputTime)
+        case .output(let requestedOutputTime):
+            outputTime = FrameSceneResolver.canonicalOutputTime(
+                requestedOutputTime,
+                duration: frames.outputDuration
+            )
         case .source(let requestedSourceTime):
-            sourceTime = frames.timeMapper.sourceTime(
-                atOutputTime: frames.timeMapper.clampedOutputTime(
-                    forSourceTime: requestedSourceTime
-                )
+            outputTime = frames.timeMapper.clampedOutputTime(
+                forSourceTime: requestedSourceTime
             )
         }
-        guard let image = try frames.image(at: sourceTime) else { throw OpenRecordError.io("Could not render the snapshot.") }
+        guard let image = try frames.image(atOutputTime: outputTime) else {
+            throw OpenRecordError.io("Could not render the snapshot.")
+        }
         let tempURL = try temporaryURL(for: outputURL, ext: "png")
         defer { try? FileManager.default.removeItem(at: tempURL) }
         guard let destination = CGImageDestinationCreateWithURL(tempURL as CFURL, UTType.png.identifier as CFString, 1, nil) else {
@@ -257,14 +261,7 @@ private enum ExportAlternateSession {
 }
 
 private final class ExportFrameSession: @unchecked Sendable {
-    let reader: ExportVideoReader
-    let webcamReader: ExportVideoReader?
-    let webcamDuration: TimeInterval
-    let webcamOffset: TimeInterval
-    let captureDiagnostics: CaptureDiagnostics?
-    let engine: ZoomEngine
-    let keyboardTimeline: KeyboardOverlayTimeline
-    let compositor: ExportCompositor
+    let renderService: FrameRenderService
     let timeMapper: ProjectTimeMapper
     let outputDuration: TimeInterval
     let fps: Int32
@@ -319,28 +316,15 @@ private final class ExportFrameSession: @unchecked Sendable {
         let fps = project.videoExportSettings.frameRate.resolvedFPS(sourceAverageFPS: await ExportMediaIO.sourceAverageFPS(track: track))
         let layout = ExportLayout.canvasLayout(canvas: project.canvas, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, resolution: project.videoExportSettings.resolution)
         let cursor = ExportCursorImage.load(document: project, bundleURL: bundleURL)
+        let engine = ZoomEngine(document: project, samples: mouse, clicks: clicks, displayBounds: meta.displayBounds, targetGeometry: target)
+        let keyboardTimeline = KeyboardOverlayTimeline(samples: keys)
         let compositor = ExportCompositor(context: ci, colorSpace: colorSpace, canvas: project.canvas, keyboardOverlay: project.keyboardOverlay, webcamOverlay: project.webcamOverlay, webcamMirror: meta.webcam?.mirror ?? false, layout: layout, sourceWidth: reader.sourceWidth, sourceHeight: reader.sourceHeight, displayScale: meta.scale, cursorImage: cursor?.image, cursorSprite: cursor?.sprite, cursorEffects: project.cursorEffects, captions: project.captions, annotations: project.annotations, redactions: project.redactions, drawings: project.drawings, deviceFrame: project.deviceFrame)
-        self.reader = reader; self.webcamReader = webcamReader; self.webcamDuration = webcamDuration; self.webcamOffset = webcamOffset; self.captureDiagnostics = meta.captureDiagnostics
-        self.engine = ZoomEngine(document: project, samples: mouse, clicks: clicks, displayBounds: meta.displayBounds, targetGeometry: target)
-        self.keyboardTimeline = KeyboardOverlayTimeline(samples: keys); self.compositor = compositor; self.timeMapper = timeMapper
+        self.renderService = FrameRenderService(project: project, reader: reader, webcamReader: webcamReader, webcamDuration: webcamDuration, webcamOffset: webcamOffset, captureDiagnostics: meta.captureDiagnostics, webcamMirror: meta.webcam?.mirror ?? false, webcamSourceAspect: webcamReader.map { Double(max($0.sourceWidth, 1)) / Double(max($0.sourceHeight, 1)) }, timeMapper: timeMapper, engine: engine, keyboardTimeline: keyboardTimeline, cursor: FrameSceneCursorMetadata(sprite: cursor?.sprite, imagePixelSize: cursor.map { Size2D(width: $0.image.extent.width, height: $0.image.extent.height) }), compositor: compositor, context: ci, width: layout.width, height: layout.height, displayScale: meta.scale)
+        self.timeMapper = timeMapper
         self.outputDuration = timeMapper.outputDuration; self.fps = fps; self.context = ci; self.width = layout.width; self.height = layout.height
     }
 
-    func image(at time: TimeInterval) throws -> CGImage? {
-        let source = try reader.image(at: time)
-        let webcamTime = WebcamTimeline.sourceTime(
-            atTimelineTime: time,
-            sourceDuration: webcamDuration,
-            legacyOffset: webcamOffset,
-            diagnostics: captureDiagnostics
-        )
-        let webcam = webcamReader.flatMap { reader in
-            webcamTime.flatMap { try? reader.image(at: $0) }
-        }
-        let crop = engine.crop(at: time)
-        let clicking = engine.isClicking(at: time)
-        let buffer = try ExportMediaIO.makePixelBuffer(width: width, height: height)
-        compositor.render(source: source, webcam: webcam, cropUV: crop, cursorUV: engine.interpolateCursor(at: time), cursorVelocity: engine.cursorVelocity(at: time), clicking: clicking, clickAge: clicking ? (ExportLayout.primaryClickAge(at: time, clicks: engine.smoother.clicks) ?? 0) : nil, keyboardState: keyboardTimeline.state(at: time, settings: engine.document.keyboardOverlay), sourceTime: time, into: buffer)
-        return context.createCGImage(CIImage(cvPixelBuffer: buffer), from: CGRect(x: 0, y: 0, width: width, height: height))
+    func image(atOutputTime outputTime: TimeInterval) throws -> CGImage? {
+        try renderService.image(atOutputTime: outputTime)
     }
 }

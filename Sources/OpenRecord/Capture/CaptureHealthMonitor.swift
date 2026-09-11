@@ -17,7 +17,7 @@ final class CaptureHealthMonitor: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var sleepObserver: NSObjectProtocol?
     private var projectURL: URL?
-    private var capturesWebcam = false
+    private var request = CaptureRequest.default
     private var handler: (@Sendable (Event) -> Void)?
     private var emittedWarnings = Set<CaptureWarningCode>()
     private var minimumAvailableDiskBytes: Int64?
@@ -27,7 +27,7 @@ final class CaptureHealthMonitor: @unchecked Sendable {
     @discardableResult
     func start(
         projectURL: URL,
-        capturesWebcam: Bool,
+        request: CaptureRequest = .default,
         handler: @escaping @Sendable (Event) -> Void
     ) throws -> Int64? {
         let initial = Self.availableDiskBytes(at: projectURL)
@@ -40,7 +40,7 @@ final class CaptureHealthMonitor: @unchecked Sendable {
         }
         lock.withLock {
             self.projectURL = projectURL
-            self.capturesWebcam = capturesWebcam
+            self.request = request
             self.handler = handler
             emittedWarnings.removeAll()
             minimumAvailableDiskBytes = initial
@@ -91,7 +91,7 @@ final class CaptureHealthMonitor: @unchecked Sendable {
     }
 
     private func poll() {
-        let snapshot = lock.withLock { (projectURL, capturesWebcam) }
+        let snapshot = lock.withLock { (projectURL, request) }
         guard let projectURL = snapshot.0 else { return }
         if let available = Self.availableDiskBytes(at: projectURL) {
             lock.withLock {
@@ -123,13 +123,13 @@ final class CaptureHealthMonitor: @unchecked Sendable {
                 once: .screenPermissionLost
             )
         }
-        if !CapturePermissions.isGranted(.microphone) {
+        if snapshot.1.capturesMicrophone, !CapturePermissions.isGranted(.microphone) {
             emit(.warning(.microphonePermissionLost), once: .microphonePermissionLost)
         }
-        if !CapturePermissions.isGranted(.accessibility) {
+        if snapshot.1.requiresAccessibility, !CapturePermissions.isGranted(.accessibility) {
             emit(.warning(.accessibilityPermissionLost), once: .accessibilityPermissionLost)
         }
-        if snapshot.1, !CapturePermissions.isGranted(.camera) {
+        if snapshot.1.capturesWebcam, !CapturePermissions.isGranted(.camera) {
             emit(.warning(.cameraPermissionLost), once: .cameraPermissionLost)
         }
     }

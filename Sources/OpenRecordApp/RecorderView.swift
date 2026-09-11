@@ -76,6 +76,12 @@ struct RecorderView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
+            if model.capturesMicrophone {
+                Button(model.isMicrophoneMuted ? "Unmute Microphone" : "Mute Microphone") {
+                    model.toggleRecordingMicrophoneMuted()
+                }
+                .buttonStyle(.bordered)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 180)
     }
@@ -127,6 +133,27 @@ struct RecorderView: View {
             )
             .toggleStyle(.switch)
             Text("Shortcut chords and navigation keys are recorded for the overlay. Ordinary typing and Secure Input are omitted.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Record cursor activity", isOn: $model.capturesCursorTelemetry)
+                .toggleStyle(.switch)
+            Text("Stores cursor, click, and window-focus telemetry for editing and auto-zoom. Accessibility permission is requested when this or keyboard shortcuts is enabled.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Record microphone", isOn: $model.capturesMicrophone)
+                .toggleStyle(.switch)
+            Text("Adds a local microphone track. Microphone permission is requested only when this is enabled and you start recording.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Record system audio", isOn: $model.capturesSystemAudio)
+                .toggleStyle(.switch)
+            Text("Adds a local system-audio track. System audio does not require a separate permission.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
