@@ -12,7 +12,9 @@ import Foundation
 /// value-only and can therefore also be used by SwiftUI preview.
 final class FrameRenderService: @unchecked Sendable {
     let reader: ExportVideoReader
+    let incomingReader: ExportVideoReader?
     let takeReaders: [String: ExportVideoReader]
+    let incomingTakeReaders: [String: ExportVideoReader]
     let webcamReader: ExportVideoReader?
     let webcamDuration: TimeInterval
     let webcamOffset: TimeInterval
@@ -33,7 +35,9 @@ final class FrameRenderService: @unchecked Sendable {
     init(
         project: ProjectDocument,
         reader: ExportVideoReader,
+        incomingReader: ExportVideoReader? = nil,
         takeReaders: [String: ExportVideoReader] = [:],
+        incomingTakeReaders: [String: ExportVideoReader] = [:],
         webcamReader: ExportVideoReader? = nil,
         webcamDuration: TimeInterval = 0,
         webcamOffset: TimeInterval = 0,
@@ -52,7 +56,9 @@ final class FrameRenderService: @unchecked Sendable {
     ) {
         self.project = project
         self.reader = reader
+        self.incomingReader = incomingReader
         self.takeReaders = takeReaders
+        self.incomingTakeReaders = incomingTakeReaders
         self.webcamReader = webcamReader
         self.webcamDuration = webcamDuration
         self.webcamOffset = webcamOffset
@@ -131,7 +137,16 @@ final class FrameRenderService: @unchecked Sendable {
     private func sourceImage(for scene: FrameScene) throws -> CIImage {
         if let seam = timeMapper.activeSeam(atOutputTime: scene.outputTime) {
             let outReader = (seam.outgoingSourceID == MediaSource.primaryID ? reader : takeReaders[seam.outgoingSourceID]) ?? reader
-            let inReader = (seam.incomingSourceID == MediaSource.primaryID ? reader : takeReaders[seam.incomingSourceID]) ?? reader
+            let inReader: ExportVideoReader
+            if seam.incomingSourceID == seam.outgoingSourceID {
+                inReader = (seam.incomingSourceID == MediaSource.primaryID
+                    ? incomingReader
+                    : incomingTakeReaders[seam.incomingSourceID]) ?? outReader
+            } else {
+                inReader = (seam.incomingSourceID == MediaSource.primaryID
+                    ? reader
+                    : takeReaders[seam.incomingSourceID]) ?? reader
+            }
             let fallback = try reader.image(at: scene.sourceTime)
             let outImg = (try? outReader.image(at: seam.outgoingSourceTime)) ?? fallback
             let inImg = (try? inReader.image(at: seam.incomingSourceTime)) ?? outImg

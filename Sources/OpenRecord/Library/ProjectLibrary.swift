@@ -553,9 +553,9 @@ public struct ProjectLibrary: Sendable {
 
                 // Prune unreferenced take directories so Save Copy includes only
                 // referenced sources and never leaks abandoned temporary takes.
+                let referenced = document.referencedSourceIDs
                 let takesDir = ProjectLayout.takesDirectory(in: staging)
                 if fm.fileExists(atPath: takesDir.path) {
-                    let referenced = document.referencedSourceIDs
                     if let entries = try? fm.contentsOfDirectory(atPath: takesDir.path) {
                         for entry in entries {
                             if !referenced.contains(entry) {
@@ -569,15 +569,13 @@ public struct ProjectLibrary: Sendable {
                     }
                 }
 
+                var copyDoc = document
+                copyDoc.mediaSources = document.mediaSources.filter { referenced.contains($0.id) }
                 try AtomicFileWrite.writeProjectDocument(
-                    document,
+                    copyDoc,
                     to: ProjectLayout.documentURL(in: staging)
                 )
-                if fm.fileExists(atPath: destination.path) {
-                    _ = try fm.replaceItemAt(destination, withItemAt: staging, backupItemName: nil, options: [])
-                } else {
-                    try fm.moveItem(at: staging, to: destination)
-                }
+                try AtomicFileWrite.installDirectory(staging: staging, destination: destination, fileManager: fm)
             } catch {
                 try? fm.removeItem(at: staging)
                 throw OpenRecordError.io(

@@ -319,6 +319,22 @@ private enum ExportSession {
         } catch {
             throw ExportFailure(stage: .sourceReading, detail: error.localizedDescription)
         }
+        let incomingReader = try? ExportVideoReader(asset: sourceAsset, track: videoTrack)
+        var takeReaders: [String: ExportVideoReader] = [:]
+        var incomingTakeReaders: [String: ExportVideoReader] = [:]
+        for source in project.mediaSources where !source.isPrimary {
+            let takeURL = ProjectLayout.displayVideoURL(sourceID: source.id, in: bundleURL)
+            guard FileManager.default.fileExists(atPath: takeURL.path) else { continue }
+            let takeAsset = AVURLAsset(url: takeURL, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+            if let takeTrack = try? await takeAsset.loadTracks(withMediaType: .video).first {
+                if let r = try? ExportVideoReader(asset: takeAsset, track: takeTrack) {
+                    takeReaders[source.id] = r
+                }
+                if let r2 = try? ExportVideoReader(asset: takeAsset, track: takeTrack) {
+                    incomingTakeReaders[source.id] = r2
+                }
+            }
+        }
         let webcamReader: ExportVideoReader?
         if let webcamAsset, let webcamTrack {
             webcamReader = try? ExportVideoReader(
@@ -363,6 +379,9 @@ private enum ExportSession {
         let renderService = FrameRenderService(
             project: project,
             reader: reader,
+            incomingReader: incomingReader,
+            takeReaders: takeReaders,
+            incomingTakeReaders: incomingTakeReaders,
             webcamReader: webcamReader,
             webcamDuration: webcamDuration,
             webcamOffset: webcamOffset,
@@ -447,7 +466,7 @@ private enum ExportSession {
                 composition: audioComposition
             )
             audioTask = Task.detached(priority: .userInitiated) {
-                try box.appendAndFinish()
+                try await box.appendAndFinish()
             }
         }
 
@@ -494,7 +513,7 @@ private enum ExportSession {
         do {
             while let frame = try frameQueue.next() {
                 try Task.checkCancellation()
-                try ExportAudioMux.waitUntilReady(videoInput, writer: writer)
+                try await ExportAudioMux.waitUntilReady(videoInput, writer: writer)
                 guard adaptor.append(
                     frame.pixelBuffer,
                     withPresentationTime: frame.presentationTime
@@ -766,9 +785,13 @@ private final class ExportAudioTaskBox: @unchecked Sendable {
         self.prepared = composition
     }
 
-    func appendAndFinish() throws {
-        defer { input.markAsFinished() }
-        try ExportAudioMux.append(
+    func appendAndFinish() async throws {
+        defer {
+            if writer.status == .writing {
+                input.markAsFinished()
+            }
+        }
+        try await ExportAudioMux.append(
             to: writer,
             input: input,
             prepared: prepared

@@ -486,7 +486,27 @@ final class AppModel {
                 let exporter = Exporter(projectBundleURL: job.projectURL)
                 var document = opened.document
                 document.videoExportSettings = job.settings
+                final class ProgressThrottle: @unchecked Sendable {
+                    var lastTime = ContinuousClock.now - .milliseconds(200)
+                    var lastFraction = -1.0
+                    let lock = NSLock()
+
+                    func shouldUpdate(fraction: Double) -> Bool {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        let now = ContinuousClock.now
+                        guard fraction >= 1.0
+                            || abs(fraction - lastFraction) >= 0.01
+                            || now - lastTime >= .milliseconds(50)
+                        else { return false }
+                        lastTime = now
+                        lastFraction = fraction
+                        return true
+                    }
+                }
+                let throttle = ProgressThrottle()
                 try await exporter.export(project: document, url: job.outputURL) { [weak self] progress in
+                    guard throttle.shouldUpdate(fraction: progress) else { return }
                     Task { @MainActor in
                         guard let self,
                               self.batchExportQueue.currentJobID == job.id

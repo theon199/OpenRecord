@@ -408,8 +408,9 @@ public enum AudioCleanupProcessor {
                     framePeak = max(framePeak, abs(samples[base + channel]))
                 }
 
+                let effectivePeak = framePeak * (settings.normalizeEnabled ? normalizationGain : 1.0)
                 if settings.noiseGateEnabled {
-                    let target: Float = framePeak >= gateThreshold ? 1 : 0
+                    let target: Float = effectivePeak >= gateThreshold ? 1 : 0
                     let coefficient = target > gateGain
                         ? gateOpenCoefficient
                         : gateCloseCoefficient

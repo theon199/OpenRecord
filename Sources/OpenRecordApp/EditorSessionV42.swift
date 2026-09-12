@@ -110,10 +110,12 @@ extension EditorSession {
                 self.analysisError = error
             }
         }
+        analysisGeneration &+= 1
+        let generation = analysisGeneration
         analysisTask = task
         Task { @MainActor [weak self] in
             await task.value
-            guard let self else { return }
+            guard let self, self.analysisGeneration == generation else { return }
             self.analysisTask = nil
             let error = self.analysisError
             self.analysisError = nil
@@ -261,10 +263,12 @@ extension EditorSession {
                 self.analysisError = error
             }
         }
+        analysisGeneration &+= 1
+        let generation = analysisGeneration
         analysisTask = task
         Task { @MainActor [weak self] in
             await task.value
-            guard let self else { return }
+            guard let self, self.analysisGeneration == generation else { return }
             self.analysisTask = nil
             let error = self.analysisError
             self.analysisError = nil

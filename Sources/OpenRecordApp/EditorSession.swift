@@ -284,6 +284,7 @@ final class EditorSession {
     private var engineTask: Task<Void, Never>?
     private var previewAudioTask: Task<Void, Never>?
     var analysisTask: Task<Void, Never>?
+    var analysisGeneration: UInt64 = 0
     var analysisError: Error?
     var analysisCancellationRequested = false
     private let previewAudio = PreviewAudioController()

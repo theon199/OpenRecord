@@ -900,11 +900,18 @@ public typealias PrivacyAnalysisReport = PrivacyReport
 
 enum PrivacyGeometry {
     static func normalized(_ raw: Rect2D) -> Rect2D {
-        let x = finite(raw.x) ? min(max(raw.x, 0), 1) : 0
-        let y = finite(raw.y) ? min(max(raw.y, 0), 1) : 0
-        let width = finite(raw.width) ? min(max(raw.width, 0), 1 - x) : 0
-        let height = finite(raw.height) ? min(max(raw.height, 0), 1 - y) : 0
-        return Rect2D(x: x, y: y, width: width, height: height)
+        guard finite(raw.x), finite(raw.y), finite(raw.width), finite(raw.height) else {
+            return Rect2D(x: 0, y: 0, width: 0, height: 0)
+        }
+        let x0 = max(0, min(1, raw.x))
+        let x1 = max(0, min(1, raw.x + max(0, raw.width)))
+        let y0 = max(0, min(1, raw.y))
+        let y1 = max(0, min(1, raw.y + max(0, raw.height)))
+        let minX = min(x0, x1)
+        let maxX = max(x0, x1)
+        let minY = min(y0, y1)
+        let maxY = max(y0, y1)
+        return Rect2D(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
     static func apply(

@@ -124,6 +124,10 @@ final class CursorMonitor: @unchecked Sendable {
         stateLock.unlock()
     }
 
+    deinit {
+        stop()
+    }
+
     func closeFiles() throws {
         mouseWriter?.close(); clickWriter?.close(); keyWriter?.close(); typingWriter?.close(); targetWriter?.close(); semanticWriter?.close()
         let mouseError = mouseWriter?.writeError

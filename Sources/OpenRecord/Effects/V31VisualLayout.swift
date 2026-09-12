@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-public struct DeviceFrameGeometry: Sendable, Equatable {
+public struct DeviceFrameGeometry: Sendable, Equatable, Hashable {
     public var frameRect: CGRect
     public var screenRect: CGRect
     public var cornerRadius: CGFloat

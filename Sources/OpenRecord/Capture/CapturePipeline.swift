@@ -29,6 +29,7 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private var originHostTime: CFTimeInterval?
     private var systemAudioOffset: TimeInterval?
     private var originCMTime: CMTime?
+    private var lastVideoPTS: CMTime?
     private var stopping = false
     private var captureStarted = false
     private var pendingUnexpectedError: Error?
@@ -351,6 +352,11 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             let first = originCMTime == nil
             if first { originCMTime = pts; originHostTime = CMTimeGetSeconds(pts) }
             let origin = originCMTime
+            if let last = lastVideoPTS, pts <= last {
+                stateLock.unlock()
+                return
+            }
+            lastVideoPTS = pts
             stateLock.unlock()
             if first, let origin {
                 videoWriter?.startSession(at: origin)
@@ -362,16 +368,33 @@ final class CapturePipeline: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
             }
             videoWriter?.append(sampleBuffer)
         case .audio:
-            stateLock.lock(); let origin = originCMTime
-            if origin == nil, pendingAudio.count < 120 { pendingAudio.append(sampleBuffer) }
+            stateLock.lock()
+            guard let origin = originCMTime else {
+                if pendingAudio.count < 120 { pendingAudio.append(sampleBuffer) }
+                stateLock.unlock()
+                return
+            }
+            let uncommitted = pendingAudio
+            pendingAudio.removeAll()
             stateLock.unlock()
-            guard let origin else { return }
+
+            if !uncommitted.isEmpty {
+                systemAudioWriter?.startSession(at: origin)
+                for sample in uncommitted where CMSampleBufferGetPresentationTimeStamp(sample) >= origin {
+                    stateLock.lock()
+                    let candidate = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample) - origin)
+                    if systemAudioOffset == nil || candidate < systemAudioOffset! { systemAudioOffset = candidate }
+                    stateLock.unlock()
+                    systemAudioWriter?.append(sample)
+                }
+            }
             guard CMSampleBufferGetPresentationTimeStamp(sampleBuffer) >= origin else { return }
             stateLock.lock()
             let candidate = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer) - origin)
             if systemAudioOffset == nil || candidate < systemAudioOffset! { systemAudioOffset = candidate }
             stateLock.unlock()
-            systemAudioWriter?.startSession(at: origin); systemAudioWriter?.append(sampleBuffer)
+            systemAudioWriter?.startSession(at: origin)
+            systemAudioWriter?.append(sampleBuffer)
         default: break
         }
     }

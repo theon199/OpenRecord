@@ -93,7 +93,7 @@ func semanticCaptureGeometryAndShortcutHelpersArePure() {
 @Test
 func semanticCaptureJSONLSequenceAndDegradation() throws {
     let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("openrecord-semantic-(UUID().uuidString).jsonl")
+        .appendingPathComponent("openrecord-semantic-\(UUID().uuidString).jsonl")
     defer { try? FileManager.default.removeItem(at: url) }
 
     let writer = try JSONLWriter<SemanticEventSample>(url: url)

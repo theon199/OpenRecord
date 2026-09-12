@@ -187,8 +187,8 @@ public struct FirstCutPlanner: Sendable {
                 {
                     let source = stableUniqueStrings(previous.sources + next.sources).joined(separator: "+")
                     let evidence = [
-                        FirstCutEvidenceReference(id: previous.id, source: source, start: previous.time),
-                        FirstCutEvidenceReference(id: next.id, source: source, start: next.time)
+                        FirstCutEvidenceReference(id: previous.resolveID(planner: self), source: source, start: previous.time),
+                        FirstCutEvidenceReference(id: next.resolveID(planner: self), source: source, start: next.time)
                     ]
                     let speed = SpeedSegment(
                         id: stableUUID("speed|\(startToken(start))|\(endToken(end))|\(source)"),
@@ -560,28 +560,46 @@ public struct FirstCutPlanner: Sendable {
         }
     }
 
-    private func activityEvents(_ input: FirstCutAnalysisInput) -> [(time: TimeInterval, id: AnalysisEvidenceID, sources: [String])] {
-        var values: [(TimeInterval, AnalysisEvidenceID, [String])] = []
+    private struct ActivityEvent {
+        let time: TimeInterval
+        let source: String
+        let index: Int
+        let start: TimeInterval
+        let end: TimeInterval
+        let explicitID: AnalysisEvidenceID?
+        let sources: [String]
+
+        func resolveID(planner: FirstCutPlanner) -> AnalysisEvidenceID {
+            if let explicitID { return explicitID }
+            return planner.evidenceID(source, start, end, String(index))
+        }
+    }
+
+    private func activityEvents(_ input: FirstCutAnalysisInput) -> [ActivityEvent] {
+        var values: [ActivityEvent] = []
         values += input.cursorSamples.enumerated().compactMap { index, value in
             guard value.t.isFinite else { return nil }
-            return (max(0, value.t), evidenceID("cursor", value.t, value.t, String(index)), ["cursor"])
+            let t = max(0, value.t)
+            return ActivityEvent(time: t, source: "cursor", index: index, start: value.t, end: value.t, explicitID: nil, sources: ["cursor"])
         }
         values += input.clicks.enumerated().compactMap { index, value in
             guard value.t.isFinite else { return nil }
-            return (max(0, value.t), evidenceID("click", value.t, value.t, String(index)), ["click"])
+            let t = max(0, value.t)
+            return ActivityEvent(time: t, source: "click", index: index, start: value.t, end: value.t, explicitID: nil, sources: ["click"])
         }
         values += input.typingSamples.enumerated().compactMap { index, value in
             guard value.t.isFinite else { return nil }
-            return (max(0, value.t), evidenceID("typing", value.t, value.t, String(index)), ["typing"])
+            let t = max(0, value.t)
+            return ActivityEvent(time: t, source: "typing", index: index, start: value.t, end: value.t, explicitID: nil, sources: ["typing"])
         }
         values += input.actions.enumerated().compactMap { index, value in
             guard value.start.isFinite else { return nil }
-            let id = value.evidenceIDs.first ?? evidenceID("action", value.start, value.end, String(index))
-            return (max(0, value.start), id, ["action"])
+            let t = max(0, value.start)
+            return ActivityEvent(time: t, source: "action", index: index, start: value.start, end: value.end, explicitID: value.evidenceIDs.first, sources: ["action"])
         }
         return values.sorted {
-            if $0.0 != $1.0 { return $0.0 < $1.0 }
-            return $0.1.rawValue < $1.1.rawValue
+            if $0.time != $1.time { return $0.time < $1.time }
+            return $0.resolveID(planner: self).rawValue < $1.resolveID(planner: self).rawValue
         }
     }
 

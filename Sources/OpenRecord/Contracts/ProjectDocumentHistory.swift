@@ -53,17 +53,27 @@ public struct ProjectDocumentHistory: Sendable {
         redoEntries.removeAll(keepingCapacity: true)
     }
 
+    public mutating func cancel() {
+        transaction = nil
+    }
+
     public mutating func undo(currentDocument: ProjectDocument) -> ProjectDocument? {
         commit(currentDocument: currentDocument)
         guard let entry = undoEntries.popLast() else { return nil }
         redoEntries.append(Entry(document: currentDocument, actionName: entry.actionName))
+        if redoEntries.count > limit {
+            redoEntries.removeFirst(redoEntries.count - limit)
+        }
         return entry.document
     }
 
     public mutating func redo(currentDocument: ProjectDocument) -> ProjectDocument? {
-        commit(currentDocument: currentDocument)
+        transaction = nil
         guard let entry = redoEntries.popLast() else { return nil }
         undoEntries.append(Entry(document: currentDocument, actionName: entry.actionName))
+        if undoEntries.count > limit {
+            undoEntries.removeFirst(undoEntries.count - limit)
+        }
         return entry.document
     }
 

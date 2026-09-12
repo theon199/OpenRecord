@@ -508,13 +508,24 @@ private extension RenderPlan {
         for caption in document.captions where caption.end > caption.start {
             let style = caption.style.normalized
             let center = style.position.defaultAnchor
+            let captionWidth = min(style.maxWidth, 0.90)
+            let captionHeight: Double = 0.08
+            let y: Double
+            switch style.position {
+            case .top:
+                y = center.y
+            case .center:
+                y = center.y - captionHeight / 2
+            case .bottom:
+                y = min(center.y - captionHeight / 2, 0.90 - captionHeight)
+            }
             regions.append(RenderPlanProtectedRegion(
                 kind: .caption,
                 rect: NormalizedCanvasGeometry.rect(Rect2D(
-                    x: center.x - style.maxWidth / 2,
-                    y: center.y - 0.07,
-                    width: style.maxWidth,
-                    height: 0.14
+                    x: min(max(center.x - captionWidth / 2, 0.05), 0.95 - captionWidth),
+                    y: max(0.05, min(y, 0.95 - captionHeight)),
+                    width: captionWidth,
+                    height: captionHeight
                 )),
                 identifier: caption.id.uuidString
             ))

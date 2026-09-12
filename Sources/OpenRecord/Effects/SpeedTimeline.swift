@@ -32,14 +32,16 @@ public struct SpeedTimeline: Sendable {
         var previousEnd: TimeInterval = 0
         var result: [SpeedSegment] = []
 
-        for raw in segments.sorted(by: {
+        let normalized = segments.map(\.normalized).sorted(by: {
             if $0.start == $1.start {
                 if $0.end == $1.end { return $0.id.uuidString < $1.id.uuidString }
                 return $0.end < $1.end
             }
             return $0.start < $1.start
-        }) {
-            var segment = raw.normalized
+        })
+
+        for raw in normalized {
+            var segment = raw
             if let limit {
                 segment.start = min(segment.start, limit)
                 segment.end = min(segment.end, limit)

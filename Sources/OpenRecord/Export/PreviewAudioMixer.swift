@@ -90,14 +90,20 @@ public enum PreviewAudioMixer {
                 )
             )
         }
+        var sessionCreated = false
+        defer {
+            if !sessionCreated, let cleanedMicrophoneURL {
+                try? FileManager.default.removeItem(at: cleanedMicrophoneURL)
+            }
+        }
         guard let prepared = try await ExportAudioMux.makeComposition(
             sources: sources,
             timeMapper: timeMapper,
             muteAudioWhenSpedUp: document.muteAudioWhenSpedUp
         ) else {
-            cleanedMicrophoneURL.map { try? FileManager.default.removeItem(at: $0) }
             return nil
         }
+        sessionCreated = true
         return Session(prepared: prepared, cleanedMicrophoneURL: cleanedMicrophoneURL)
     }
 }

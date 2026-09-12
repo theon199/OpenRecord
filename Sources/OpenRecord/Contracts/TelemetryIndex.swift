@@ -49,6 +49,10 @@ public struct TelemetrySourceFingerprint: Codable, Sendable, Hashable {
     }
 
     public func matches(_ url: URL) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? Int64,
+              size == byteCount
+        else { return false }
         guard let current = try? Self.make(for: url) else { return false }
         return current == self
     }
@@ -337,7 +341,11 @@ public struct TelemetryIndex: Codable, Sendable, Hashable {
         range: Range<Int>,
         includePredecessor: Bool = true
     ) throws -> TelemetryRangeRead<Record> {
-        guard isValid(for: sourceURL) else {
+        guard schemaVersion == Self.currentSchemaVersion,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: sourceURL.path),
+              let size = attrs[.size] as? Int64,
+              size == sourceFingerprint.byteCount
+        else {
             throw OpenRecordError.io("Telemetry index is stale or invalid")
         }
         let total = recordCount

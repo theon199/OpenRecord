@@ -12,7 +12,7 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// Newest host-aligned frames waiting for the display origin. A sliding
     /// window keeps startup from locking onto camera frames that are already
     /// several seconds old.
-    private static let pendingFrameLimit = 90
+    private static let pendingFrameLimit = 12
     private var session: AVCaptureSession?
     /// The live `AVCaptureSession` used for file writing. Attach an
     /// `AVCaptureVideoPreviewLayer` to this same session — a second camera
@@ -247,6 +247,10 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         var pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         guard pts.isNumeric else { return }
 
+        if firstFrameOffset == nil {
+            firstFrameOffset = max(0, CMTimeGetSeconds(pts - origin))
+        }
+
         if lastAppendedPTS == nil {
             guard let pinned = CaptureHostTimestamp.replacingPresentationTime(
                 sampleBuffer,
@@ -284,9 +288,6 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             }
         }
 
-        if firstFrameOffset == nil {
-            firstFrameOffset = max(0, CMTimeGetSeconds(pts - origin))
-        }
         writer?.startSession(at: origin)
         writer?.append(sampleBuffer)
         lastAppendedPTS = pts
@@ -297,6 +298,12 @@ final class WebcamRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             guard let self, self.failure == nil else { return }
             self.failure = error
             self.onFailure?(error)
+        }
+    }
+
+    deinit {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 }

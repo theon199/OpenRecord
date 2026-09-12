@@ -217,11 +217,14 @@ public enum SilenceAnalyzer {
             }
         }
         let merged = merge(ranges, tolerance: options.gapTolerance)
-        return merged.map { raw in
+        return merged.compactMap { raw in
             let breathing = min(options.retainedBreathingRoom, max((raw.end - raw.start) / 2, 0))
             let cutStart = raw.start + breathing
             let cutEnd = raw.end - breathing
             guard cutEnd - cutStart >= options.minimumPause / 3 else {
+                if options.retainedBreathingRoom > 0 {
+                    return nil
+                }
                 return PauseSuggestion(
                     start: raw.start,
                     end: raw.end,

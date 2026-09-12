@@ -401,10 +401,36 @@ public struct OnDeviceSpeechTranscriptionProvider: TranscriptionProvider {
         request: SFSpeechRecognitionRequest,
         source: TranscriptSource
     ) async throws -> [RecognizedTranscriptFragment] {
-        try await withCheckedThrowingContinuation { continuation in
+        final class ContinuationGate: @unchecked Sendable {
+            private let lock = NSLock()
+            private var isResumed = false
+            func resumeOnce(
+                _ continuation: CheckedContinuation<[RecognizedTranscriptFragment], Error>,
+                returning value: [RecognizedTranscriptFragment]
+            ) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !isResumed else { return }
+                isResumed = true
+                continuation.resume(returning: value)
+            }
+
+            func resumeOnce(
+                _ continuation: CheckedContinuation<[RecognizedTranscriptFragment], Error>,
+                throwing error: Error
+            ) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !isResumed else { return }
+                isResumed = true
+                continuation.resume(throwing: error)
+            }
+        }
+        let gate = ContinuationGate()
+        return try await withCheckedThrowingContinuation { continuation in
             recognizer.recognitionTask(with: request) { result, error in
                 if let error {
-                    continuation.resume(throwing: TranscriptionError.recognitionFailed(error.localizedDescription))
+                    gate.resumeOnce(continuation, throwing: TranscriptionError.recognitionFailed(error.localizedDescription))
                 } else if let result, result.isFinal {
                     // Speech result objects are not Sendable. Convert them to
                     // our value-only provider boundary inside the callback so
@@ -418,7 +444,7 @@ public struct OnDeviceSpeechTranscriptionProvider: TranscriptionProvider {
                             source: source
                         )
                     }
-                    continuation.resume(returning: fragments)
+                    gate.resumeOnce(continuation, returning: fragments)
                 }
             }
         }

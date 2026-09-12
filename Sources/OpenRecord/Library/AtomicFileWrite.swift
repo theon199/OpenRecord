@@ -29,13 +29,44 @@ enum AtomicFileWrite {
                     options: []
                 )
             } else {
-                try fm.moveItem(at: tempURL, to: url)
+                do {
+                    try fm.moveItem(at: tempURL, to: url)
+                } catch {
+                    _ = try fm.replaceItemAt(
+                        url,
+                        withItemAt: tempURL,
+                        backupItemName: nil,
+                        options: []
+                    )
+                }
             }
         } catch {
             try? fm.removeItem(at: tempURL)
             throw OpenRecordError.io(
                 "Could not write \(url.lastPathComponent): \(error.localizedDescription)"
             )
+        }
+    }
+
+    /// Atomically replaces or installs a directory destination from a staging area.
+    static func installDirectory(
+        staging: URL,
+        destination: URL,
+        fileManager fm: FileManager = .default
+    ) throws {
+        if fm.fileExists(atPath: destination.path) {
+            let backup = destination.deletingLastPathComponent()
+                .appendingPathComponent(".\(destination.lastPathComponent).backup-\(UUID().uuidString)")
+            try fm.moveItem(at: destination, to: backup)
+            do {
+                try fm.moveItem(at: staging, to: destination)
+                try? fm.removeItem(at: backup)
+            } catch {
+                try? fm.moveItem(at: backup, to: destination)
+                throw error
+            }
+        } else {
+            try fm.moveItem(at: staging, to: destination)
         }
     }
 
@@ -647,6 +678,66 @@ private enum ProjectDocumentPersistence {
             }
             for (index, presetID) in presetIDs.enumerated() where !(presetID is String) {
                 issues.append("appliedPresetIDs[\(index)]=<non-string>")
+            }
+        }
+
+        if let rawSpans = root["timelineSpans"] {
+            guard let spans = rawSpans as? [Any] else {
+                issues.append("timelineSpans=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawSpan) in spans.enumerated() {
+                guard let span = rawSpan as? [String: Any] else {
+                    issues.append("timelineSpans[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "timelineSpans[\(index)]"
+                if let rawID = span["id"] as? String, UUID(uuidString: rawID) != nil {
+                    // Valid identity
+                } else {
+                    issues.append("\(prefix).id=<missing-or-invalid>")
+                }
+                if !(span["sourceID"] is String) {
+                    issues.append("\(prefix).sourceID=<missing-or-non-string>")
+                }
+                for field in ["sourceStart", "sourceEnd"] {
+                    if let number = span[field], !finiteNumber(number) {
+                        issues.append("\(prefix).\(field)=<missing-or-non-number>")
+                    } else if span[field] == nil {
+                        issues.append("\(prefix).\(field)=<missing-or-non-number>")
+                    }
+                }
+                if let seamTransition = span["seamTransition"] {
+                    check(seamTransition, at: "\(prefix).seamTransition", allowed: ["cut", "cross-dissolve"])
+                }
+                if let audioMode = span["audioMode"] {
+                    check(audioMode, at: "\(prefix).audioMode", allowed: ["source-audio", "crossfade", "silence"])
+                }
+            }
+        }
+
+        if let rawSources = root["mediaSources"] {
+            guard let sources = rawSources as? [Any] else {
+                issues.append("mediaSources=<non-array>")
+                return issues.sorted()
+            }
+            for (index, rawSource) in sources.enumerated() {
+                guard let source = rawSource as? [String: Any] else {
+                    issues.append("mediaSources[\(index)]=<non-object>")
+                    continue
+                }
+                let prefix = "mediaSources[\(index)]"
+                if !(source["id"] is String) {
+                    issues.append("\(prefix).id=<missing-or-non-string>")
+                }
+                if !(source["relativePath"] is String) {
+                    issues.append("\(prefix).relativePath=<missing-or-non-string>")
+                }
+                if let health = source["captureHealth"] as? [String: Any] {
+                    if let state = health["state"] {
+                        check(state, at: "\(prefix).captureHealth.state", allowed: ["complete", "degraded", "failed"])
+                    }
+                }
             }
         }
 

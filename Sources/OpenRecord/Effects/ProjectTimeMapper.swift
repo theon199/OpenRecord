@@ -141,7 +141,7 @@ public struct ProjectTimeMapper: Sendable {
                 let normSpan = span.normalized
                 guard normSpan.sourceEnd > normSpan.sourceStart else { continue }
                 if normSpan.sourceID == MediaSource.primaryID {
-                    for sub in speed.slices(sourceStart: normSpan.sourceStart, sourceEnd: normSpan.sourceEnd) {
+                    for (subIndex, sub) in speed.slices(sourceStart: normSpan.sourceStart, sourceEnd: normSpan.sourceEnd).enumerated() {
                         let outputStart = outputCursor
                         let outputEnd = outputStart + sub.outputDuration
                         built.append(
@@ -153,8 +153,8 @@ public struct ProjectTimeMapper: Sendable {
                                 outputEnd: outputEnd,
                                 rate: sub.rate,
                                 speedSegmentID: sub.segmentID,
-                                seamTransition: normSpan.seamTransition,
-                                transitionDuration: normSpan.transitionDuration,
+                                seamTransition: subIndex == 0 ? normSpan.seamTransition : .cut,
+                                transitionDuration: subIndex == 0 ? normSpan.transitionDuration : 0,
                                 audioMode: normSpan.audioMode
                             )
                         )
@@ -334,9 +334,7 @@ public struct ProjectTimeMapper: Sendable {
             guard isIncluded(sourceTime: sourceTime, sourceID: sourceID) else { return nil }
         }
         for span in matching {
-            if sourceTime < span.sourceStart { return nil }
-            if sourceTime == span.sourceStart { return span.outputStart }
-            if sourceTime < span.sourceEnd {
+            if sourceTime >= span.sourceStart && sourceTime < span.sourceEnd {
                 return span.outputStart + (sourceTime - span.sourceStart) / span.rate
             }
             if sourceTime == span.sourceEnd {

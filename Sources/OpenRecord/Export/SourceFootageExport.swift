@@ -353,7 +353,12 @@ private enum SourceFootageSession {
         }
         let tempURL = try temporaryURL(for: outputURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
-        try await session.export(to: tempURL, as: .mp4)
+        let box = SessionCancellationBox(session)
+        try await withTaskCancellationHandler {
+            try await session.export(to: tempURL, as: .mp4)
+        } onCancel: {
+            box.cancel()
+        }
         try Task.checkCancellation()
         try install(tempURL, at: outputURL)
     }
@@ -408,5 +413,15 @@ private enum SourceFootageSession {
 
     private static func report(_ progress: ExportProgressHandler?, _ value: Double) {
         progress?(min(1, max(0, value)))
+    }
+}
+
+private final class SessionCancellationBox: @unchecked Sendable {
+    let session: AVAssetExportSession
+    init(_ session: AVAssetExportSession) {
+        self.session = session
+    }
+    func cancel() {
+        session.cancelExport()
     }
 }

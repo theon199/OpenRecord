@@ -237,19 +237,7 @@ public struct SanitizedShareCopyService: Sendable {
                 fileAt: staging.appendingPathComponent("privacy-report.json", isDirectory: false)
             )
 
-            if fm.fileExists(atPath: destination.path) {
-                // replaceItemAt performs a same-directory replacement.  The
-                // old bundle is not removed before the complete staged bundle
-                // exists, so a failed copy cannot expose a partial derivative.
-                _ = try fm.replaceItemAt(
-                    destination,
-                    withItemAt: staging,
-                    backupItemName: nil,
-                    options: []
-                )
-            } else {
-                try fm.moveItem(at: staging, to: destination)
-            }
+            try AtomicFileWrite.installDirectory(staging: staging, destination: destination, fileManager: fm)
             installed = true
 
             return SanitizedShareCopyResult(

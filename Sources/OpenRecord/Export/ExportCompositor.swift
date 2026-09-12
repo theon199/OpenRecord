@@ -44,6 +44,16 @@ final class ExportCompositor {
     private var keyboardOverlayCacheKey: KeyboardOverlayCacheKey?
     private var keyboardOverlayCache: CIImage?
 
+    private struct DeviceFrameCacheKey: Hashable {
+        var geometry: DeviceFrameGeometry
+        var settings: DeviceFrameSettings
+        var canvasWidth: Int
+        var canvasHeight: Int
+    }
+
+    private var deviceFrameCacheKey: DeviceFrameCacheKey?
+    private var deviceFrameCache: CIImage?
+
     private struct AuthoredOverlayCacheKey: Hashable {
         var captions: [CaptionCue]
         var annotations: [Annotation]
@@ -731,9 +741,18 @@ final class ExportCompositor {
         canvasSize: CGSize
     ) -> CIImage? {
         let settings = rawSettings.normalized
-        guard settings.enabled else { return nil }
+        guard settings.enabled, settings.id != .none else { return nil }
         let width = max(Int(canvasSize.width.rounded()), 2)
         let height = max(Int(canvasSize.height.rounded()), 2)
+        let cacheKey = DeviceFrameCacheKey(
+            geometry: geometry,
+            settings: settings,
+            canvasWidth: width,
+            canvasHeight: height
+        )
+        if cacheKey == deviceFrameCacheKey, let cached = deviceFrameCache {
+            return cached
+        }
         guard let cg = CGContext(
             data: nil,
             width: width,
@@ -832,7 +851,10 @@ final class ExportCompositor {
             break
         }
         guard let image = cg.makeImage() else { return nil }
-        return CIImage(cgImage: image)
+        let result = CIImage(cgImage: image)
+        deviceFrameCacheKey = cacheKey
+        deviceFrameCache = result
+        return result
     }
 
     private func apply(

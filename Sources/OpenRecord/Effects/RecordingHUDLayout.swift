@@ -25,7 +25,9 @@ public enum RecordingHUDLayout: Sendable {
     }
 
     public static func allowedDiameterRange(displayBounds: CGRect) -> ClosedRange<CGFloat> {
-        let shortEdge = max(min(displayBounds.width, displayBounds.height), 1)
+        let w = displayBounds.width.isFinite ? max(displayBounds.width, 1) : 1
+        let h = displayBounds.height.isFinite ? max(displayBounds.height, 1) : 1
+        let shortEdge = min(w, h)
         let minimum = max(
             minimumCameraDiameter,
             shortEdge * CGFloat(WebcamOverlaySettings.sizeRange.lowerBound)

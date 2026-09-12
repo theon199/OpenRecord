@@ -161,8 +161,9 @@ public enum ProjectLayout: Sendable {
     }
 
     public static func takeDirectory(sourceID: String, in projectURL: URL) -> URL {
-        takesDirectory(in: projectURL)
-            .appendingPathComponent(sourceID, isDirectory: true)
+        let safeID = sanitizePathIdentifier(sourceID)
+        return takesDirectory(in: projectURL)
+            .appendingPathComponent(safeID, isDirectory: true)
     }
 
     public static func sourceDirectory(for sourceID: String, in projectURL: URL) -> URL {
@@ -176,7 +177,27 @@ public enum ProjectLayout: Sendable {
         if source.isPrimary {
             return recordingDirectory(in: projectURL)
         }
-        return projectURL.appendingPathComponent(source.relativePath, isDirectory: true)
+        let safePath = sanitizeRelativeDirectoryPath(
+            source.relativePath,
+            fallback: "\(takesDirectoryName)/\(sanitizePathIdentifier(source.id))"
+        )
+        return projectURL.appendingPathComponent(safePath, isDirectory: true)
+    }
+
+    private static func sanitizePathIdentifier(_ id: String) -> String {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "." || trimmed == ".." || trimmed.contains("/") || trimmed.contains("\\") {
+            return "take-invalid"
+        }
+        return trimmed
+    }
+
+    private static func sanitizeRelativeDirectoryPath(_ path: String, fallback: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.hasPrefix("/") || trimmed.contains("..") || trimmed.contains("\\") {
+            return fallback
+        }
+        return trimmed
     }
 
     public static func displayVideoURL(sourceID: String, in projectURL: URL) -> URL {

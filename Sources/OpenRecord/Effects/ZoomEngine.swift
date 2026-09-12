@@ -336,28 +336,36 @@ private struct ZoomEvaluator {
         // transitional zoom level: while zooming in the crop is a lerp toward
         // the settled viewport, so the center must already be free to reach
         // the settled clamp or a cursor near the canvas edge is cut off.
-        let settledAmount = max(
-            1,
+        let rawAmount = max(
             cursor.segment?.amount ?? 1,
             cursor.prevSegment?.amount ?? 1,
             cursor.nextSegment?.amount ?? 1
         )
+        let settledAmount = rawAmount.isFinite ? max(1, rawAmount) : 1.0
         let half = 0.5 / settledAmount
 
         var targetX = state.spring.targetU
         var targetY = state.spring.targetV
-        if lead.x > targetX + deadzone {
-            targetX = lead.x - deadzone
-        } else if lead.x < targetX - deadzone {
-            targetX = lead.x + deadzone
+        if lead.x.isFinite, targetX.isFinite {
+            if lead.x > targetX + deadzone {
+                targetX = lead.x - deadzone
+            } else if lead.x < targetX - deadzone {
+                targetX = lead.x + deadzone
+            }
         }
-        if lead.y > targetY + deadzone {
-            targetY = lead.y - deadzone
-        } else if lead.y < targetY - deadzone {
-            targetY = lead.y + deadzone
+        if lead.y.isFinite, targetY.isFinite {
+            if lead.y > targetY + deadzone {
+                targetY = lead.y - deadzone
+            } else if lead.y < targetY - deadzone {
+                targetY = lead.y + deadzone
+            }
         }
-        state.spring.targetU = min(1 - half, max(half, targetX))
-        state.spring.targetV = min(1 - half, max(half, targetY))
+        if targetX.isFinite {
+            state.spring.targetU = min(1 - half, max(half, targetX))
+        }
+        if targetY.isFinite {
+            state.spring.targetV = min(1 - half, max(half, targetY))
+        }
 
         if seekDetected {
             state.spring.posU = state.spring.targetU
@@ -590,6 +598,7 @@ private struct ZoomEvaluator {
 private final class BakeCache: @unchecked Sendable {
     private static let dt: TimeInterval = 1.0 / 60.0
 
+    private let lock = NSLock()
     private var ranges: [ZoomRange] = []
     private var easing: ZoomEasingPreset = .smooth
     private var times: [TimeInterval] = []
@@ -597,10 +606,14 @@ private final class BakeCache: @unchecked Sendable {
     private var baked = false
 
     func matches(_ current: [ZoomRange], easing: ZoomEasingPreset) -> Bool {
-        baked && ranges == current && self.easing == easing && !crops.isEmpty
+        lock.lock()
+        defer { lock.unlock() }
+        return baked && ranges == current && self.easing == easing && !crops.isEmpty
     }
 
     func crop(at time: TimeInterval) -> CGRect? {
+        lock.lock()
+        defer { lock.unlock() }
         guard baked, !crops.isEmpty, times.count == crops.count else { return nil }
         if time <= times[0] { return crops[0] }
         if time >= times[times.count - 1] { return crops[times.count - 1] }
@@ -627,7 +640,12 @@ private final class BakeCache: @unchecked Sendable {
         easing: ZoomEasingPreset,
         viewportSpring: SpringConfig
     ) {
-        if baked, self.ranges == ranges, self.easing == easing { return }
+        lock.lock()
+        if baked, self.ranges == ranges, self.easing == easing {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
         rebuild(
             ranges: ranges,
             smoother: smoother,
@@ -644,13 +662,16 @@ private final class BakeCache: @unchecked Sendable {
         easing: ZoomEasingPreset,
         viewportSpring: SpringConfig
     ) {
-        self.ranges = ranges
-        self.easing = easing
-        times = []
-        crops = []
-        baked = false
-
-        guard !smoother.isEmpty, !ranges.isEmpty, duration > 0 else { return }
+        guard !smoother.isEmpty, !ranges.isEmpty, duration > 0 else {
+            lock.lock()
+            self.ranges = ranges
+            self.easing = easing
+            times = []
+            crops = []
+            baked = false
+            lock.unlock()
+            return
+        }
 
         let evaluator = ZoomEvaluator(
             ranges: ranges,
@@ -663,14 +684,23 @@ private final class BakeCache: @unchecked Sendable {
         var t: TimeInterval = 0
         let end = duration + 1e-9
         let capacity = Int(end / Self.dt) + 2
-        times.reserveCapacity(capacity)
-        crops.reserveCapacity(capacity)
+        var localTimes: [TimeInterval] = []
+        var localCrops: [CGRect] = []
+        localTimes.reserveCapacity(capacity)
+        localCrops.reserveCapacity(capacity)
         while t <= end {
-            times.append(t)
-            crops.append(clampUV(evaluator.evaluateSequential(at: t, state: &state)))
+            localTimes.append(t)
+            localCrops.append(clampUV(evaluator.evaluateSequential(at: t, state: &state)))
             t += Self.dt
         }
-        baked = true
+
+        lock.lock()
+        self.ranges = ranges
+        self.easing = easing
+        self.times = localTimes
+        self.crops = localCrops
+        self.baked = true
+        lock.unlock()
     }
 }
 

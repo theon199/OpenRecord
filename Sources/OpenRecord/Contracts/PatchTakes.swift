@@ -82,6 +82,7 @@ public struct MediaSource: Codable, Sendable, Hashable, Identifiable {
         copy.width = max(copy.width, 1)
         copy.height = max(copy.height, 1)
         copy.duration = copy.duration.isFinite ? max(copy.duration, 0) : 0
+        copy.trackOffsets = copy.trackOffsets.filter { $0.value.isFinite }
         return copy
     }
 }
@@ -440,13 +441,75 @@ public enum PatchTakeOperations: Sendable {
         guard !doc.timelineSpans.isEmpty else { return doc }
         let remainingSpans = doc.timelineSpans.filter { $0.sourceID != takeID }
         let hasOtherTakes = remainingSpans.contains { $0.sourceID != MediaSource.primaryID }
-        if !hasOtherTakes {
+        guard hasOtherTakes else {
             doc.timelineSpans = []
             doc.mediaSources.removeAll { $0.id == takeID }
-        } else {
-            doc.timelineSpans = remainingSpans
-            doc.mediaSources.removeAll { $0.id == takeID }
+            return doc
         }
+
+        let baseSpans = buildSpans(from: doc, primaryDuration: primaryDuration)
+        var newSpans: [TimelineSpan] = []
+
+        for (i, span) in doc.timelineSpans.enumerated() {
+            if span.sourceID != takeID {
+                newSpans.append(span)
+                continue
+            }
+
+            // Find preceding primary boundary
+            var lo: TimeInterval = 0.0
+            for prev in doc.timelineSpans[0..<i].reversed() {
+                if prev.sourceID == MediaSource.primaryID {
+                    lo = prev.sourceEnd
+                    break
+                }
+            }
+
+            // Find following primary boundary
+            var hi: TimeInterval = primaryDuration
+            for next in doc.timelineSpans[(i + 1)...] {
+                if next.sourceID == MediaSource.primaryID {
+                    hi = next.sourceStart
+                    break
+                }
+            }
+
+            if hi > lo {
+                for base in baseSpans {
+                    let s = max(base.sourceStart, lo)
+                    let e = min(base.sourceEnd, hi)
+                    if e > s {
+                        newSpans.append(
+                            TimelineSpan(
+                                sourceID: MediaSource.primaryID,
+                                sourceStart: s,
+                                sourceEnd: e,
+                                seamTransition: .cut,
+                                transitionDuration: 0,
+                                audioMode: .sourceAudio
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // Coalesce adjacent primary spans if contiguous
+        var coalesced: [TimelineSpan] = []
+        for span in newSpans {
+            if let last = coalesced.last,
+               last.sourceID == MediaSource.primaryID,
+               span.sourceID == MediaSource.primaryID,
+               abs(last.sourceEnd - span.sourceStart) < 0.001,
+               span.seamTransition == .cut {
+                coalesced[coalesced.count - 1].sourceEnd = span.sourceEnd
+            } else {
+                coalesced.append(span)
+            }
+        }
+
+        doc.timelineSpans = coalesced
+        doc.mediaSources.removeAll { $0.id == takeID }
         return doc
     }
 }

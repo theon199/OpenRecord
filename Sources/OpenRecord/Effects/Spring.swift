@@ -23,7 +23,7 @@ public struct SpringConfig: Sendable, Hashable {
     public var zeta: Double {
         let m = max(mass, 0.001)
         let k = max(tension, 1e-12)
-        return friction / (2 * sqrt(k * m))
+        return max(friction, 0) / (2 * sqrt(k * m))
     }
 
     /// Natural cursor follow (slightly bouncy).

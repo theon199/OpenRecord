@@ -905,12 +905,7 @@ private extension ReleaseFactory {
     }
 
     func install(staging: URL, destination: URL) throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: destination.path) {
-            _ = try fm.replaceItemAt(destination, withItemAt: staging, backupItemName: nil, options: [])
-        } else {
-            try fm.moveItem(at: staging, to: destination)
-        }
+        try AtomicFileWrite.installDirectory(staging: staging, destination: destination)
     }
 
     static func containsDotDot(_ path: String) -> Bool {

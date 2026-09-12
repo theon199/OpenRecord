@@ -174,7 +174,7 @@ public struct ActionMapAnalyzer: Sendable {
             let role = SemanticPrivacyFilter.sanitizeRole(event.value.role)
             var bounds = event.value.bounds.map(SemanticPrivacyFilter.normalizedBounds)
             var confidence = event.value.confidence
-            var signals: [String] = [event.value.source == .accessibility ? "accessibility" : "semantic-(event.value.source.rawValue)"]
+            var signals: [String] = [event.value.source == .accessibility ? "accessibility" : "semantic-\(event.value.source.rawValue)"]
 
             if let matchingClick {
                 let clickIDs = clickEvidenceIDs(matchingClick, all: sortedClicks)
@@ -637,11 +637,37 @@ public struct ActionMapAnalyzer: Sendable {
         point: Point2D?,
         cursor: [IndexedCursor]
     ) -> Context {
-        let nearby = cursor.filter { abs($0.value.t - timestamp) <= Self.cursorContextWindow }
-        guard !nearby.isEmpty else { return Context() }
+        let window = Self.cursorContextWindow
+        let lowTime = timestamp - window
+        let highTime = timestamp + window
+
+        var low = 0
+        var high = cursor.count
+        while low < high {
+            let mid = (low + high) / 2
+            if cursor[mid].value.t < lowTime {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        let startIndex = low
+
+        high = cursor.count
+        while low < high {
+            let mid = (low + high) / 2
+            if cursor[mid].value.t <= highTime {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        let endIndex = low
+        guard startIndex < endIndex else { return Context() }
+        let nearby = Array(cursor[startIndex..<endIndex])
         var context = Context()
         context.ids = nearby.map { canonicalEvidenceID(prefix: "cursor", sequence: $0.value.sequence, line: $0.index) }
-        let before = nearby.filter { $0.value.t <= timestamp }.last
+        let before = nearby.last { $0.value.t <= timestamp }
         let after = nearby.first { $0.value.t >= timestamp }
         if nearby.count >= 2 {
             let positions = nearby.map { Point2D(x: $0.value.x, y: $0.value.y) }

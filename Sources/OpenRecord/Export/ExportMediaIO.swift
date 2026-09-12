@@ -601,7 +601,7 @@ enum ExportAudioMux {
         to writer: AVAssetWriter,
         input: AVAssetWriterInput,
         prepared: Prepared
-    ) throws {
+    ) async throws {
         let composition = prepared.composition
         let audioTracks = composition.tracks(withMediaType: .audio)
         guard !audioTracks.isEmpty else { return }
@@ -645,7 +645,7 @@ enum ExportAudioMux {
 
         while let sample = mixOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
-            try waitUntilReady(input, writer: writer)
+            try await waitUntilReady(input, writer: writer)
             guard input.append(sample) else {
                 throw OpenRecordError.io(
                     writer.error?.localizedDescription ?? "Could not write mixed audio to the export file."
@@ -660,7 +660,7 @@ enum ExportAudioMux {
         try Task.checkCancellation()
     }
 
-    static func waitUntilReady(_ input: AVAssetWriterInput, writer: AVAssetWriter) throws {
+    static func waitUntilReady(_ input: AVAssetWriterInput, writer: AVAssetWriter) async throws {
         while !input.isReadyForMoreMediaData {
             if writer.status == .failed {
                 throw OpenRecordError.io(
@@ -676,7 +676,7 @@ enum ExportAudioMux {
             if writer.status == .completed {
                 throw OpenRecordError.io("Export writer completed before all media was written.")
             }
-            Thread.sleep(forTimeInterval: 0.001)
+            try await Task.sleep(for: .milliseconds(1))
         }
     }
 }

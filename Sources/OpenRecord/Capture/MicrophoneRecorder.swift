@@ -113,6 +113,10 @@ final class MicrophoneRecorder: @unchecked Sendable {
         writeLock.unlock()
     }
 
+    deinit {
+        stop()
+    }
+
     /// Zero-filled copy with the same format and frame length so muting does
     /// not shorten the microphone timeline.
     static func silentBuffer(matching buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
@@ -123,6 +127,21 @@ final class MicrophoneRecorder: @unchecked Sendable {
             return buffer
         }
         silent.frameLength = buffer.frameLength
+        let channelCount = Int(buffer.format.channelCount)
+        let frameLength = Int(buffer.frameLength)
+        if let floatChannelData = silent.floatChannelData {
+            for channel in 0..<channelCount {
+                memset(floatChannelData[channel], 0, frameLength * MemoryLayout<Float>.size)
+            }
+        } else if let int16ChannelData = silent.int16ChannelData {
+            for channel in 0..<channelCount {
+                memset(int16ChannelData[channel], 0, frameLength * MemoryLayout<Int16>.size)
+            }
+        } else if let int32ChannelData = silent.int32ChannelData {
+            for channel in 0..<channelCount {
+                memset(int32ChannelData[channel], 0, frameLength * MemoryLayout<Int32>.size)
+            }
+        }
         return silent
     }
 }

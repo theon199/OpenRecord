@@ -667,15 +667,8 @@ public struct AnalysisStore: Sendable {
                    type == .typeSymbolicLink {
                     throw AnalysisStoreError.invalidBundleRelativePath("analysis directory must not be a symbolic link")
                 }
-                _ = try fileManager.replaceItemAt(
-                    analysisDirectoryURL,
-                    withItemAt: stagingURL,
-                    backupItemName: nil,
-                    options: []
-                )
-            } else {
-                try fileManager.moveItem(at: stagingURL, to: analysisDirectoryURL)
             }
+            try AtomicFileWrite.installDirectory(staging: stagingURL, destination: analysisDirectoryURL, fileManager: fileManager)
         } catch let error as AnalysisStoreError {
             throw error
         } catch {
