@@ -19,6 +19,17 @@ Example.openrecord/
     semantic-targets.jsonl optional privacy-filtered semantic controls
     thumb.jpg              optional cache
     cursors/               optional cursor PNG assets
+    takes/                 optional multi-source replacement takes
+      <source-id>/
+        display.mp4
+        webcam.mp4         optional
+        mic.m4a            optional
+        system.m4a         optional
+        mouse.jsonl        optional
+        clicks.jsonl       optional
+        keys.jsonl         optional
+        typing.jsonl       optional
+        target.jsonl       optional
   analysis/                optional and rebuildable
     manifest.json
     actions.jsonl
@@ -34,11 +45,18 @@ Capture metadata contains creation/app version, source bounds and scale, capture
 
 ## `project.json`
 
-`formatVersion` is `8`. It retains the v7 non-destructive editing, presentation, transcript, template, and export fields and adds `storyBeats`.
+`formatVersion` is `8`. It retains the v7 non-destructive editing, presentation, transcript, template, and export fields and adds `storyBeats`, optional `mediaSources`, and optional `timelineSpans`.
 
 A story beat contains a stable authored UUID, source-time range, kind and user-approved title, optional application bundle ID, stable evidence references, lock/suppression state, and optional compact provenance. Rename, merge, split, suppress, lock, and chapter conversion are therefore portable and participate in save/undo even if analysis is removed.
 
-All timed items remain source-timestamped. `ProjectTimeMapper` resolves them through trim, exclusion cuts, and speed regions; recorded media and evidence timestamps are never destructively rewritten.
+### Multi-source timeline and Patch Takes
+
+When a project replaces an interaction with a Patch Take, `project.json` adds:
+
+- `mediaSources`: array of `MediaSource` descriptors defining a stable source ID, relative path under `recording/takes/<source-id>`, timing origins, track offsets, capture health, and video dimensions.
+- `timelineSpans`: ordered output spans, each specifying `sourceID`, half-open source-local time interval (`sourceStart` ..< `sourceEnd`), seam transition (`cut` or `crossDissolve`), transition duration, and audio mode (`sourceAudio`, `crossfade`, or `silence`).
+
+Projects without Patch Takes omit `mediaSources` and `timelineSpans` for complete single-source backward compatibility. All timed items remain source-timestamped. `ProjectTimeMapper` resolves output time to source identity and source time across trim, cuts, speed regions, and multi-source spans; recorded media and evidence timestamps are never destructively rewritten. All replacement takes remain immutable under `recording/takes/<source-id>/`, enabling lossless reverting to the original recording at any time. Temporary unreferenced takes are pruned automatically during Save Copy.
 
 ## Semantic capture privacy
 

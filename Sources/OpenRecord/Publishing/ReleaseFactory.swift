@@ -205,6 +205,20 @@ public struct ReleaseFactory: Sendable {
             if !installed { try? FileManager.default.removeItem(at: staging) }
         }
 
+        let fingerprints = sourceFingerprints(in: source)
+        warnings.append(contentsOf: fingerprints.warnings)
+
+        let existingManifest: PublishManifest? = {
+            let manifestURL = destination.appendingPathComponent("manifest.json", isDirectory: false)
+            guard !Self.hasSymlink(at: manifestURL),
+                  let data = try? Data(contentsOf: manifestURL, options: [.mappedIfSafe]),
+                  let m = try? ProjectJSON.decoder.decode(PublishManifest.self, from: data),
+                  m.schemaVersion == PublishManifest.currentSchemaVersion,
+                  Set(m.sourceFingerprints) == Set(fingerprints.values)
+            else { return nil }
+            return m
+        }()
+
         var published: [PublishedOutput] = []
         let tutorialFilename = recipe.outputs.first(where: { $0.kind == .tutorial })?.effectiveFilename
         for variant in plan.variants {
@@ -212,6 +226,38 @@ public struct ReleaseFactory: Sendable {
                 variant.output.effectiveFilename,
                 isDirectory: variant.output.kind == .tutorial
             )
+            let variantSettings = settings(for: variant.output, document: variant.derivedDocument)
+            if let matchingOutput = existingManifest?.outputs.first(where: {
+                $0.name == variant.output.name &&
+                $0.kind == variant.output.kind &&
+                $0.aspect == variant.output.aspect.rawValue &&
+                abs($0.sourceDuration - sourceDuration) < 0.001 &&
+                abs($0.outputDuration - variant.outputDuration) < 0.001 &&
+                $0.settings == variantSettings
+            }),
+            matchingOutput.files.allSatisfy({ file in
+                guard let rel = Self.safeRelativePath(file.relativePath) else { return false }
+                let cand = destination.appendingPathComponent(rel, isDirectory: false)
+                guard Self.isContained(cand, in: destination), !Self.hasSymlink(at: cand) else { return false }
+                var isDir = ObjCBool(false)
+                guard FileManager.default.fileExists(atPath: cand.path, isDirectory: &isDir), !isDir.boolValue else { return false }
+                guard let attrs = try? FileManager.default.attributesOfItem(atPath: cand.path),
+                      (attrs[.size] as? NSNumber)?.int64Value == file.byteCount,
+                      let digest = try? Self.sha256(file: cand), digest == file.checksum.lowercased()
+                else { return false }
+                return true
+            }) {
+                for file in matchingOutput.files {
+                    if let rel = Self.safeRelativePath(file.relativePath) {
+                        let src = destination.appendingPathComponent(rel, isDirectory: false)
+                        let dst = staging.appendingPathComponent(rel, isDirectory: false)
+                        try FileManager.default.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try FileManager.default.copyItem(at: src, to: dst)
+                    }
+                }
+                published.append(matchingOutput)
+                continue
+            }
             if variant.output.overwrite == .skip,
                FileManager.default.fileExists(atPath: existing.path)
             {
@@ -230,7 +276,7 @@ public struct ReleaseFactory: Sendable {
                     aspect: variant.output.aspect.rawValue,
                     sourceDuration: sourceDuration,
                     outputDuration: variant.outputDuration,
-                    settings: settings(for: variant.output, document: variant.derivedDocument),
+                    settings: variantSettings,
                     files: copiedFiles
                 ))
                 continue
@@ -247,9 +293,6 @@ public struct ReleaseFactory: Sendable {
             )
             published.append(result)
         }
-
-        let fingerprints = sourceFingerprints(in: source)
-        warnings.append(contentsOf: fingerprints.warnings)
         let manifest = PublishManifest(
             projectFormatVersion: opened.document.formatVersion,
             recipeFormatVersion: recipe.formatVersion,
@@ -345,7 +388,7 @@ public struct ReleaseFactory: Sendable {
             options: []
         ) {
             for case let url as URL in enumerator {
-                let relative = url.path.replacingOccurrences(of: root.path + "/", with: "")
+                let relative = Self.relativeSubpath(of: url, relativeTo: root)
                 if Self.hasSymlink(at: url) {
                     issues.append("Release output contains a symbolic link: \(relative).")
                     continue
@@ -408,6 +451,7 @@ private extension ReleaseFactory {
         switch output.kind {
         case .video:
             try await exporter.export(project: document, url: target, progress: nil)
+            Self.normalizeMP4Timestamps(at: target)
             if output.captionDelivery == .sidecar || output.captionDelivery == .both {
                 let captions = target.deletingPathExtension().appendingPathExtension("vtt")
                 try AtomicFileWrite.write(
@@ -570,6 +614,7 @@ private extension ReleaseFactory {
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
         let video = package.appendingPathComponent("video.mp4", isDirectory: false)
         try await exporter.export(project: document, url: video, progress: nil)
+        Self.normalizeMP4Timestamps(at: video)
         let posterPNG = package.appendingPathComponent(".poster.png", isDirectory: false)
         defer { try? FileManager.default.removeItem(at: posterPNG) }
         try await exporter.exportSnapshot(project: document, atOutputTime: 0, url: posterPNG)
@@ -816,7 +861,7 @@ private extension ReleaseFactory {
             options: []
         ) {
             for case let url as URL in enumerator {
-                let relative = url.path.replacingOccurrences(of: destination.path + "/", with: "")
+                let relative = Self.relativeSubpath(of: url, relativeTo: destination)
                 guard !Self.hasSymlink(at: url) else {
                     throw OpenRecordError.io("Existing release contains a symbolic link: \(relative).")
                 }
@@ -879,6 +924,34 @@ private extension ReleaseFactory {
         return path
     }
 
+    static func relativeSubpath(of url: URL, relativeTo root: URL) -> String {
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL.path
+        if resolvedURL == resolvedRoot {
+            return ""
+        }
+        if resolvedURL.hasPrefix(resolvedRoot + "/") {
+            return String(resolvedURL.dropFirst(resolvedRoot.count + 1))
+        }
+        let stdRoot = root.standardizedFileURL.path
+        let stdURL = url.standardizedFileURL.path
+        if stdURL == stdRoot {
+            return ""
+        }
+        if stdURL.hasPrefix(stdRoot + "/") {
+            return String(stdURL.dropFirst(stdRoot.count + 1))
+        }
+        let rawRoot = root.path
+        let rawURL = url.path
+        if rawURL == rawRoot {
+            return ""
+        }
+        if rawURL.hasPrefix(rawRoot + "/") {
+            return String(rawURL.dropFirst(rawRoot.count + 1))
+        }
+        return url.lastPathComponent
+    }
+
     static func isContained(_ path: URL, in root: URL) -> Bool {
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         let pathValue = path.resolvingSymlinksInPath().standardizedFileURL.path
@@ -900,16 +973,78 @@ private extension ReleaseFactory {
         let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
         let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
         guard resolvedURL.path.hasPrefix(resolvedRoot.path) else { return true }
-        let rootPath = root.standardizedFileURL.path
-        let urlPath = url.standardizedFileURL.path
-        guard urlPath.hasPrefix(rootPath + "/") else { return false }
-        let relative = String(urlPath.dropFirst(rootPath.count + 1))
+        let relative = relativeSubpath(of: url, relativeTo: root)
+        guard !relative.isEmpty else { return false }
         var current = root.standardizedFileURL
         for component in relative.split(separator: "/") {
             current.appendPathComponent(String(component), isDirectory: false)
             if hasSymlink(at: current) { return true }
         }
         return false
+    }
+
+    static func normalizeMP4Timestamps(at url: URL) {
+        guard let data = try? Data(contentsOf: url), data.count >= 8 else { return }
+        var bytes = [UInt8](data)
+        let count = bytes.count
+
+        func readUInt32(_ offset: Int) -> UInt32 {
+            guard offset + 4 <= count else { return 0 }
+            return (UInt32(bytes[offset]) << 24) |
+                   (UInt32(bytes[offset + 1]) << 16) |
+                   (UInt32(bytes[offset + 2]) << 8) |
+                   UInt32(bytes[offset + 3])
+        }
+
+        func processBox(start: Int, end: Int) {
+            var offset = start
+            while offset + 8 <= end {
+                let boxSize = Int(readUInt32(offset))
+                let nextOffset: Int
+                if boxSize == 1 {
+                    guard offset + 16 <= end else { break }
+                    let size64 = (UInt64(readUInt32(offset + 8)) << 32) | UInt64(readUInt32(offset + 12))
+                    nextOffset = offset + Int(size64)
+                } else if boxSize == 0 {
+                    nextOffset = end
+                } else if boxSize >= 8 {
+                    nextOffset = offset + boxSize
+                } else {
+                    break
+                }
+                guard nextOffset <= end else { break }
+
+                let typeBytes = Array(bytes[(offset + 4)..<(offset + 8)])
+                let typeStr = String(bytes: typeBytes, encoding: .isoLatin1) ?? ""
+                let headerSize = (boxSize == 1) ? 16 : 8
+                let payloadStart = offset + headerSize
+
+                if typeStr == "moov" || typeStr == "trak" || typeStr == "mdia" || typeStr == "minf" {
+                    processBox(start: payloadStart, end: nextOffset)
+                } else if typeStr == "mvhd" || typeStr == "tkhd" || typeStr == "mdhd" {
+                    guard payloadStart + 4 <= nextOffset else { break }
+                    let version = bytes[payloadStart]
+                    let timeOffset = payloadStart + 4
+                    if version == 0 {
+                        if timeOffset + 8 <= nextOffset {
+                            for i in 0..<8 {
+                                bytes[timeOffset + i] = 0
+                            }
+                        }
+                    } else if version == 1 {
+                        if timeOffset + 16 <= nextOffset {
+                            for i in 0..<16 {
+                                bytes[timeOffset + i] = 0
+                            }
+                        }
+                    }
+                }
+                offset = nextOffset
+            }
+        }
+
+        processBox(start: 0, end: count)
+        try? Data(bytes).write(to: url, options: .atomic)
     }
 }
 
@@ -1218,7 +1353,7 @@ private extension ReleaseFactory {
 private extension PublishedFile {
     static func file(at url: URL, root: URL) throws -> PublishedFile {
         let fm = FileManager.default
-        let relative = url.path.replacingOccurrences(of: root.path + "/", with: "")
+        let relative = ReleaseFactory.relativeSubpath(of: url, relativeTo: root)
         let attrs = try fm.attributesOfItem(atPath: url.path)
         let bytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         let media = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
@@ -1285,7 +1420,7 @@ private extension ReleaseFactory {
         if actual != allowed || paths.count != allowed.count { issues.append("Tutorial output must contain exactly the allowlisted package files.") }
         if let enumerator = FileManager.default.enumerator(at: package, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
             for case let url as URL in enumerator {
-                let name = url.path.replacingOccurrences(of: package.path + "/", with: "")
+                let name = Self.relativeSubpath(of: url, relativeTo: package)
                 if Self.hasSymlink(at: url) {
                     issues.append("Tutorial package contains a symbolic link: \(name).")
                     continue

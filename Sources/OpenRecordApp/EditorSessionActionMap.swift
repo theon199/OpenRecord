@@ -393,6 +393,85 @@ extension EditorSession {
     func convertSelectedActionToChapterOrSection() { convertSelectedActionToChapter() }
     func convertSelectedActionToNumberedStep() { convertSelectedActionToStep() }
 
+    // MARK: - Patch Takes Workflow
+
+    /// Creates a patch take guide for the currently selected action or source range.
+    func patchGuideForSelection() -> PatchTakeGuide? {
+        let range: TimelineEditRange
+        if let selected = selectedSourceRange {
+            range = selected
+        } else if let row = selectedActionMapRow {
+            range = TimelineEditRange(start: row.start, end: row.end)
+        } else {
+            return nil
+        }
+
+        let entry = engine.interpolateCursor(at: range.start)
+        let exit = engine.interpolateCursor(at: range.end)
+        let row = selectedActionMapRow
+        let cand = row.flatMap { candidate(for: $0) }
+        let bounds = cand?.bounds
+        let nearby = document.transcript.filter {
+            $0.start >= range.start - 2.0 && $0.end <= range.end + 2.0
+        }
+
+        return PatchTakeGuide(
+            targetStart: range.start,
+            targetEnd: range.end,
+            entryCursorPosition: entry,
+            exitCursorPosition: exit,
+            targetGeometry: bounds,
+            actionTitle: row?.title,
+            nearbyTranscript: nearby
+        )
+    }
+
+    /// Replaces the selected action/source range with a patch take.
+    func replaceWithPatchTake(
+        takeSource: MediaSource,
+        patchStart: TimeInterval,
+        patchEnd: TimeInterval,
+        seamTransition: SeamTransition = .cut,
+        transitionDuration: TimeInterval = 0.2,
+        audioMode: SeamAudioMode = .sourceAudio
+    ) {
+        let targetRange: TimelineEditRange
+        if let selected = selectedSourceRange {
+            targetRange = selected
+        } else if let row = selectedActionMapRow {
+            targetRange = TimelineEditRange(start: row.start, end: row.end)
+        } else {
+            return
+        }
+
+        let before = document
+        document = PatchTakeOperations.applying(
+            targetStart: targetRange.start,
+            targetEnd: targetRange.end,
+            take: takeSource,
+            patchStart: patchStart,
+            patchEnd: patchEnd,
+            seamTransition: seamTransition,
+            transitionDuration: transitionDuration,
+            audioMode: audioMode,
+            to: document,
+            primaryDuration: timelineDuration
+        )
+        selectedSourceRange = nil
+        documentDidChange(from: before, actionName: "Replace with Patch Take", rebuildZoomEngine: true)
+    }
+
+    /// Reverts a patch take, restoring the timeline.
+    func revertPatchTake(sourceID: String) {
+        let before = document
+        document = PatchTakeOperations.reverting(
+            takeID: sourceID,
+            in: document,
+            primaryDuration: timelineDuration
+        )
+        documentDidChange(from: before, actionName: "Revert Patch Take", rebuildZoomEngine: true)
+    }
+
     private func updateSelectedActions(
         actionName: String,
         _ mutate: (inout StoryBeat) -> Void

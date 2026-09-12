@@ -550,6 +550,25 @@ public struct ProjectLibrary: Sendable {
             )
             do {
                 try fm.copyItem(at: source, to: staging)
+
+                // Prune unreferenced take directories so Save Copy includes only
+                // referenced sources and never leaks abandoned temporary takes.
+                let takesDir = ProjectLayout.takesDirectory(in: staging)
+                if fm.fileExists(atPath: takesDir.path) {
+                    let referenced = document.referencedSourceIDs
+                    if let entries = try? fm.contentsOfDirectory(atPath: takesDir.path) {
+                        for entry in entries {
+                            if !referenced.contains(entry) {
+                                try? fm.removeItem(at: takesDir.appendingPathComponent(entry))
+                            }
+                        }
+                        let remaining = (try? fm.contentsOfDirectory(atPath: takesDir.path)) ?? []
+                        if remaining.isEmpty {
+                            try? fm.removeItem(at: takesDir)
+                        }
+                    }
+                }
+
                 try AtomicFileWrite.writeProjectDocument(
                     document,
                     to: ProjectLayout.documentURL(in: staging)

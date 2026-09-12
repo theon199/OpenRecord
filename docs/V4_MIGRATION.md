@@ -183,4 +183,14 @@ host using relative links only. The editable `.openrecord` source remains
 untouched and retains original capture media; this package is not a claim that
 the source bundle is sanitized.
 
+## Multi-source timeline and Patch Takes
+
+In OpenRecord v4.4.0, format v8 is extended with explicit multi-source ownership:
+
+- `mediaSources` describes all source streams (primary display and patch takes) with stable UUIDs, relative paths, timing origins, track offsets, capture health, and video dimensions.
+- `timelineSpans` defines ordered output spans referencing a `sourceID`, half-open source interval (`sourceStart` ..< `sourceEnd`), seam transition, transition duration, and audio mode.
+- Single-source projects omit `mediaSources` and `timelineSpans` during encoding. Older format v8 documents and migrated v1–v7 projects decode these fields as empty arrays and fall back seamlessly to single-source mapping.
+- Replacement takes are stored immutably in `recording/takes/<source-id>/` and never mutate the primary recording. Reverting a take restores original spans losslessly.
+- Unreferenced temporary takes in `staging/recording/takes` are pruned automatically during `ProjectLibrary.saveCopy`.
+
 The deterministic fixtures under `Tests/OpenRecordTests/Fixtures/ProjectMigration` cover v1 through v8. The historical v7 schema remains documented in [`PROJECT_FORMAT_V7.md`](PROJECT_FORMAT_V7.md).

@@ -252,6 +252,7 @@ final class ExportVideoReader {
 
 enum ExportAudioMux {
     struct Source: Sendable {
+        var id: String
         var url: URL
         /// Position of the first source sample relative to the first video frame.
         var offset: TimeInterval
@@ -259,11 +260,13 @@ enum ExportAudioMux {
         var correction: CaptureTrackCorrection?
 
         init(
+            id: String = MediaSource.primaryID,
             url: URL,
             offset: TimeInterval = 0,
             gain: Double = 1,
             correction: CaptureTrackCorrection? = nil
         ) {
+            self.id = id
             self.url = url
             self.offset = offset.isFinite ? offset : 0
             self.gain = gain.isFinite ? min(max(gain, 0), 2) : 1
@@ -308,11 +311,13 @@ enum ExportAudioMux {
     ) async throws -> Prepared? {
         let slices = timeMapper.slices.map {
             AudioSlice(
+                sourceID: $0.sourceID,
                 sourceStart: $0.sourceStart,
                 sourceEnd: $0.sourceEnd,
                 outputStart: $0.outputStart,
                 outputEnd: $0.outputEnd,
-                rate: $0.rate
+                rate: $0.rate,
+                audioMode: $0.audioMode
             )
         }
         return try await makeComposition(
@@ -335,11 +340,13 @@ enum ExportAudioMux {
     ) async throws -> Prepared? {
         let slices = speedTimeline.slices(sourceStart: start, sourceEnd: start + duration).map {
             AudioSlice(
+                sourceID: MediaSource.primaryID,
                 sourceStart: $0.sourceStart,
                 sourceEnd: $0.sourceEnd,
                 outputStart: $0.outputStart,
                 outputEnd: $0.outputEnd,
-                rate: $0.rate
+                rate: $0.rate,
+                audioMode: .sourceAudio
             )
         }
         return try await makeComposition(
@@ -351,19 +358,56 @@ enum ExportAudioMux {
     }
 
     private struct AudioSlice: Sendable {
+        var sourceID: String
         var sourceStart: TimeInterval
         var sourceEnd: TimeInterval
         var outputStart: TimeInterval
         var outputEnd: TimeInterval
         var rate: Double
+        var audioMode: SeamAudioMode
+
+        init(
+            sourceID: String = MediaSource.primaryID,
+            sourceStart: TimeInterval,
+            sourceEnd: TimeInterval,
+            outputStart: TimeInterval,
+            outputEnd: TimeInterval,
+            rate: Double,
+            audioMode: SeamAudioMode = .sourceAudio
+        ) {
+            self.sourceID = sourceID
+            self.sourceStart = sourceStart
+            self.sourceEnd = sourceEnd
+            self.outputStart = outputStart
+            self.outputEnd = outputEnd
+            self.rate = rate
+            self.audioMode = audioMode
+        }
     }
 
     struct AudioPlacement: Equatable, Sendable {
+        var sourceID: String
         var localSourceStart: TimeInterval
         var localSourceDuration: TimeInterval
         var outputStart: TimeInterval
         var outputDuration: TimeInterval
         var rate: Double
+
+        init(
+            sourceID: String = MediaSource.primaryID,
+            localSourceStart: TimeInterval,
+            localSourceDuration: TimeInterval,
+            outputStart: TimeInterval,
+            outputDuration: TimeInterval,
+            rate: Double
+        ) {
+            self.sourceID = sourceID
+            self.localSourceStart = localSourceStart
+            self.localSourceDuration = localSourceDuration
+            self.outputStart = outputStart
+            self.outputDuration = outputDuration
+            self.rate = rate
+        }
     }
 
     /// Pure placement seam shared by composition assembly and deterministic
@@ -375,18 +419,22 @@ enum ExportAudioMux {
         sourceTimelineDuration: TimeInterval,
         sourceMediaDuration: TimeInterval,
         correction: CaptureTrackCorrection? = nil,
-        muteAudioWhenSpedUp: Bool = false
+        muteAudioWhenSpedUp: Bool = false,
+        sourceID: String = MediaSource.primaryID
     ) -> [AudioPlacement] {
         placements(
             slices: timeMapper.slices.map {
                 AudioSlice(
+                    sourceID: $0.sourceID,
                     sourceStart: $0.sourceStart,
                     sourceEnd: $0.sourceEnd,
                     outputStart: $0.outputStart,
                     outputEnd: $0.outputEnd,
-                    rate: $0.rate
+                    rate: $0.rate,
+                    audioMode: $0.audioMode
                 )
             },
+            sourceID: sourceID,
             sourceOffset: sourceOffset,
             sourceTimelineDuration: sourceTimelineDuration,
             sourceMediaDuration: sourceMediaDuration,
@@ -397,6 +445,7 @@ enum ExportAudioMux {
 
     private static func placements(
         slices: [AudioSlice],
+        sourceID: String = MediaSource.primaryID,
         sourceOffset: TimeInterval,
         sourceTimelineDuration: TimeInterval,
         sourceMediaDuration: TimeInterval,
@@ -407,6 +456,14 @@ enum ExportAudioMux {
         let sourceGlobalEnd = sourceOffset + sourceTimelineDuration
         var result: [AudioPlacement] = []
         for slice in slices {
+            if slice.audioMode == .silence { continue }
+            let applies: Bool
+            if sourceID == MediaSource.primaryID {
+                applies = (slice.sourceID == MediaSource.primaryID || slice.audioMode == .sourceAudio)
+            } else {
+                applies = (slice.sourceID == sourceID)
+            }
+            guard applies else { continue }
             if muteAudioWhenSpedUp, slice.rate > 1.000_001 { continue }
             let intersectionStart = max(slice.sourceStart, sourceGlobalStart)
             let intersectionEnd = min(slice.sourceEnd, sourceGlobalEnd)
@@ -428,6 +485,7 @@ enum ExportAudioMux {
             guard localDuration > 0, timelineDuration > 0 else { continue }
             result.append(
                 AudioPlacement(
+                    sourceID: slice.sourceID,
                     localSourceStart: localStart,
                     localSourceDuration: localDuration,
                     outputStart: slice.outputStart
@@ -479,6 +537,7 @@ enum ExportAudioMux {
             }
             let placements = placements(
                 slices: slices,
+                sourceID: source.id,
                 sourceOffset: source.offset,
                 sourceTimelineDuration: sourceTimelineDuration,
                 sourceMediaDuration: trackRange.duration.seconds,

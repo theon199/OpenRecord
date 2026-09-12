@@ -12,6 +12,7 @@ import Foundation
 /// value-only and can therefore also be used by SwiftUI preview.
 final class FrameRenderService: @unchecked Sendable {
     let reader: ExportVideoReader
+    let takeReaders: [String: ExportVideoReader]
     let webcamReader: ExportVideoReader?
     let webcamDuration: TimeInterval
     let webcamOffset: TimeInterval
@@ -32,6 +33,7 @@ final class FrameRenderService: @unchecked Sendable {
     init(
         project: ProjectDocument,
         reader: ExportVideoReader,
+        takeReaders: [String: ExportVideoReader] = [:],
         webcamReader: ExportVideoReader? = nil,
         webcamDuration: TimeInterval = 0,
         webcamOffset: TimeInterval = 0,
@@ -50,6 +52,7 @@ final class FrameRenderService: @unchecked Sendable {
     ) {
         self.project = project
         self.reader = reader
+        self.takeReaders = takeReaders
         self.webcamReader = webcamReader
         self.webcamDuration = webcamDuration
         self.webcamOffset = webcamOffset
@@ -96,7 +99,7 @@ final class FrameRenderService: @unchecked Sendable {
     ) throws -> FrameScene {
         try Task.checkCancellation()
         let scene = scene(atOutputTime: outputTime)
-        let source = try reader.image(at: scene.sourceTime)
+        let source = try sourceImage(for: scene)
         let webcam = try webcamImage(for: scene)
         compositor.render(
             source: source,
@@ -111,7 +114,7 @@ final class FrameRenderService: @unchecked Sendable {
     func image(atOutputTime outputTime: TimeInterval) throws -> CGImage? {
         try Task.checkCancellation()
         let scene = scene(atOutputTime: outputTime)
-        let source = try reader.image(at: scene.sourceTime)
+        let source = try sourceImage(for: scene)
         let webcam = try webcamImage(for: scene)
         let composite = compositor.composite(
             source: source,
@@ -123,6 +126,31 @@ final class FrameRenderService: @unchecked Sendable {
             composite,
             from: CGRect(x: 0, y: 0, width: width, height: height)
         )
+    }
+
+    private func sourceImage(for scene: FrameScene) throws -> CIImage {
+        if let seam = timeMapper.activeSeam(atOutputTime: scene.outputTime) {
+            let outReader = (seam.outgoingSourceID == MediaSource.primaryID ? reader : takeReaders[seam.outgoingSourceID]) ?? reader
+            let inReader = (seam.incomingSourceID == MediaSource.primaryID ? reader : takeReaders[seam.incomingSourceID]) ?? reader
+            let fallback = try reader.image(at: scene.sourceTime)
+            let outImg = (try? outReader.image(at: seam.outgoingSourceTime)) ?? fallback
+            let inImg = (try? inReader.image(at: seam.incomingSourceTime)) ?? outImg
+            return outImg.applyingFilter("CIDissolveTransition", parameters: [
+                "inputTargetImage": inImg,
+                "inputTime": seam.progress
+            ])
+        }
+        if scene.sourceID != MediaSource.primaryID, let takeReader = takeReaders[scene.sourceID] {
+            do {
+                return try takeReader.image(at: scene.sourceTime)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Missing or damaged optional patch tracks degrade without losing healthy primary display media.
+                return try reader.image(at: scene.sourceTime)
+            }
+        }
+        return try reader.image(at: scene.sourceTime)
     }
 
     private func webcamImage(for scene: FrameScene) throws -> CIImage? {

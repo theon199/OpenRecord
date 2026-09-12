@@ -48,27 +48,39 @@ public struct EditDecision: Codable, Sendable, Hashable, Identifiable {
 /// One contiguous source span in the output. A slice never crosses either an
 /// exclusion or a speed-segment boundary.
 public struct ProjectTimeSlice: Equatable, Sendable {
+    public var sourceID: String
     public var sourceStart: TimeInterval
     public var sourceEnd: TimeInterval
     public var outputStart: TimeInterval
     public var outputEnd: TimeInterval
     public var rate: Double
     public var speedSegmentID: UUID?
+    public var seamTransition: SeamTransition
+    public var transitionDuration: TimeInterval
+    public var audioMode: SeamAudioMode
 
     public init(
+        sourceID: String = MediaSource.primaryID,
         sourceStart: TimeInterval,
         sourceEnd: TimeInterval,
         outputStart: TimeInterval,
         outputEnd: TimeInterval,
         rate: Double,
-        speedSegmentID: UUID? = nil
+        speedSegmentID: UUID? = nil,
+        seamTransition: SeamTransition = .cut,
+        transitionDuration: TimeInterval = 0,
+        audioMode: SeamAudioMode = .sourceAudio
     ) {
+        self.sourceID = sourceID
         self.sourceStart = sourceStart
         self.sourceEnd = sourceEnd
         self.outputStart = outputStart
         self.outputEnd = outputEnd
         self.rate = rate
         self.speedSegmentID = speedSegmentID
+        self.seamTransition = seamTransition
+        self.transitionDuration = transitionDuration
+        self.audioMode = audioMode
     }
 
     public var sourceDuration: TimeInterval { sourceEnd - sourceStart }
@@ -92,13 +104,17 @@ public struct ProjectTimeMapper: Sendable {
     public let editDecisions: [EditDecision]
     public let slices: [ProjectTimeSlice]
     public let outputDuration: TimeInterval
+    public let mediaSources: [MediaSource]
+    public let timelineSpans: [TimelineSpan]
 
     public init(
         sourceDuration: TimeInterval,
         trimIn: TimeInterval = 0,
         trimOut: TimeInterval? = nil,
         editDecisions: [EditDecision] = [],
-        speedSegments: [SpeedSegment] = []
+        speedSegments: [SpeedSegment] = [],
+        mediaSources: [MediaSource] = [],
+        timelineSpans: [TimelineSpan] = []
     ) {
         let duration = sourceDuration.isFinite ? max(sourceDuration, 0) : 0
         // Mapping preserves persisted trim bounds exactly. The editor applies
@@ -113,39 +129,89 @@ public struct ProjectTimeMapper: Sendable {
             editDecisions,
             sourceDuration: duration
         )
+        self.mediaSources = mediaSources
+        self.timelineSpans = timelineSpans
 
         let speed = SpeedTimeline(segments: speedSegments)
         var outputCursor: TimeInterval = 0
         var built: [ProjectTimeSlice] = []
-        var retainedCursor = sourceStart
 
-        func appendRetained(_ start: TimeInterval, _ end: TimeInterval) {
-            guard end > start else { return }
-            for span in speed.slices(sourceStart: start, sourceEnd: end) {
-                let outputStart = outputCursor
-                let outputEnd = outputStart + span.outputDuration
-                built.append(
-                    ProjectTimeSlice(
-                        sourceStart: span.sourceStart,
-                        sourceEnd: span.sourceEnd,
-                        outputStart: outputStart,
-                        outputEnd: outputEnd,
-                        rate: span.rate,
-                        speedSegmentID: span.segmentID
+        if !timelineSpans.isEmpty {
+            for span in timelineSpans {
+                let normSpan = span.normalized
+                guard normSpan.sourceEnd > normSpan.sourceStart else { continue }
+                if normSpan.sourceID == MediaSource.primaryID {
+                    for sub in speed.slices(sourceStart: normSpan.sourceStart, sourceEnd: normSpan.sourceEnd) {
+                        let outputStart = outputCursor
+                        let outputEnd = outputStart + sub.outputDuration
+                        built.append(
+                            ProjectTimeSlice(
+                                sourceID: normSpan.sourceID,
+                                sourceStart: sub.sourceStart,
+                                sourceEnd: sub.sourceEnd,
+                                outputStart: outputStart,
+                                outputEnd: outputEnd,
+                                rate: sub.rate,
+                                speedSegmentID: sub.segmentID,
+                                seamTransition: normSpan.seamTransition,
+                                transitionDuration: normSpan.transitionDuration,
+                                audioMode: normSpan.audioMode
+                            )
+                        )
+                        outputCursor = outputEnd
+                    }
+                } else {
+                    let outputStart = outputCursor
+                    let outputEnd = outputStart + normSpan.sourceDuration
+                    built.append(
+                        ProjectTimeSlice(
+                            sourceID: normSpan.sourceID,
+                            sourceStart: normSpan.sourceStart,
+                            sourceEnd: normSpan.sourceEnd,
+                            outputStart: outputStart,
+                            outputEnd: outputEnd,
+                            rate: 1.0,
+                            speedSegmentID: nil,
+                            seamTransition: normSpan.seamTransition,
+                            transitionDuration: normSpan.transitionDuration,
+                            audioMode: normSpan.audioMode
+                        )
                     )
-                )
-                outputCursor = outputEnd
+                    outputCursor = outputEnd
+                }
             }
-        }
+        } else {
+            var retainedCursor = sourceStart
 
-        for decision in self.editDecisions where decision.kind == .exclude {
-            guard decision.end > sourceStart, decision.start < sourceEnd else { continue }
-            let cutStart = min(max(decision.start, sourceStart), sourceEnd)
-            let cutEnd = min(max(decision.end, sourceStart), sourceEnd)
-            appendRetained(retainedCursor, cutStart)
-            retainedCursor = max(retainedCursor, cutEnd)
+            func appendRetained(_ start: TimeInterval, _ end: TimeInterval) {
+                guard end > start else { return }
+                for span in speed.slices(sourceStart: start, sourceEnd: end) {
+                    let outputStart = outputCursor
+                    let outputEnd = outputStart + span.outputDuration
+                    built.append(
+                        ProjectTimeSlice(
+                            sourceID: MediaSource.primaryID,
+                            sourceStart: span.sourceStart,
+                            sourceEnd: span.sourceEnd,
+                            outputStart: outputStart,
+                            outputEnd: outputEnd,
+                            rate: span.rate,
+                            speedSegmentID: span.segmentID
+                        )
+                    )
+                    outputCursor = outputEnd
+                }
+            }
+
+            for decision in self.editDecisions where decision.kind == .exclude {
+                guard decision.end > sourceStart, decision.start < sourceEnd else { continue }
+                let cutStart = min(max(decision.start, sourceStart), sourceEnd)
+                let cutEnd = min(max(decision.end, sourceStart), sourceEnd)
+                appendRetained(retainedCursor, cutStart)
+                retainedCursor = max(retainedCursor, cutEnd)
+            }
+            appendRetained(retainedCursor, sourceEnd)
         }
-        appendRetained(retainedCursor, sourceEnd)
 
         slices = built
         outputDuration = outputCursor
@@ -159,7 +225,9 @@ public struct ProjectTimeMapper: Sendable {
             trimIn: project.trimIn,
             trimOut: project.trimOut,
             editDecisions: project.editDecisions,
-            speedSegments: project.speedSegments
+            speedSegments: project.speedSegments,
+            mediaSources: project.mediaSources,
+            timelineSpans: project.timelineSpans
         )
     }
 
@@ -211,11 +279,10 @@ public struct ProjectTimeMapper: Sendable {
         return result
     }
 
-    /// Maps output time to source time. Internal boundaries are half-open:
-    /// exactly at a boundary the next slice wins, which jumps over cuts.
-    public func sourceTime(atOutputTime outputTime: TimeInterval) -> TimeInterval {
+    /// Returns the exact source ID and source time for an output timestamp.
+    public func sourceLocation(atOutputTime outputTime: TimeInterval) -> (sourceID: String, sourceTime: TimeInterval) {
         guard let first = slices.first, let last = slices.last else {
-            return sourceEnd
+            return (MediaSource.primaryID, sourceEnd)
         }
         let requested: TimeInterval
         if outputTime.isNaN || outputTime == -.infinity {
@@ -226,29 +293,47 @@ public struct ProjectTimeMapper: Sendable {
             requested = outputTime
         }
         let time = min(max(requested, 0), outputDuration)
-        if time >= outputDuration { return last.sourceEnd }
-        if time <= 0 { return first.sourceStart }
+        if time >= outputDuration { return (last.sourceID, last.sourceEnd) }
+        if time <= 0 { return (first.sourceID, first.sourceStart) }
         if let span = slices.first(where: { time < $0.outputEnd }) {
-            return min(
-                span.sourceStart + max(time - span.outputStart, 0) * span.rate,
-                span.sourceEnd
+            return (
+                span.sourceID,
+                min(
+                    span.sourceStart + max(time - span.outputStart, 0) * span.rate,
+                    span.sourceEnd
+                )
             )
         }
-        return last.sourceEnd
+        return (last.sourceID, last.sourceEnd)
+    }
+
+    /// Maps output time to source ID.
+    public func sourceID(atOutputTime outputTime: TimeInterval) -> String {
+        sourceLocation(atOutputTime: outputTime).sourceID
+    }
+
+    /// Maps output time to source time. Internal boundaries are half-open:
+    /// exactly at a boundary the next slice wins, which jumps over cuts.
+    public func sourceTime(atOutputTime outputTime: TimeInterval) -> TimeInterval {
+        sourceLocation(atOutputTime: outputTime).sourceTime
     }
 
     /// Returns nil for points inside a cut or outside the trim. The final
     /// retained-slice endpoint is a valid output endpoint even though ranges
     /// are otherwise half-open.
-    public func outputTime(forSourceTime sourceTime: TimeInterval) -> TimeInterval? {
+    public func outputTime(
+        forSourceTime sourceTime: TimeInterval,
+        sourceID: String = MediaSource.primaryID
+    ) -> TimeInterval? {
         guard sourceTime.isFinite else { return nil }
-        if sourceTime == slices.last?.sourceEnd { return outputDuration }
-        guard sourceTime >= sourceStart, sourceTime < sourceEnd else { return nil }
-        // A cut starts at an otherwise valid retained-slice endpoint. Check
-        // inclusion before accepting that endpoint so reverse mapping follows
-        // the same half-open rule as `sourceTime(atOutputTime:)`.
-        guard isIncluded(sourceTime: sourceTime) else { return nil }
-        for span in slices {
+        let matching = slices.filter { $0.sourceID == sourceID }
+        guard !matching.isEmpty else { return nil }
+        if sourceTime == matching.last?.sourceEnd { return matching.last?.outputEnd }
+        if timelineSpans.isEmpty {
+            guard sourceTime >= sourceStart, sourceTime < sourceEnd else { return nil }
+            guard isIncluded(sourceTime: sourceTime, sourceID: sourceID) else { return nil }
+        }
+        for span in matching {
             if sourceTime < span.sourceStart { return nil }
             if sourceTime == span.sourceStart { return span.outputStart }
             if sourceTime < span.sourceEnd {
@@ -263,27 +348,95 @@ public struct ProjectTimeMapper: Sendable {
 
     /// Like `outputTime(forSourceTime:)`, but clamps all invalid points to the
     /// nearest output boundary. A point inside a cut maps to the ripple edge.
-    public func clampedOutputTime(forSourceTime sourceTime: TimeInterval) -> TimeInterval {
-        // Treat infinities as directional out-of-range values. NaN has no
-        // direction and follows the lower-bound convention used by the
-        // existing SpeedTimeline APIs.
+    public func clampedOutputTime(
+        forSourceTime sourceTime: TimeInterval,
+        sourceID: String = MediaSource.primaryID
+    ) -> TimeInterval {
         if sourceTime.isNaN || sourceTime == -.infinity { return 0 }
         if sourceTime == .infinity { return outputDuration }
-        if sourceTime <= sourceStart { return 0 }
-        if sourceTime >= sourceEnd { return outputDuration }
-        if let output = outputTime(forSourceTime: sourceTime) { return output }
-        for span in slices where sourceTime < span.sourceStart {
+        let matching = slices.filter { $0.sourceID == sourceID }
+        guard let first = matching.first, let last = matching.last else {
+            return sourceTime <= sourceStart ? 0 : outputDuration
+        }
+        if sourceTime <= first.sourceStart { return first.outputStart }
+        if sourceTime >= last.sourceEnd { return last.outputEnd }
+        if let output = outputTime(forSourceTime: sourceTime, sourceID: sourceID) { return output }
+        for span in matching where sourceTime < span.sourceStart {
             return span.outputStart
         }
-        return outputDuration
+        return last.outputEnd
     }
 
-    public func isIncluded(sourceTime: TimeInterval) -> Bool {
-        guard sourceTime.isFinite, sourceTime >= sourceStart, sourceTime < sourceEnd else {
-            return false
+    public func isIncluded(
+        sourceTime: TimeInterval,
+        sourceID: String = MediaSource.primaryID
+    ) -> Bool {
+        guard sourceTime.isFinite else { return false }
+        if timelineSpans.isEmpty {
+            guard sourceTime >= sourceStart, sourceTime < sourceEnd else {
+                return false
+            }
+            return editDecisions.first {
+                $0.kind == .exclude && sourceTime >= $0.start && sourceTime < $0.end
+            } == nil
         }
-        return editDecisions.first {
-            $0.kind == .exclude && sourceTime >= $0.start && sourceTime < $0.end
-        } == nil
+        return slices.contains { span in
+            span.sourceID == sourceID && sourceTime >= span.sourceStart && sourceTime < span.sourceEnd
+        }
+    }
+
+    /// Information about a transition seam active at a given output time.
+    public struct ActiveSeam: Equatable, Sendable {
+        public var outgoingSourceID: String
+        public var outgoingSourceTime: TimeInterval
+        public var incomingSourceID: String
+        public var incomingSourceTime: TimeInterval
+        public var transition: SeamTransition
+        public var progress: Double
+
+        public init(
+            outgoingSourceID: String,
+            outgoingSourceTime: TimeInterval,
+            incomingSourceID: String,
+            incomingSourceTime: TimeInterval,
+            transition: SeamTransition,
+            progress: Double
+        ) {
+            self.outgoingSourceID = outgoingSourceID
+            self.outgoingSourceTime = outgoingSourceTime
+            self.incomingSourceID = incomingSourceID
+            self.incomingSourceTime = incomingSourceTime
+            self.transition = transition
+            self.progress = progress
+        }
+    }
+
+    /// If outputTime falls within a transition window between two spans, returns the active seam info.
+    public func activeSeam(atOutputTime outputTime: TimeInterval) -> ActiveSeam? {
+        guard outputTime.isFinite, slices.count > 1 else { return nil }
+        for i in 1..<slices.count {
+            let outgoing = slices[i - 1]
+            let incoming = slices[i]
+            guard incoming.seamTransition == .crossDissolve, incoming.transitionDuration > 0 else { continue }
+            let seamTime = incoming.outputStart
+            let half = incoming.transitionDuration / 2.0
+            let windowStart = max(outgoing.outputStart, seamTime - half)
+            let windowEnd = min(incoming.outputEnd, seamTime + half)
+            if outputTime >= windowStart && outputTime <= windowEnd {
+                let duration = max(0.0001, windowEnd - windowStart)
+                let progress = min(max((outputTime - windowStart) / duration, 0), 1)
+                let outTime = outgoing.sourceEnd - max(0, seamTime - outputTime) * outgoing.rate
+                let inTime = incoming.sourceStart + max(0, outputTime - seamTime) * incoming.rate
+                return ActiveSeam(
+                    outgoingSourceID: outgoing.sourceID,
+                    outgoingSourceTime: outTime,
+                    incomingSourceID: incoming.sourceID,
+                    incomingSourceTime: inTime,
+                    transition: .crossDissolve,
+                    progress: progress
+                )
+            }
+        }
+        return nil
     }
 }

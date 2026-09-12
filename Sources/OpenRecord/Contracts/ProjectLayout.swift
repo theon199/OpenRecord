@@ -150,4 +150,82 @@ public enum ProjectLayout: Sendable {
         recordingDirectory(in: projectURL)
             .appendingPathComponent(cursorsDirectoryName, isDirectory: true)
     }
+
+    // MARK: - Multi-source and Patch Takes Layout
+
+    public static let takesDirectoryName = "takes"
+
+    public static func takesDirectory(in projectURL: URL) -> URL {
+        recordingDirectory(in: projectURL)
+            .appendingPathComponent(takesDirectoryName, isDirectory: true)
+    }
+
+    public static func takeDirectory(sourceID: String, in projectURL: URL) -> URL {
+        takesDirectory(in: projectURL)
+            .appendingPathComponent(sourceID, isDirectory: true)
+    }
+
+    public static func sourceDirectory(for sourceID: String, in projectURL: URL) -> URL {
+        if sourceID == MediaSource.primaryID {
+            return recordingDirectory(in: projectURL)
+        }
+        return takeDirectory(sourceID: sourceID, in: projectURL)
+    }
+
+    public static func sourceDirectory(for source: MediaSource, in projectURL: URL) -> URL {
+        if source.isPrimary {
+            return recordingDirectory(in: projectURL)
+        }
+        return projectURL.appendingPathComponent(source.relativePath, isDirectory: true)
+    }
+
+    public static func displayVideoURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(displayVideoFileName, isDirectory: false)
+    }
+
+    public static func webcamVideoURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(webcamVideoFileName, isDirectory: false)
+    }
+
+    public static func microphoneAudioURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(microphoneAudioFileName, isDirectory: false)
+    }
+
+    public static func systemAudioURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(systemAudioFileName, isDirectory: false)
+    }
+
+    public static func mouseURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(mouseFileName, isDirectory: false)
+    }
+
+    public static func clicksURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(clicksFileName, isDirectory: false)
+    }
+
+    public static func keysURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(keysFileName, isDirectory: false)
+    }
+
+    public static func typingURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(typingFileName, isDirectory: false)
+    }
+
+    public static func targetGeometryURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(targetGeometryFileName, isDirectory: false)
+    }
+
+    public static func semanticTargetsURL(sourceID: String, in projectURL: URL) -> URL {
+        sourceDirectory(for: sourceID, in: projectURL)
+            .appendingPathComponent(semanticTargetsFileName, isDirectory: false)
+    }
 }

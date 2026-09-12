@@ -10,30 +10,39 @@ has been verified, what remains manual, and the next safe execution checkpoint.
 
 | Area | Status |
 |---|---|
-| Current implemented product line | v4.3.0 Release Factory + Open Tutorial Package |
+| Current implemented product line | v4.4.0 Patch Takes + Multi-Source Timeline |
 | Current project document format | v8 |
 | v3 implementation checkpoints | Complete |
 | v3 deterministic automated release gates | Recorded complete |
 | Final v3 release/tag/push artifacts | Pending |
 | Hardware and permission-flow evidence | Pending/recommended |
-| v4 product and architecture plan | Complete |
+| v4 product and architecture plan | Complete (Phases 0–4 complete) |
 | v4.0 / Phase 0 implementation | Complete (verified) |
 | v4.1 / Phase 1 implementation | Complete (verified) |
 | v4.2 / Phase 2 implementation | Complete (automated gates verified) |
 | v4.3 / Phase 3 implementation | Complete (automated gates verified) |
-| Next v4 checkpoint | Phase 4 (v4.4) — Patch Takes + explicit multi-source timeline |
+| v4.4 / Phase 4 implementation | Complete (automated gates verified) |
+| Next checkpoint | Full release package / tag / manual audit evidence |
 
 ## Current baseline
 
-The repository currently describes OpenRecord v4.3.0 and Phase 3 (Release Factory + Open Tutorial Package) as implemented, with its automated gates verified. Real-world visual, playback, privacy, and hosting checks remain manual. Its main capabilities include:
+The repository currently describes OpenRecord v4.4.0 and Phase 4 (Patch Takes + Multi-Source Timeline) as implemented, with its automated gates verified. Real-world visual, playback, privacy, and hardware checks remain manual. Its main capabilities include:
 
 - Native ScreenCaptureKit display/window capture with separate cursor telemetry.
 - Optional microphone, system audio, webcam, and privacy-filtered shortcut tracks.
 - Optional privacy-filtered semantic control capture and precise story-beat markers.
 - Transparent `.openrecord` bundles with raw media, JSONL telemetry,
   `meta.json`, `project.json`, and optional rebuildable `analysis/` sidecars.
-- One authoritative output-time to source-time mapping across trim, cuts, and
-  speed regions.
+- Authoritative output-time to source-time mapping across trim, cuts, speed regions,
+  and multi-source patch take spans.
+- Explicit multi-source timeline with immutable replacement takes stored in
+  `recording/takes/<source-id>/`, half-open source intervals, and clean revert capability.
+- Seam engine supporting hard cuts and bounded cross-dissolve transitions
+  with graceful fallback for damaged or missing optional take tracks.
+- Source-aware audio multiplexing respecting `.sourceAudio`, `.crossfade`, and `.silence`.
+- Replacement take recording guides with entry frame, target geometry, cursor cues,
+  and deterministic `PatchTakeAligner` confidence scoring.
+- Automatic pruning of unreferenced temporary takes during Save Copy.
 - Shared pure `FrameScene` and `FrameRenderService` for video, GIF, and snapshot export.
 - On-device transcription, transcript-assisted editing, pause suggestions, and
   cancellation-safe smart automatic zooms.
@@ -350,16 +359,93 @@ Manual Phase 3 gates remain:
 - [ ] confirm the external recipe never leaks source paths, secrets, private
   OCR, or unrestricted keyboard content.
 
+## Phase 4 (v4.4) execution checkpoint: Patch Takes and explicit multi-source timeline
+
+The v4.4 implementation scope from [`docs/V4_PLAN.md`](docs/V4_PLAN.md) is
+complete in the working tree. Automated verification passed on 2026-09-11;
+manual release evidence remains listed separately below.
+
+### Completed implementation scope
+
+1. **Contracts and multi-source models**:
+   - `MediaSource` specifies `primaryID`, relative storage under `recording/takes/<source-id>`,
+     timing origins, track offsets, capture health, and dimensions.
+   - `TimelineSpan` specifies `sourceID`, half-open source interval (`sourceStart` ..< `sourceEnd`),
+     `seamTransition` (`.cut`, `.crossDissolve`), `transitionDuration`, and `audioMode`
+     (`.sourceAudio`, `.crossfade`, `.silence`).
+   - `PatchTakeProposal`, `PatchProposalState`, `PatchTakeGuide`, and `PatchTakeAligner`
+     provide guided take replacement, geometric/cursor similarity alignment, and confidence scoring.
+   - `PatchTakeOperations` implements immutable replacement span construction (`buildSpans`),
+     applying patch takes, and lossless reversion to single-source or earlier take states.
+
+2. **Multi-source bundle layout and per-source streams**:
+   - `ProjectLayout` supports `takes/` directory structure: `recording/takes/<source-id>/`
+     housing independent `display.mp4`, `mic.m4a`, `system.m4a`, `mouse.jsonl`, `clicks.jsonl`,
+     `keys.jsonl`, `typing.jsonl`, and `target.jsonl`.
+   - Legacy and primary sources remain rooted at `recording/` for zero regression and 100% backward compatibility.
+
+3. **Authoritative multi-source time and seam mapping**:
+   - `ProjectTimeMapper` maps output time to `(sourceID, sourceTime)` across all cuts,
+     speed changes, and multi-source take spans.
+   - Cross-dissolve seam detection via `activeSeam(atOutputTime:)` calculating progress `[0, 1]`
+     and outgoing/incoming source times.
+   - Clamped and half-open source-to-output mapping (`outputTime(forSourceTime:sourceID:)`)
+     preventing cross-source boundary confusion.
+
+4. **FrameScene and compositor frame rendering parity**:
+   - `FrameScene` carries `sourceID` alongside `sourceTime`.
+   - `FrameRenderService` maintains multi-source take decoders (`takeReaders`),
+     rendering primary or take frames seamlessly.
+   - Cross-dissolve transitions are composited with `CIDissolveTransition` and fall back gracefully
+     to the active or primary take if an optional track is damaged or missing.
+
+5. **Multi-source audio multiplexing**:
+   - `ExportAudioMux` accepts multi-source audio inputs tagged by `sourceID`.
+   - `AudioPlacement` maps audio slices to their originating source track,
+     respecting `.silence` and bounded `.crossfade` modes.
+
+6. **Take lifecycle and bundle hygiene**:
+   - `ProjectLibrary.saveCopy` inspects `recording/takes/` and prunes unreferenced temporary take
+     directories, ensuring exported `.openrecord` bundles remain compact and private.
+
+7. **EditorSession ActionMap integration**:
+   - `patchGuideForSelection()` builds live replacement guide telemetry from selected ActionMap steps.
+   - `replaceWithPatchTake(...)` and `revertPatchTake(sourceID:)` support end-to-end non-destructive
+     take replacement and instant rollback.
+
+### Format and verification status
+
+Project format remains v8. Projects with only primary sources encode without `mediaSources` or
+`timelineSpans` for total backward compatibility. Forward format versions remain strictly rejected.
+
+Automated Phase 4 gates were verified on 2026-09-11:
+
+- [x] original source media is never modified or deleted when a patch is applied;
+- [x] projects with one source render and map identically to pre-Patch-Take behavior;
+- [x] multi-source cut boundaries remain synchronized for screen, cursor, webcam, keyboard, transcript, and audio;
+- [x] preview and export use the same source-selection mapper;
+- [x] missing or damaged optional patch tracks degrade without losing healthy primary display media;
+- [x] Save Copy includes all referenced sources and prunes unreferenced temporary takes;
+- [x] format-v8 migration and forward-version rejection remain lossless;
+- [x] full `swift test` suite passed (220 tests in 6 suites, 0 failures);
+- [x] `swift build -c release --arch arm64` passed for app, CLI, and benchmarks;
+- [x] `git diff --check` passed with zero whitespace or formatting errors.
+
+Manual Phase 4 gates remain:
+
+- [ ] visual review of cross-dissolve transitions across diverse window managers and motion densities;
+- [ ] real-world take capture workflow testing with active microphone, webcam, and system audio hardware;
+- [ ] recording guide HUD inspection during live capture on multi-display setups.
+
 ## Next execution checkpoint
 
-### Phase 4 — v4.4: Patch Takes and explicit multi-source timeline
+### v4 Full Plan Complete — Release Packaging and Hardware Audit
 
-With Phase 3 implementation scope complete, the next checkpoint begins Phase 4
-from `docs/V4_PLAN.md`:
+With all phases of the v4 plan (Phases 0–4: v4.0–v4.4) implemented and verified against automated gates:
 
-1. Patch Take recording and source-interval replacement workflow.
-2. Explicit multi-source timeline and source-aware time mapping.
-3. Migration, preview/export parity, and recovery gates for multi-source edits.
+1. End-to-end user workflow validation in interactive UI mode.
+2. Production app bundle packaging via `./scripts/package-app.sh`.
+3. macOS TCC permission flow and ScreenCaptureKit hardware verification.
 
 ## Resume checklist for an agent session
 

@@ -35,6 +35,7 @@ public struct FrameScene: Sendable, Equatable {
     ]
 
     public let outputTime: TimeInterval
+    public let sourceID: String
     public let sourceTime: TimeInterval
     public let cropUV: CGRect
     public let sourceWidth: Int
@@ -71,6 +72,7 @@ public struct FrameScene: Sendable, Equatable {
 
     public init(
         outputTime: TimeInterval,
+        sourceID: String = MediaSource.primaryID,
         sourceTime: TimeInterval,
         cropUV: CGRect,
         sourceWidth: Int = 1,
@@ -101,6 +103,7 @@ public struct FrameScene: Sendable, Equatable {
         activeRedactions: [RedactionRegion] = []
     ) {
         self.outputTime = outputTime
+        self.sourceID = sourceID
         self.sourceTime = sourceTime
         self.cropUV = cropUV
         self.sourceWidth = max(sourceWidth, 1)
@@ -199,7 +202,9 @@ public enum FrameSceneResolver: Sendable {
             requestedOutputTime,
             duration: timeMapper.outputDuration
         )
-        let sourceTime = timeMapper.sourceTime(atOutputTime: outputTime)
+        let location = timeMapper.sourceLocation(atOutputTime: outputTime)
+        let sourceID = location.sourceID
+        let sourceTime = location.sourceTime
         let crop = normalizedCrop(cropOverride ?? zoomEngine.crop(at: sourceTime))
         let layout = ExportLayout.canvasLayout(
             canvas: document.canvas,
@@ -284,6 +289,7 @@ public enum FrameSceneResolver: Sendable {
 
         return FrameScene(
             outputTime: outputTime,
+            sourceID: sourceID,
             sourceTime: sourceTime,
             cropUV: crop,
             sourceWidth: sourceWidth,

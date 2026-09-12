@@ -853,6 +853,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
     public var defaultCaptionStyle: CaptionStyle
     public var defaultAnnotationStyle: AnnotationStylePreset?
     public var storyBeats: [StoryBeat]
+    public var mediaSources: [MediaSource]
+    public var timelineSpans: [TimelineSpan]
 
     public init(
         formatVersion: Int = ProjectDocument.currentFormatVersion,
@@ -882,7 +884,9 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         projectTemplateID: String? = nil,
         defaultCaptionStyle: CaptionStyle = .default,
         defaultAnnotationStyle: AnnotationStylePreset? = nil,
-        storyBeats: [StoryBeat] = []
+        storyBeats: [StoryBeat] = [],
+        mediaSources: [MediaSource] = [],
+        timelineSpans: [TimelineSpan] = []
     ) {
         self.formatVersion = formatVersion
         self.trimIn = trimIn
@@ -912,6 +916,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         self.defaultCaptionStyle = defaultCaptionStyle
         self.defaultAnnotationStyle = defaultAnnotationStyle
         self.storyBeats = storyBeats
+        self.mediaSources = mediaSources
+        self.timelineSpans = timelineSpans
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
@@ -943,6 +949,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         case defaultCaptionStyle
         case defaultAnnotationStyle
         case storyBeats
+        case mediaSources
+        case timelineSpans
     }
 
     private struct AnyCodingKey: CodingKey {
@@ -1073,6 +1081,14 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             [LossyDecodable<StoryBeat>].self,
             forKey: .storyBeats
         ))?.compactMap(\.value) ?? []
+        mediaSources = (try? container.decode(
+            [LossyDecodable<MediaSource>].self,
+            forKey: .mediaSources
+        ))?.compactMap(\.value) ?? []
+        timelineSpans = (try? container.decode(
+            [LossyDecodable<TimelineSpan>].self,
+            forKey: .timelineSpans
+        ))?.compactMap(\.value) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1108,6 +1124,12 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         try container.encodeIfPresent(defaultAnnotationStyle, forKey: .defaultAnnotationStyle)
         if !storyBeats.isEmpty {
             try container.encode(storyBeats, forKey: .storyBeats)
+        }
+        if !mediaSources.isEmpty {
+            try container.encode(mediaSources, forKey: .mediaSources)
+        }
+        if !timelineSpans.isEmpty {
+            try container.encode(timelineSpans, forKey: .timelineSpans)
         }
     }
 
@@ -1155,6 +1177,8 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
         value.drawings = value.drawings.map(\.normalized).sorted {
             $0.start == $1.start ? $0.id.uuidString < $1.id.uuidString : $0.start < $1.start
         }
+        value.mediaSources = value.mediaSources.map(\.normalized)
+        value.timelineSpans = value.timelineSpans.map(\.normalized)
         // The document alone does not know the source-media duration. Preserve
         // finite source-time decisions outside the current trim; the editor
         // bounds them against real media when a project is opened.
@@ -1166,6 +1190,15 @@ public struct ProjectDocument: Codable, Sendable, Hashable {
             value.stylePresetID = CanvasPreset.matching(value.canvas)?.id
         }
         return value
+    }
+
+    /// Set of source IDs referenced by the project's output timeline.
+    public var referencedSourceIDs: Set<String> {
+        var ids: Set<String> = [MediaSource.primaryID]
+        for span in timelineSpans {
+            ids.insert(span.sourceID)
+        }
+        return ids
     }
 
     /// Write paths reject documents created by newer OpenRecord versions so
