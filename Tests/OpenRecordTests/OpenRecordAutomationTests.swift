@@ -50,6 +50,39 @@ func automationParserAcceptsCommands() throws {
     }
     #expect(batchJSON)
     #expect(batchRate == .fps24)
+
+    let analyze = try OpenRecordAutomationParser.parse(
+        arguments: ["analyze", "./Demo.openrecord", "--no-vision", "--json"]
+    )
+    guard case .analyze(let analyzedProject, let includeVision, let analyzeJSON) = analyze else {
+        throw OpenRecordError.io("analyze parser returned the wrong command")
+    }
+    #expect(analyzedProject.path.hasSuffix("/Demo.openrecord"))
+    #expect(!includeVision)
+    #expect(analyzeJSON)
+
+    let publish = try OpenRecordAutomationParser.parse(
+        arguments: [
+            "publish", "Demo.openrecord", "--recipe", "release.openrecordrecipe",
+            "--output", "./Artifacts", "--json"
+        ]
+    )
+    guard case .publish(let publishProject, let recipe, let output, let publishJSON) = publish else {
+        throw OpenRecordError.io("publish parser returned the wrong command")
+    }
+    #expect(publishProject.path.hasSuffix("/Demo.openrecord"))
+    #expect(recipe.path.hasSuffix("/release.openrecordrecipe"))
+    #expect(output.path.hasSuffix("/Artifacts"))
+    #expect(publishJSON)
+
+    let verify = try OpenRecordAutomationParser.parse(
+        arguments: ["verify-output", "./Artifacts/manifest.json"]
+    )
+    guard case .verifyOutput(let manifest, let verifyJSON) = verify else {
+        throw OpenRecordError.io("verify-output parser returned the wrong command")
+    }
+    #expect(manifest.path.hasSuffix("/Artifacts/manifest.json"))
+    #expect(!verifyJSON)
 }
 
 @Test("automation parser reports missing and invalid options")
@@ -64,6 +97,17 @@ func automationParserRejectsInvalidArguments() {
     }
     #expect(throws: OpenRecordAutomationError.self) {
         try OpenRecordAutomationParser.parse(arguments: ["inspect", "movie.mp4"])
+    }
+    #expect(throws: OpenRecordAutomationError.self) {
+        try OpenRecordAutomationParser.parse(arguments: ["analyze", "Demo.openrecord", "--vision"])
+    }
+    #expect(throws: OpenRecordAutomationError.self) {
+        try OpenRecordAutomationParser.parse(
+            arguments: ["publish", "Demo.openrecord", "--recipe", "release.txt", "--output", "Artifacts"]
+        )
+    }
+    #expect(throws: OpenRecordAutomationError.self) {
+        try OpenRecordAutomationParser.parse(arguments: ["verify-output", "Artifacts"])
     }
 }
 
@@ -109,6 +153,43 @@ func automationInspectsAndValidatesWithoutWriting() async throws {
     let invalid = await automation.validate(project: project)
     #expect(!invalid.valid)
     #expect(invalid.issues.contains { $0.contains("meta.json") })
+}
+
+@Test("automation analysis writes only the rebuildable cache")
+func automationAnalyzesWithoutMutatingProjectDocument() async throws {
+    let fixture = try AutomationFixture()
+    defer { fixture.destroy() }
+    let project = try fixture.makeBundle(named: "Analysis")
+    let metaURL = ProjectLayout.metaURL(in: project)
+    let documentURL = ProjectLayout.documentURL(in: project)
+    let beforeMeta = try Data(contentsOf: metaURL)
+    let beforeDocument = try Data(contentsOf: documentURL)
+
+    let summary = try await OpenRecordAutomation().analyze(
+        project: project,
+        includeVisionFallback: false
+    )
+    #expect(summary.projectURL == project.standardizedFileURL)
+    #expect(summary.actionCount == 0)
+    #expect(summary.analyzerVersion == ActionMapAnalysisService.analyzerVersion)
+    #expect(try Data(contentsOf: metaURL) == beforeMeta)
+    #expect(try Data(contentsOf: documentURL) == beforeDocument)
+    #expect(FileManager.default.fileExists(atPath: ProjectLayout.analysisManifestURL(in: project).path))
+}
+
+@Test("automation verification reports invalid manifests with verification exit code")
+func automationVerifyOutputUsesVerificationFailureCode() async throws {
+    let fixture = try AutomationFixture()
+    defer { fixture.destroy() }
+    let artifacts = fixture.root.appendingPathComponent("Artifacts", isDirectory: true)
+    try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
+    let manifest = artifacts.appendingPathComponent("manifest.json", isDirectory: false)
+    try Data("{not valid json".utf8).write(to: manifest)
+
+    let exitCode = await OpenRecordAutomationCLI.run(
+        arguments: ["verify-output", manifest.path, "--json"]
+    )
+    #expect(exitCode == 1)
 }
 
 @Test("automation export rejects outputs inside the source bundle")
@@ -168,3 +249,57 @@ private struct AutomationFixture {
         )
     }
 }
+
+@Test("automation CLI exit codes follow 0, 1, and 64 contract")
+func automationCLIExitCodeUsage() {
+    func exitCode(for args: [String]) -> Int32 {
+        do {
+            _ = try OpenRecordAutomationParser.parse(arguments: args)
+            return 0
+        } catch let error as OpenRecordAutomationError {
+            return error.isUsageError ? 64 : 1
+        } catch {
+            return 1
+        }
+    }
+
+    #expect(exitCode(for: []) == 64)
+    #expect(exitCode(for: ["unknown"]) == 64)
+    #expect(exitCode(for: ["publish", "Demo.openrecord", "--output", "out"]) == 64)
+    #expect(exitCode(for: ["publish", "Demo.openrecord", "--recipe", "publish.json"]) == 64)
+    #expect(exitCode(for: ["analyze", "Demo.openrecord", "--invalid"]) == 64)
+    #expect(exitCode(for: ["verify-output"]) == 64)
+    #expect(exitCode(for: ["verify-output", "manifest.txt"]) == 64)
+}
+
+enum OpenRecordAutomationSuite {
+    static func run() throws {
+        try automationParserAcceptsCommands()
+        automationParserRejectsInvalidArguments()
+        try automationDiscoversTopLevelBundles()
+        automationCLIExitCodeUsage()
+    }
+}
+
+#if compiler(>=6.2)
+@section("__DATA,__mod_init_func")
+@used
+let openRecordAutomationTestsModInit: @convention(c) () -> Void = {
+    OpenRecordRunAutomationTests()
+}
+
+@_cdecl("OpenRecordRunAutomationTests")
+func OpenRecordRunAutomationTests() {
+    do {
+        try OpenRecordAutomationSuite.run()
+        fputs("OpenRecordTests: OpenRecordAutomation tests passed\n", stderr)
+        fflush(stderr)
+    } catch {
+        fputs(
+            "OpenRecordTests: OpenRecordAutomation tests failed: \(error.localizedDescription)\n",
+            stderr
+        )
+        abort()
+    }
+}
+#endif

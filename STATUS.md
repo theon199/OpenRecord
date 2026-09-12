@@ -10,7 +10,7 @@ has been verified, what remains manual, and the next safe execution checkpoint.
 
 | Area | Status |
 |---|---|
-| Current implemented product line | v4.2 First Cut + Privacy Firewall |
+| Current implemented product line | v4.3.0 Release Factory + Open Tutorial Package |
 | Current project document format | v8 |
 | v3 implementation checkpoints | Complete |
 | v3 deterministic automated release gates | Recorded complete |
@@ -20,11 +20,12 @@ has been verified, what remains manual, and the next safe execution checkpoint.
 | v4.0 / Phase 0 implementation | Complete (verified) |
 | v4.1 / Phase 1 implementation | Complete (verified) |
 | v4.2 / Phase 2 implementation | Complete (automated gates verified) |
-| Next v4 checkpoint | Phase 3 (v4.3) — Release Factory + Open Tutorial Package |
+| v4.3 / Phase 3 implementation | Complete (automated gates verified) |
+| Next v4 checkpoint | Phase 4 (v4.4) — Patch Takes + explicit multi-source timeline |
 
 ## Current baseline
 
-The repository currently describes OpenRecord v4.2.0 and Phase 2 (First Cut + Privacy Firewall) as implemented with automated gates verified. Its main capabilities include:
+The repository currently describes OpenRecord v4.3.0 and Phase 3 (Release Factory + Open Tutorial Package) as implemented, with its automated gates verified. Real-world visual, playback, privacy, and hosting checks remain manual. Its main capabilities include:
 
 - Native ScreenCaptureKit display/window capture with separate cursor telemetry.
 - Optional microphone, system audio, webcam, and privacy-filtered shortcut tracks.
@@ -44,6 +45,15 @@ The repository currently describes OpenRecord v4.2.0 and Phase 2 (First Cut + Pr
   accepted redaction tracking, pre-export review, and rendered-output scanning.
 - Atomic Sanitized Share Copy packages with rendered-safe media, a strict
   metadata allowlist, and machine-verifiable privacy/portability reports.
+- External versioned publish recipes that keep destinations out of `project.json`.
+- Responsive `RenderPlan` variants for 16:9, 9:16, 1:1, story-beat GIF, and
+  action-centered still outputs, all resolved through shared `FrameScene` timing.
+- Headless `openrecord-cli analyze`, `publish`, and `verify-output` commands
+  with deterministic release manifests and actionable nonzero exit behavior.
+- Structured Markdown and HTML documentation with approved ActionMap steps,
+  transcript ranges, screenshots, alt text, captions, and portable relative paths.
+- Self-contained Open Tutorial Packages with local player assets, baked
+  redactions, no raw telemetry/private OCR, and no network requirement.
 - Non-destructive captions, annotations, drawings, redactions, cursor effects,
   webcam treatments, device frames, and audio cleanup.
 - Project templates, selected-project batch export, imported movie projects,
@@ -113,6 +123,8 @@ v4.4  Patch Takes + explicit multi-source timeline
 
 Phases 0–2 (v4.0 Interaction Foundation, v4.1 ActionMap, and v4.2 First Cut /
 Privacy Firewall) implementation and deterministic verification are complete.
+Phase 3 (v4.3 Release Factory + Open Tutorial Package) implementation and
+automated verification are complete. Manual release evidence remains pending.
 Project document format remains v8.
 
 ## Phase 0 (v4.0) execution checkpoint: Interaction foundation
@@ -239,15 +251,115 @@ Verified on 2026-09-11. All automated Phase 2 acceptance gates are satisfied.
 - Hardware capture validation of transient First Cut transcription and privacy scanning against native, Electron, and browser content.
 - Manual inspection of rendered privacy reports and Sanitized Share Copy playback across representative codecs/content.
 
+## Phase 3 (v4.3) execution checkpoint: Release Factory + Open Tutorial Package
+
+The v4.3 implementation scope from [`docs/V4_PLAN.md`](docs/V4_PLAN.md) is
+complete in the working tree. Automated verification passed on 2026-09-11;
+manual release evidence remains listed separately below.
+
+### Completed implementation scope
+
+1. **External versioned publish recipes**:
+   - `.openrecordrecipe` and `publish.json` are standalone JSON recipes with
+     `formatVersion: 1` and an ordered `outputs` array.
+   - Recipes select output kind, aspect, story-beat scope, codec, resolution,
+     duration cap, captions, safe areas, filenames, templates, and overwrite
+     policy without storing machine-specific destinations in `project.json`.
+   - Secrets, account identifiers, callbacks, arbitrary commands, and remote
+     service requirements are outside the recipe contract.
+
+2. **Responsive `RenderPlan` variants**:
+   - 16:9 tutorial/video, 9:16 social/changelog, 1:1 preview, story-beat GIF,
+     and action-centered still images derive from the same project,
+     `ProjectTimeMapper`, and shared `FrameScene`.
+   - Responsive framing may reflow semantic focus and protect caption, webcam,
+     annotation, and redaction safe areas, but does not select new source
+     content unless the recipe explicitly chooses a story beat.
+
+3. **Repository-native publishing CLI**:
+   - `openrecord-cli analyze <project.openrecord>` may refresh only
+     rebuildable analysis sidecars.
+   - `openrecord-cli publish <project.openrecord> --recipe <file> --output
+     <directory>` is deterministic and headless once configured.
+   - `openrecord-cli verify-output <manifest.json>` checks generated files,
+     checksums, relative paths, supported versions, and package privacy/network
+     invariants.
+   - Exit contract: `0` on complete success, `1` on project/recipe/render/
+     output/checksum/package failure, and `64` on invalid usage or unsupported
+     options. A failed publish cannot leave a manifest claiming success.
+
+4. **Deterministic manifest and documentation outputs**:
+   - `manifest.json` records project/recipe versions, source and telemetry
+     fingerprints, analyzer/render versions, stable output entries,
+     relative filenames, settings, durations, byte sizes, SHA-256 checksums,
+     warnings, privacy-review state, and reproducibility limitations.
+   - Markdown and HTML use approved ActionMap labels and transcript ranges,
+     action-centered screenshots, shortcut/click notes, tutorial timestamps,
+     alt text, captions, and validated portable relative asset references.
+
+5. **Open Tutorial Package**:
+   - Stable package contents are `index.html`, `player.js`, `player.css`,
+     `video.mp4`, `manifest.json`, `captions.vtt`, `cursor.png`, and
+     `poster.jpg` under `Tutorial.openrecordweb/`.
+   - The rendered video has accepted redactions baked in. Raw display media,
+     rejected actions, private OCR evidence, and unrestricted keyboard
+     telemetry are excluded; explicitly authored commands/links are the only
+     copyable commands/links.
+   - The local player supplies transcript/ActionMap search and navigation,
+     optional pause-after-step, cursor visibility/scale, click and approved
+     shortcut overlays, captions, and standard MP4 fallback.
+   - The package makes no external requests: no analytics, remote fonts, CDN
+     assets, accounts, callbacks, or OpenRecord server. Relative assets work
+     from a local folder and a generic static host.
+
+### Format and verification status
+
+Project format remains v8. Recipes, RenderPlans, release manifests,
+documentation, and tutorial packages are derived artifacts and do not alter
+authored project JSON. Legacy v1–v7 projects retain the existing read-only
+open/first-save migration behavior, current-format unknown top-level fields
+remain rejected, and optional/malformed analysis remains rebuildable.
+
+Automated Phase 3 gates were verified on 2026-09-11:
+
+- [x] repeated publishing produces a byte-identical manifest on the supported
+  toolchain, and RenderPlan variants are deterministic;
+- [x] protected-region coverage is validated across RenderPlan variants;
+- [x] headless CLI parsing, mutation boundaries, and exit-code fixtures pass;
+- [x] Markdown tutorial links resolve through portable relative paths;
+- [x] the exact tutorial-package allowlist and static-host-compatible relative
+  asset graph pass end-to-end package validation;
+- [x] cursor, click, shortcut, caption, and step times use the same cut-aware
+  `ProjectTimeMapper` as native export, with exact fixture assertions;
+- [x] generated player assets contain no external request URLs or fetch path;
+- [x] the full `swift test` suite passed, including compositor goldens and the
+  end-to-end Release Factory fixture;
+- [x] `swift build -c release --arch arm64` passed for the app, CLI, and export
+  benchmark products;
+- [x] `git diff --check` passed with no whitespace errors.
+
+Manual Phase 3 gates remain:
+
+- [ ] visual review of every aspect variant with long recordings and dense
+  captions, webcam, annotations, and redactions;
+- [ ] review generated Markdown/HTML in a clean folder and on a generic static
+  host;
+- [ ] open the tutorial package from `file://` with network access disabled;
+- [ ] inspect privacy boundaries and playback for representative codecs,
+  approved/rejected actions, shortcuts, and captions;
+- [ ] confirm the external recipe never leaks source paths, secrets, private
+  OCR, or unrestricted keyboard content.
+
 ## Next execution checkpoint
 
-### Phase 3 — v4.3: Release Factory and Open Tutorial Package
+### Phase 4 — v4.4: Patch Takes and explicit multi-source timeline
 
-With Phase 2 complete, the next checkpoint begins Phase 3 from `docs/V4_PLAN.md`:
+With Phase 3 implementation scope complete, the next checkpoint begins Phase 4
+from `docs/V4_PLAN.md`:
 
-1. Render recipes and responsive `RenderPlan` variants.
-2. Release Factory batch orchestration and release-manifest outputs.
-3. Documentation outputs and the portable Open Tutorial Package.
+1. Patch Take recording and source-interval replacement workflow.
+2. Explicit multi-source timeline and source-aware time mapping.
+3. Migration, preview/export parity, and recovery gates for multi-source edits.
 
 ## Resume checklist for an agent session
 

@@ -1,6 +1,6 @@
 # OpenRecord
 
-OpenRecord is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional privacy-filtered semantic controls and keyboard shortcuts, and an optional webcam track. It can also import MP4/MOV/M4V recordings from an iPhone or other device without changing the original. After capture or import, it can build a private local ActionMap, prepare a reviewable First Cut, scan locally for possible private content, edit through multiple non-destructive cuts, apply portable project templates, and export polished video, GIF, audio, still images, or a sanitized derivative share copy.
+OpenRecord 4.3.0 is a native Apple Silicon macOS app for **screen capture plus a non-destructive editor**. It records a display or window at full resolution (cursor **not** baked into the pixels), plus microphone, system audio, cursor telemetry, optional privacy-filtered semantic controls and keyboard shortcuts, and an optional webcam track. It can also import MP4/MOV/M4V recordings from an iPhone or other device without changing the original. After capture or import, it can build a private local ActionMap, prepare a reviewable First Cut, scan locally for possible private content, edit through multiple non-destructive cuts, apply portable project templates, and publish reproducible video, GIF, still-image, Markdown/HTML, or Open Tutorial Package outputs.
 
 Projects live as folders on disk. Point the library at Dropbox, Google Drive, or iCloud Drive and the desktop client syncs them. There is **no account, no API keys, no ffmpeg, and no Xcode**.
 
@@ -30,7 +30,8 @@ Other useful commands:
 swift build          # debug
 swift test           # unit tests (CLT Testing.framework, not XCTest)
 ./scripts/package-app.sh   # release .app at dist/OpenRecord.app (does not open it)
-swift run openrecord-cli --help   # local inspect/validate/export/batch automation
+swift run openrecord-cli --version # prints the CLI/app version
+swift run openrecord-cli --help    # local analyze/publish/verify-output automation
 ```
 
 First package may create a local self-signed **OpenRecord Dev** identity in your login keychain so TCC grants survive rebuilds. Allow Keychain if macOS prompts. If cert import fails, the script falls back to ad-hoc signing (`codesign -s -`), which often **resets permissions on every rebuild**.
@@ -84,20 +85,103 @@ The Export inspector also creates animated GIFs (up to 30 seconds), mixed-audio 
 
 Project templates capture canvas/aspect, cursor treatment, webcam treatment, caption and annotation defaults, device frame, keyboard overlay, and video export settings. Use **Project Templates → Save Current** in the editor to create a local `.openrecordtemplate`, then import/export that JSON file for portability. Applying a template copies concrete values into `project.json`; the project does not depend on the template file afterward, and source media, transcript, cuts, and timed content are preserved.
 
-### Local automation CLI
+### Release Factory and local automation CLI
 
-The dependency-free SwiftPM executable operates directly on normal project bundles and never rewrites `meta.json` or `project.json` during inspection or export:
+The dependency-free SwiftPM executable can analyze a project, publish every
+output described by an external recipe, and verify the resulting manifest. It
+is local and headless; publishing never writes `meta.json` or `project.json`.
 
 ```bash
-swift run openrecord-cli inspect Demo.openrecord --json
-swift run openrecord-cli validate Demo.openrecord
-swift run openrecord-cli export Demo.openrecord --output Demo.mp4 --codec h264 --resolution 1080p
-swift run openrecord-cli batch ./Projects --output ./Exports --codec hevc
+swift run openrecord-cli analyze Demo.openrecord [--no-vision] [--json]
+swift run openrecord-cli publish Demo.openrecord \
+  --recipe release.openrecordrecipe --output ./Artifacts [--json]
+swift run openrecord-cli verify-output ./Artifacts/manifest.json [--json]
 ```
 
-Batch discovery is deterministic and top-level only. It continues after a failed project and exits nonzero when any job fails.
+`analyze` reads the project and may write only rebuildable local analysis
+sidecars. `publish` resolves one source project through the recipe's outputs
+and installs a deterministic `manifest.json` beside those outputs.
+`verify-output` checks the manifest, checksums, required relative assets, and
+package/privacy invariants without contacting a service. Existing
+`inspect`, `validate`, `export`, and `batch` commands remain available for
+lower-level automation.
 
-The current schema overview is documented in [`docs/PROJECT_FORMAT_V8.md`](docs/PROJECT_FORMAT_V8.md), with migration policy in [`docs/V4_MIGRATION.md`](docs/V4_MIGRATION.md).
+The commands use stable exit behavior suitable for CI:
+
+| Result | Exit code |
+|---|---:|
+| Command completed and all requested checks/outputs passed | `0` |
+| Project, recipe, output, checksum, or package verification failure | nonzero (`1`) |
+| Invalid command-line usage or unsupported recipe/option | `64` |
+
+`publish` returns success only when every requested output and the manifest are
+installed. `verify-output` returns nonzero for a missing file, changed
+checksum, unsupported format, unsafe path, or privacy/network invariant
+failure. A failed command prints an actionable diagnostic to stderr and never
+silently changes the source project.
+
+The external recipe format and output contract are documented in
+[`docs/V4_MIGRATION.md`](docs/V4_MIGRATION.md). The current schema overview is
+in [`docs/PROJECT_FORMAT_V8.md`](docs/PROJECT_FORMAT_V8.md), and the 4.3 scope
+is summarized in [`docs/V4_RELEASE_NOTES.md`](docs/V4_RELEASE_NOTES.md).
+
+### Publish recipes and responsive outputs
+
+Recipes are standalone JSON files (`.openrecordrecipe` or `publish.json`), not
+project-document fields. Their `formatVersion` is currently `1`; each named
+output selects a kind, aspect, optional story beat, and output settings such as
+codec, resolution, duration cap, captions, filename, safe area, and overwrite
+policy. A recipe may request video, GIF, Markdown, HTML, or an Open Tutorial
+Package; documentation/tutorial screenshot settings can derive action-centered
+still images. Recipes are portable and deterministic:
+they contain no account information, secrets, callbacks, machine-specific
+destination paths, arbitrary commands, or remote-service requirements.
+
+All variants resolve from the same source project, `ProjectTimeMapper`, and
+`FrameScene`. The supported RenderPlan variants are 16:9 tutorial/video,
+9:16 social/changelog clip, 1:1 preview, story-beat GIF, and action-centered
+still images. Responsive framing may reflow semantic focus and protect
+captions, webcam, annotations, and redactions, but cannot change source
+content unless the recipe explicitly selects a story beat.
+
+Publishing also emits structured Markdown and HTML documentation. It uses
+approved ActionMap labels and transcript ranges, action-centered screenshots,
+keyboard-shortcut or click notes, tutorial-player timestamp links, alt text,
+and caption files. Generated documents reference generated assets using
+portable relative paths, so they can be reviewed from Finder or hosted as
+static files without an OpenRecord account.
+
+### Open Tutorial Package
+
+The portable tutorial output is a self-contained `Tutorial.openrecordweb/`
+directory with this exact file set:
+
+```text
+Tutorial.openrecordweb/
+  index.html       # static player and transcript/step navigation
+  player.js        # local search, controls, and timing overlays
+  player.css       # local player styling
+  video.mp4        # rendered MP4 with accepted redactions baked in
+  manifest.json    # schema, timing, steps, transcript, and safe overlay events
+  captions.vtt     # optional/empty when no captions were approved
+  cursor.png       # local cursor asset used by the player
+  poster.jpg       # local poster frame
+```
+
+The package contains no raw display media, rejected actions, private OCR
+evidence, or unrestricted keyboard telemetry. Only approved ActionMap steps,
+approved labels/transcript ranges, and the rendered derivative are exposed;
+copyable commands or links appear only when explicitly authored. Cursor
+visibility/scale, click and approved shortcut overlays, searchable transcript,
+step navigation, and optional pause-after-step behavior are driven entirely by
+the local manifest and assets. The MP4 remains a standard fallback.
+
+The package makes no network requests: no analytics, remote fonts, CDN assets,
+accounts, callbacks, or OpenRecord server are required. All links are local or
+relative, and the same directory works from `file://` or a generic static
+host. The source `.openrecord` project remains unchanged and retains its raw
+capture; the tutorial package is a separate rendered derivative and should be
+reviewed before sharing.
 
 ### Direct manipulation, parity, and recovery
 

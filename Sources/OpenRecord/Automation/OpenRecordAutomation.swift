@@ -27,6 +27,14 @@ public enum OpenRecordAutomationCommand: Sendable, Equatable {
         frameRate: VideoExportFrameRate? = nil,
         json: Bool = false
     )
+    /// Rebuilds the optional ActionMap analysis cache for a project.
+    case analyze(project: URL, includeVision: Bool, json: Bool)
+    /// Publishes one project according to a versioned recipe into an output
+    /// directory.  The recipe and destination are intentionally kept out of
+    /// the project document so publishing remains non-mutating.
+    case publish(project: URL, recipe: URL, output: URL, json: Bool)
+    /// Verifies a previously generated release manifest.
+    case verifyOutput(manifest: URL, json: Bool)
 }
 
 /// Short aliases useful to clients that expose this as a conventional CLI
@@ -45,6 +53,33 @@ public enum OpenRecordAutomationError: Error, LocalizedError, Sendable, Equatabl
             message
         }
     }
+}
+
+/// Privacy-safe result of a project analysis invocation.  Only aggregate
+/// counts and analyzer metadata are exposed; OCR, labels, and other evidence
+/// sidecar payloads never leave the project cache through this value.
+public struct ProjectAnalysisSummary: Codable, Sendable, Equatable {
+    public let projectURL: URL
+    public let actionCount: Int
+    public let analyzerVersion: String
+    public let warnings: [String]
+
+    public init(
+        projectURL: URL,
+        actionCount: Int,
+        analyzerVersion: String,
+        warnings: [String] = []
+    ) {
+        self.projectURL = projectURL
+        self.actionCount = max(0, actionCount)
+        self.analyzerVersion = analyzerVersion
+        self.warnings = warnings
+    }
+
+    /// Compatibility aliases for clients that use the terminology from the
+    /// release plan.
+    public var actions: Int { actionCount }
+    public var analysisWarnings: [String] { warnings }
 }
 
 /// A JSON- and human-readable summary of one project bundle.
@@ -155,6 +190,9 @@ public enum OpenRecordAutomationParser: Sendable {
       openrecord-cli validate <project.openrecord> [--json]
       openrecord-cli export <project.openrecord> --output <file> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high] [--framerate auto|60|50|30|25|24|15]
       openrecord-cli batch <folder> --output <folder> [--codec h264|hevc|prores422] [--resolution 720p|1080p|4k|source] [--quality compact|balanced|high] [--framerate auto|60|50|30|25|24|15] [--json]
+      openrecord-cli analyze <project.openrecord> [--no-vision] [--json]
+      openrecord-cli publish <project.openrecord> --recipe <publish.json|*.openrecordrecipe> --output <directory> [--json]
+      openrecord-cli verify-output <Artifacts/manifest.json> [--json]
     """
 
     public static func parse<S: Sequence>(arguments: S) throws -> OpenRecordAutomationCommand
@@ -226,6 +264,30 @@ public enum OpenRecordAutomationParser: Sendable {
                 json: parsed.json
             )
 
+        case "analyze":
+            let parsed = try parseAnalyze(arguments: Array(args.dropFirst()))
+            return .analyze(
+                project: try requireProjectURL(parsed.project),
+                includeVision: !parsed.noVision,
+                json: parsed.json
+            )
+
+        case "publish":
+            let parsed = try parsePublish(arguments: Array(args.dropFirst()))
+            return .publish(
+                project: try requireProjectURL(parsed.project),
+                recipe: try requireRecipeURL(parsed.recipe),
+                output: projectURL(parsed.output),
+                json: parsed.json
+            )
+
+        case "verify-output":
+            let parsed = try parseVerifyOutput(arguments: Array(args.dropFirst()))
+            return .verifyOutput(
+                manifest: try requireManifestURL(parsed.manifest),
+                json: parsed.json
+            )
+
         default:
             throw OpenRecordAutomationError.invalidArguments(
                 "Unknown command '\(rawCommand)'.\n\n\(usage)"
@@ -241,6 +303,155 @@ public enum OpenRecordAutomationParser: Sendable {
         var quality: VideoExportQualityPreset?
         var frameRate: VideoExportFrameRate?
         var json: Bool
+    }
+
+    private struct ParsedAnalyze {
+        var project: String
+        var noVision: Bool
+        var json: Bool
+    }
+
+    private struct ParsedPublish {
+        var project: String
+        var recipe: String
+        var output: String
+        var json: Bool
+    }
+
+    private struct ParsedVerifyOutput {
+        var manifest: String
+        var json: Bool
+    }
+
+    private static func parseAnalyze(arguments: [String]) throws -> ParsedAnalyze {
+        var positionals: [String] = []
+        var noVision = false
+        var json = false
+        for argument in arguments {
+            switch argument {
+            case "--no-vision":
+                guard !noVision else {
+                    throw OpenRecordAutomationError.invalidArguments(
+                        "--no-vision may only be provided once.\n\n\(usage)"
+                    )
+                }
+                noVision = true
+            case "--json":
+                guard !json else {
+                    throw OpenRecordAutomationError.invalidArguments(
+                        "--json may only be provided once.\n\n\(usage)"
+                    )
+                }
+                json = true
+            case let option where option.hasPrefix("--"):
+                throw OpenRecordAutomationError.invalidArguments(
+                    "Unknown option '\(option)' for analyze.\n\n\(usage)"
+                )
+            default:
+                positionals.append(argument)
+            }
+        }
+        guard positionals.count == 1 else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "analyze expects exactly one project bundle.\n\n\(usage)"
+            )
+        }
+        return ParsedAnalyze(project: positionals[0], noVision: noVision, json: json)
+    }
+
+    private static func parsePublish(arguments: [String]) throws -> ParsedPublish {
+        var positionals: [String] = []
+        var recipe: String?
+        var output: String?
+        var json = false
+        var index = 0
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--recipe", "--output":
+                index += 1
+                guard index < arguments.count, !arguments[index].hasPrefix("--") else {
+                    throw OpenRecordAutomationError.invalidArguments(
+                        "publish requires a value after \(argument).\n\n\(usage)"
+                    )
+                }
+                if argument == "--recipe" {
+                    guard recipe == nil else {
+                        throw OpenRecordAutomationError.invalidArguments(
+                            "--recipe may only be provided once.\n\n\(usage)"
+                        )
+                    }
+                    recipe = arguments[index]
+                } else {
+                    guard output == nil else {
+                        throw OpenRecordAutomationError.invalidArguments(
+                            "--output may only be provided once.\n\n\(usage)"
+                        )
+                    }
+                    output = arguments[index]
+                }
+            case "--json":
+                guard !json else {
+                    throw OpenRecordAutomationError.invalidArguments(
+                        "--json may only be provided once.\n\n\(usage)"
+                    )
+                }
+                json = true
+            case let option where option.hasPrefix("--"):
+                throw OpenRecordAutomationError.invalidArguments(
+                    "Unknown option '\(option)' for publish.\n\n\(usage)"
+                )
+            default:
+                positionals.append(argument)
+            }
+            index += 1
+        }
+
+        guard positionals.count == 1 else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "publish expects exactly one project bundle, --recipe, and --output.\n\n\(usage)"
+            )
+        }
+        guard let recipe else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "publish requires --recipe.\n\n\(usage)"
+            )
+        }
+        guard let output else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "publish requires --output.\n\n\(usage)"
+            )
+        }
+        return ParsedPublish(project: positionals[0], recipe: recipe, output: output, json: json)
+    }
+
+    private static func parseVerifyOutput(arguments: [String]) throws -> ParsedVerifyOutput {
+        var positionals: [String] = []
+        var json = false
+        for argument in arguments {
+            switch argument {
+            case "--json":
+                guard !json else {
+                    throw OpenRecordAutomationError.invalidArguments(
+                        "--json may only be provided once.\n\n\(usage)"
+                    )
+                }
+                json = true
+            case let option where option.hasPrefix("--"):
+                throw OpenRecordAutomationError.invalidArguments(
+                    "Unknown option '\(option)' for verify-output.\n\n\(usage)"
+                )
+            default:
+                positionals.append(argument)
+            }
+        }
+        guard positionals.count == 1 else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "verify-output expects exactly one manifest.json file.\n\n\(usage)"
+            )
+        }
+        return ParsedVerifyOutput(manifest: positionals[0], json: json)
     }
 
     private static func parseExportLike(
@@ -380,6 +591,37 @@ public enum OpenRecordAutomationParser: Sendable {
         }
         return url
     }
+
+    private static func requireRecipeURL(_ path: String) throws -> URL {
+        let url = projectURL(path)
+        let extensionName = url.pathExtension.lowercased()
+        guard extensionName == "json" || extensionName == "openrecordrecipe" else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "Recipe path must end in .json or .openrecordrecipe: \(path)"
+            )
+        }
+        return url
+    }
+
+    private static func requireManifestURL(_ path: String) throws -> URL {
+        let url = projectURL(path)
+        guard url.pathExtension.lowercased() == "json",
+              url.lastPathComponent.lowercased() == "manifest.json"
+        else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "verify-output requires a manifest.json file: \(path)\n\n\(usage)"
+            )
+        }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue
+        {
+            throw OpenRecordAutomationError.invalidArguments(
+                "verify-output requires a manifest file, not a directory: \(path)\n\n\(usage)"
+            )
+        }
+        return url
+    }
 }
 
 public typealias OpenRecordCLIParser = OpenRecordAutomationParser
@@ -403,8 +645,9 @@ private extension VideoExportFrameRate {
     }
 }
 
-/// Local inspection, validation, export, and batch automation for `.openrecord`
-/// bundles.  This type never writes `meta.json` or `project.json`.
+/// Local inspection, validation, analysis, export, batch, and release
+/// automation for `.openrecord` bundles.  This type never writes `meta.json`
+/// or `project.json`.
 public struct OpenRecordAutomation: Sendable {
     public init() {}
 
@@ -420,6 +663,60 @@ public struct OpenRecordAutomation: Sendable {
             issues: inspection.validationIssues,
             inspection: inspection
         )
+    }
+
+    /// Rebuilds the optional ActionMap cache and returns only aggregate,
+    /// privacy-safe metadata.  This is deliberately the one automation
+    /// operation that can write under a project bundle; opening, publishing,
+    /// and verification remain read-only with respect to project state.
+    public func analyze(
+        project url: URL,
+        includeVisionFallback: Bool = true
+    ) async throws -> ProjectAnalysisSummary {
+        let projectURL = try requireBundleURL(url)
+        let library = ProjectLibrary(rootURL: projectURL.deletingLastPathComponent())
+        let opened = try library.open(url: projectURL)
+        let service = ActionMapAnalysisService(
+            projectURL: projectURL,
+            meta: opened.meta,
+            document: opened.document
+        )
+        let actions = try await service.analyze(includeVisionFallback: includeVisionFallback)
+        let cacheSummary = AnalysisStore(projectURL: projectURL).inspect()
+        return ProjectAnalysisSummary(
+            projectURL: projectURL,
+            actionCount: actions.count,
+            analyzerVersion: ActionMapAnalysisService.analyzerVersion,
+            warnings: stableUnique(cacheSummary.warnings)
+        )
+    }
+
+    /// Publishes a project through the Release Factory.  The factory reads
+    /// project and analysis state and installs derived artifacts only in the
+    /// requested output directory; authored project JSON is never rewritten.
+    public func publish(
+        project url: URL,
+        recipe recipeURL: URL,
+        output outputDirectoryURL: URL
+    ) async throws -> PublishManifest {
+        let projectURL = try requireBundleURL(url)
+        let recipeURL = recipeURL.standardizedFileURL
+        let recipeExtension = recipeURL.pathExtension.lowercased()
+        guard recipeExtension == "json" || recipeExtension == "openrecordrecipe" else {
+            throw OpenRecordAutomationError.invalidArguments(
+                "Recipe path must end in .json or .openrecordrecipe: \(recipeURL.path)"
+            )
+        }
+        return try await ReleaseFactory(projectURL: projectURL).publish(
+            recipeURL: recipeURL,
+            outputDirectory: outputDirectoryURL.standardizedFileURL
+        )
+    }
+
+    /// Verifies a release manifest and all generated files without modifying
+    /// the manifest, output directory, or source project.
+    public func verifyOutput(manifest url: URL) throws -> PublishVerification {
+        try ReleaseFactory.verifyOutput(manifestURL: url.standardizedFileURL)
     }
 
     /// Discovers only direct child `.openrecord` directories, ordered by their
@@ -705,6 +1002,13 @@ public enum OpenRecordAutomationCLI: Sendable {
                 let report = await automation.validate(project: project)
                 printReport(report, json: json)
                 return report.valid ? 0 : 2
+            case .analyze(let project, let includeVision, let json):
+                let report = try await automation.analyze(
+                    project: project,
+                    includeVisionFallback: includeVision
+                )
+                printReport(report, json: json)
+                return 0
             case .export(let project, let output, let codec, let resolution, let quality, let frameRate):
                 try await automation.export(
                     project: project,
@@ -727,6 +1031,25 @@ public enum OpenRecordAutomationCLI: Sendable {
                 )
                 printReport(result, json: json)
                 return result.succeeded ? 0 : 1
+            case .publish(let project, let recipe, let output, let json):
+                let report = try await automation.publish(
+                    project: project,
+                    recipe: recipe,
+                    output: output
+                )
+                printReport(report, json: json)
+                return 0
+            case .verifyOutput(let manifest, let json):
+                do {
+                    let report = try automation.verifyOutput(manifest: manifest)
+                    printReport(report, json: json)
+                    return report.valid ? 0 : 1
+                } catch {
+                    // A malformed or unreadable release is a failed
+                    // verification, not a command-usage error.
+                    writeError("Verification failed: \(error.localizedDescription)\n")
+                    return 1
+                }
             }
         } catch let error as OpenRecordAutomationError {
             writeError("Error: \(error.localizedDescription)\n")
@@ -765,6 +1088,23 @@ public enum OpenRecordAutomationCLI: Sendable {
         } else if let report = report as? ProjectValidation {
             print(report.valid ? "Valid: \(report.projectURL.path)" : "Invalid: \(report.projectURL.path)")
             printAnalysis(report.inspection.analysis)
+            printIssues(report.issues)
+        } else if let report = report as? ProjectAnalysisSummary {
+            print("Project: \(report.projectURL.path)")
+            print("Analyzer: \(report.analyzerVersion)")
+            print("Actions: \(report.actionCount)")
+            printIssues(report.warnings)
+        } else if let report = report as? PublishManifest {
+            print("Published \(report.outputs.count) output\(report.outputs.count == 1 ? "" : "s")")
+            print("Project format: \(report.projectFormatVersion)")
+            print("Recipe format: \(report.recipeFormatVersion)")
+            print("Privacy review: \(report.privacyReview.rawValue)")
+            if !report.warnings.isEmpty {
+                print("Warnings:")
+                report.warnings.forEach { print("  - \($0)") }
+            }
+        } else if let report = report as? PublishVerification {
+            print(report.valid ? "Valid release output" : "Invalid release output")
             printIssues(report.issues)
         } else if let report = report as? BatchResult {
             for job in report.jobs {
@@ -807,7 +1147,7 @@ public enum OpenRecordAutomationCLI: Sendable {
     }
 }
 
-private extension OpenRecordAutomationError {
+public extension OpenRecordAutomationError {
     var isUsageError: Bool {
         if case .invalidArguments = self { return true }
         return false

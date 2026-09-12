@@ -7,6 +7,7 @@ struct InspectorPanel: View {
     @State private var newPresetName = ""
     @State private var newProjectTemplateName = ""
     @State private var selectedTab: InspectorTab = .edit
+    @State private var showingReleaseFactory = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -717,6 +718,13 @@ struct InspectorPanel: View {
                 Text("GIF, mixed audio, and a playhead snapshot export separately.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("Publish with Recipe…") {
+                    showingReleaseFactory = true
+                }
+                .disabled(session.exportProgress != nil)
+                Text("Publish local, repository-native outputs from a versioned recipe.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             }
             }
@@ -741,6 +749,9 @@ struct InspectorPanel: View {
             }
         } message: {
             Text("Automatic zooms will be regenerated from clicks, text typing, dwell, and focused activity. Locked and manual zooms are preserved.")
+        }
+        .sheet(isPresented: $showingReleaseFactory) {
+            ReleaseFactoryPanel(projectURL: session.projectURL)
         }
     }
 
